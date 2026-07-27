@@ -1,0 +1,192 @@
+// =====================================================
+// KAMISUITE - Backend Recepción (Búsqueda Clientes)
+// =====================================================
+// VERSION: 2.0.0
+// FECHA: 8 de febrero de 2026
+//
+// Carga completa de contactos para caché en frontend
+// =====================================================
+
+import { webMethod, Permissions } from 'wix-web-module';
+import { elevate } from 'wix-auth';
+import { contacts } from 'wix-crm-backend';
+
+const VERSION = '2.0.0';
+const TAG = `[Recepcion][${VERSION}]`;
+
+// =====================================================
+// UTILIDADES
+// =====================================================
+
+function safeErr(e) {
+  const out = { name: e?.name || 'Error', message: e?.message || String(e) };
+  if (e?.details) out.details = e.details;
+  return out;
+}
+
+function formatearContacto(contact) {
+  const infoName = contact?.info?.name || {};
+  const nombre = infoName.first || contact?.name?.first || contact?.firstName || '';
+  const apellido = infoName.last || contact?.name?.last || contact?.lastName || '';
+  
+  const emailsArray = contact?.info?.emails || contact?.emails || [];
+  const emails = Array.isArray(emailsArray) ? emailsArray : [];
+  const email = emails[0]?.email || emails[0] || contact?.primaryEmail || '';
+  
+  const phonesArray = contact?.info?.phones || contact?.phones || [];
+  const phones = Array.isArray(phonesArray) ? phonesArray : [];
+  const telefono = phones[0]?.phone || phones[0] || contact?.primaryPhone || '';
+  
+  return {
+    contactId: contact._id || contact.id,
+    nombre: String(nombre).trim(),
+    apellido: String(apellido).trim(),
+    nombreCompleto: `${nombre} ${apellido}`.trim(),
+    email: String(email).trim(),
+    telefono: String(telefono).trim()
+  };
+}
+
+// =====================================================
+// CARGAR TODOS LOS CONTACTOS (para caché)
+// =====================================================
+
+export const cargarTodosContactos = webMethod(Permissions.Anyone, async () => {
+  try {
+    console.log(`${TAG} 📥 Cargando TODOS los contactos...`);
+    
+    const elevatedQuery = elevate(contacts.queryContacts);
+    const allContacts = [];
+    let hasMore = true;
+    let skip = 0;
+    const pageSize = 1000;
+    
+    while (hasMore) {
+      console.log(`${TAG} 📄 Página desde ${skip}...`);
+      
+      const result = await elevatedQuery()
+        .skip(skip)
+        .limit(pageSize)
+        .find();
+      
+      const items = result?.items || [];
+      allContacts.push(...items);
+      
+      console.log(`${TAG} ✅ Obtenidos: ${items.length} (total acumulado: ${allContacts.length})`);
+      
+      if (items.length < pageSize) {
+        hasMore = false;
+      } else {
+        skip += pageSize;
+      }
+      
+      if (skip >= 10000) {
+        console.warn(`${TAG} ⚠️ Límite de seguridad alcanzado (10,000)`);
+        hasMore = false;
+      }
+    }
+    
+    console.log(`${TAG} 📊 Total contactos cargados: ${allContacts.length}`);
+    
+    const clientes = allContacts
+      .map(formatearContacto)
+      .filter(c => c.nombre || c.apellido || c.email)
+      .sort((a, b) => a.nombreCompleto.localeCompare(b.nombreCompleto));
+    
+    console.log(`${TAG} ✅ Contactos formateados: ${clientes.length}`);
+    
+    return {
+      ok: true,
+      version: VERSION,
+      clientes,
+      total: clientes.length
+    };
+    
+  } catch (e) {
+    console.error(`${TAG} ❌ Error cargarTodosContactos:`, e);
+    return { ok: false, version: VERSION, error: safeErr(e) };
+  }
+});
+
+// =====================================================
+// OBTENER CONTACTO ESPECÍFICO
+// =====================================================
+
+export const getContacto = webMethod(Permissions.Anyone, async (payload) => {
+  try {
+    const { contactId } = payload || {};
+    
+    console.log(`${TAG} 📇 Obteniendo contacto: ${contactId}`);
+    
+    if (!contactId) {
+      throw new Error('contactId requerido');
+    }
+    
+    const elevatedGet = elevate(contacts.getContact);
+    const contact = await elevatedGet(contactId);
+    
+    if (!contact) {
+      throw new Error('Contacto no encontrado');
+    }
+    
+    return {
+      ok: true,
+      version: VERSION,
+      cliente: formatearContacto(contact)
+    };
+    
+  } catch (e) {
+    console.error(`${TAG} ❌ Error getContacto:`, e);
+    return { ok: false, version: VERSION, error: safeErr(e) };
+  }
+});
+
+// =====================================================
+// CREAR CONTACTO (para clientes nuevos)
+// =====================================================
+
+export const crearContacto = webMethod(Permissions.Anyone, async (payload) => {
+  try {
+    const { nombre, apellido, email, telefono } = payload || {};
+    
+    console.log(`${TAG} ➕ Creando contacto: ${nombre} ${apellido}`);
+    
+    if (!nombre) {
+      throw new Error('Nombre es requerido');
+    }
+    
+    const contactInfo = {
+      name: {
+        first: String(nombre).trim(),
+        last: String(apellido || '').trim()
+      },
+      emails: email ? [{ email: String(email).trim() }] : [],
+      phones: telefono ? [{ phone: String(telefono).trim() }] : []
+    };
+    
+    const elevatedCreate = elevate(contacts.createContact);
+    const newContact = await elevatedCreate({ info: contactInfo });
+    
+    const contactId = newContact?._id || newContact?.id;
+    
+    console.log(`${TAG} ✅ Contacto creado: ${contactId}`);
+    
+    return {
+      ok: true,
+      version: VERSION,
+      contactId,
+      cliente: {
+        contactId,
+        nombre,
+        apellido,
+        nombreCompleto: `${nombre} ${apellido}`.trim(),
+        email: email || '',
+        telefono: telefono || ''
+      }
+    };
+    
+  } catch (e) {
+    console.error(`${TAG} ❌ Error crearContacto:`, e);
+    return { ok: false, version: VERSION, error: safeErr(e) };
+  }
+});

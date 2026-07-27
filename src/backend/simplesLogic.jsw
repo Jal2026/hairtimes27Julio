@@ -1,0 +1,291 @@
+// =====================================================
+// KAMISUITE - Servicios Simples (Backend)
+// =====================================================
+// VERSION: 1.0.1
+// FECHA: 11 de febrero de 2026
+//
+// Servicios sin lógica de cascada ni GAP.
+// Usa Wix Bookings V2 API directamente.
+// Variantes se leen del CMS: SvSimpleServiceVariants
+//
+// ARCHIVO: backend/simplesLogic.jsw
+// =====================================================
+
+import { elevate } from 'wix-auth';
+import { availabilityCalendar, bookings, services } from 'wix-bookings.v2';
+import { checkout } from 'wix-ecom-backend';
+import wixData from 'wix-data';
+
+const TAG = '[SimplesLogic][1.0.3]';
+const TIMEZONE = 'Europe/Madrid';
+const CMS_VARIANTS = 'SvSimpleServiceVariants';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1. LEER VARIANTES DESDE CMS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function getVariantsCMS({ serviceId }) {
+  try {
+    console.log(`${TAG} 📋 Leyendo variantes CMS`);
+
+    // Leer todas las filas ordenadas por order
+    // (Cada fila ahora tiene su propio serviceId de servicio oculto)
+    const result = await wixData.query(CMS_VARIANTS)
+      .ascending('order')
+      .find();
+
+    const variants = (result.items || []).map(item => ({
+      serviceId: item.serviceId,
+      label: item.label,
+      durationMinutes: item.durationMinutes,
+      priceEuro: item.priceEuro,
+      order: item.order
+    }));
+
+    console.log(`${TAG} ✅ ${variants.length} variantes encontradas`);
+    return { ok: true, variants };
+  } catch (e) {
+    console.error(`${TAG} ❌ getVariantsCMS:`, e.message);
+    return { ok: false, error: { message: e.message }, variants: [] };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 2. CONSULTAR DISPONIBILIDAD SIMPLE
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function consultarDisponibilidadSimple({ serviceId, fecha, staffId, durationMinutes }) {
+  const t0 = Date.now();
+  try {
+    console.log(`${TAG} 📅 Disponibilidad simple: ${serviceId} | ${fecha} | staff=${staffId} | dur=${durationMinutes}min`);
+
+    // Construir rango del día
+    const startDate = `${fecha}T00:00:00.000`;
+    const endDate = `${fecha}T23:59:59.000`;
+
+    // Query availability — filter format requerido por Wix
+    const query = {
+      filter: {
+        serviceId: [serviceId],
+        startDate,
+        endDate,
+        ...(staffId && staffId !== 'ANY' ? { resourceId: [staffId] } : {})
+      }
+    };
+
+    const options = { timezone: TIMEZONE };
+
+    console.log(`${TAG} 📦 Query:`, JSON.stringify(query));
+
+    const elevatedQuery = elevate(availabilityCalendar.queryAvailability);
+    const availability = await elevatedQuery(query, options);
+
+    const entries = availability?.availabilityEntries || [];
+
+    // Filtrar solo slots bookable
+    const slots = entries
+      .filter(entry => entry.bookable)
+      .map(entry => {
+        const slot = entry.slot || {};
+        const startDateStr = slot.startDate;
+        if (!startDateStr) return null;
+
+        // Formatear hora en timezone Madrid
+        const start = new Date(startDateStr);
+        const timeStr = start.toLocaleTimeString('es-ES', {
+          timeZone: TIMEZONE,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+
+        return {
+          startTime: timeStr,
+          staffId: slot.resource?.id || null,
+          _slotStartDate: slot.startDate,
+          _slotEndDate: slot.endDate,
+          _resourceId: slot.resource?.id || null,
+          _sessionId: slot.sessionId || null
+        };
+      })
+      .filter(Boolean);
+
+    const tiempoConsulta = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`${TAG} ✅ ${slots.length} slots disponibles (${tiempoConsulta}s)`);
+
+    return {
+      ok: true,
+      slots,
+      tiempoConsulta
+    };
+  } catch (e) {
+    const tiempoConsulta = ((Date.now() - t0) / 1000).toFixed(1);
+    console.error(`${TAG} ❌ consultarDisponibilidadSimple:`, e.message);
+    return { ok: false, error: { message: e.message }, slots: [], tiempoConsulta };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3. RESERVAR SERVICIO SIMPLE
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function reservarSimple({ serviceId, fechaISO, horaHHmm, empleadoId, durationMinutes, price, variantLabel, contactDetails, modoPago, memberContactId }) {
+  const t0 = Date.now();
+  try {
+    console.log(`${TAG} 🎯 Reservar simple: ${serviceId} | ${fechaISO} ${horaHHmm} | staff=${empleadoId} | dur=${durationMinutes}min | ${price}€`);
+
+    // ── 1. Leer servicio de Wix para obtener scheduleId y location ──
+    const elevatedGet = elevate(services.getService);
+    const svcResult = await elevatedGet(serviceId);
+    const svc = svcResult?.service || svcResult || {};
+
+    const scheduleId = extractScheduleId(svc);
+    const location = extractLocation(svc);
+
+    console.log(`${TAG} 📋 Service data: scheduleId=${scheduleId} | location=${JSON.stringify(location)}`);
+
+    // ── 2. Construir startDate y endDate ──
+    const [hh, mm] = horaHHmm.split(':').map(Number);
+    const startLocal = new Date(`${fechaISO}T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00`);
+    const endLocal = new Date(startLocal.getTime() + (durationMinutes || 30) * 60000);
+
+    // ── 3. Resolver resourceId ──
+    // Si ANY/CUALQUIERA, no poner resource → Wix asigna automáticamente
+    const resourceId = (empleadoId && empleadoId !== 'ANY') ? empleadoId : null;
+
+    // ── 4. Crear booking con todos los campos requeridos ──
+    const bookingInfo = {
+      bookedEntity: {
+        slot: {
+          serviceId,
+          scheduleId,
+          startDate: startLocal.toISOString(),
+          endDate: endLocal.toISOString(),
+          timezone: TIMEZONE,
+          ...(resourceId ? { resource: { id: resourceId } } : {}),
+          location
+        },
+        // 💰 Precio explícito (patrón coloracionLogic)
+        rate: {
+          labeledPriceOptions: {
+            general: {
+              amount: String(price || 0),
+              currency: "EUR",
+              downPayAmount: "0"
+            }
+          }
+        }
+      },
+      contactDetails: {
+        firstName: contactDetails?.firstName || 'Cliente',
+        lastName: contactDetails?.lastName || '',
+        email: contactDetails?.email || '',
+        phone: contactDetails?.phone || '',
+        ...(memberContactId ? { contactId: memberContactId } : {})
+      },
+      totalParticipants: 1,
+      numberOfParticipants: 1,
+      selectedPaymentOption: 'OFFLINE'
+    };
+
+    console.log(`${TAG} 📦 Booking payload:`, JSON.stringify(bookingInfo));
+
+    const options = {
+      paymentOptions: { wixPayOffline: {} },
+      suppressAuth: true
+    };
+
+    const elevatedCreate = elevate(bookings.createBooking);
+    const result = await elevatedCreate(bookingInfo, options);
+
+    const bookingId = result?.booking?._id || result?._id || 'unknown';
+    const revision = result?.booking?.revision || result?.revision;
+
+    // ── 5. Confirmar booking ──
+    try {
+      if (revision && result?.booking?.status !== 'CONFIRMED') {
+        const elevatedConfirm = elevate(bookings.confirmBooking);
+        await elevatedConfirm(bookingId, revision, {
+          participantNotification: { notifyParticipants: false }
+        });
+        console.log(`${TAG} ✅ Booking confirmado`);
+      }
+    } catch (confErr) {
+      console.warn(`${TAG} ⚠️ confirmBooking WARN:`, confErr.message);
+    }
+
+    // ── 6. Crear Order para grabar precio ──
+    try {
+      const checkoutOptions = {
+        lineItems: [{
+          quantity: 1,
+          catalogReference: {
+            appId: "13d21c63-b5ec-5912-8397-c3a5ddb27a97",
+            catalogItemId: bookingId
+          }
+        }],
+        channelType: "WEB"
+      };
+
+      const elevatedCheckout = elevate(checkout.createCheckout);
+      const checkoutResult = await elevatedCheckout(checkoutOptions);
+
+      if (checkoutResult?._id) {
+        const elevatedCreateOrder = elevate(checkout.createOrder);
+        await elevatedCreateOrder(checkoutResult._id, {
+          payNow: { option: "FULL_PAYMENT_OFFLINE" }
+        });
+        console.log(`${TAG} ✅ Order creada con precio ${price}€`);
+      }
+    } catch (orderErr) {
+      console.warn(`${TAG} ⚠️ Order WARN:`, orderErr.message);
+    }
+
+    // ── 7. Marcar origen RECEPCION ──
+    try {
+      const elevatedUpdate = elevate(bookings.updateExtendedFields);
+      await elevatedUpdate(bookingId, '_user_fields', {
+        namespaceData: { reservaderecepcion: 'RECEPCION' }
+      });
+      console.log(`${TAG} ✅ Marcado RECEPCION`);
+    } catch (extErr) {
+      console.warn(`${TAG} ⚠️ marcarRecepcion WARN:`, extErr.message);
+    }
+
+    const tiempoReserva = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`${TAG} ✅ Reserva creada: ${bookingId} (${tiempoReserva}s)`);
+
+    return {
+      ok: true,
+      bookingId,
+      price: price || null,
+      tiempoReserva
+    };
+  } catch (e) {
+    const tiempoReserva = ((Date.now() - t0) / 1000).toFixed(1);
+    console.error(`${TAG} ❌ reservarSimple:`, e.message);
+    console.error(`${TAG} ❌ Stack:`, e.stack);
+    return { ok: false, error: { message: e.message }, tiempoReserva };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS: Extraer datos del servicio Wix
+// ═══════════════════════════════════════════════════════════════════════════
+
+function extractScheduleId(svc) {
+  return svc?.scheduleId
+    || svc?.schedule?.id
+    || svc?.schedule?._id
+    || svc?.scheduling?.scheduleId
+    || svc?.availability?.scheduleId
+    || null;
+}
+
+function extractLocation(svc) {
+  const loc0 = svc?.locations?.[0] || svc?.location || {};
+  const bLoc = loc0?.businessLocation || loc0?.location || loc0;
+  const locationType = bLoc?.locationType || loc0?.locationType || 'OWNER_BUSINESS';
+  const locationId = bLoc?.id || bLoc?._id || loc0?.id || null;
+  return locationId ? { locationType, id: locationId } : { locationType };
+}
