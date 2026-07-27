@@ -1,0 +1,264 @@
+# =====================================================================
+# Sync KAMISUITE V2 — HAIRTIMES  ->  KALONICE
+# VERSION: 2.1.0
+# CHANGELOG:
+#   2.0.0 — backend comunes + public + config; src/pages EXCLUIDO.
+#   2.1.0 — src/pages SÍ se sincroniza, emparejando por FUNCIÓN:
+#           Pass 1: por NOMBRE visible  (Área de Cliente -> Área de Cliente,
+#                   aunque el pageId difiera: fw1p6 -> s1f0d).
+#           Pass 2: por pageId SOLO para las HT que no casaron por nombre
+#                   y contra una página de KL aún NO emparejada
+#                   (Hair Times -> Kalonice, Fidelización -> Club KALÓNICE).
+#           Nunca se reutiliza una página de KL ya emparejada => el cruce
+#           s1f0d/fw1p6 se resuelve solo (RESERVAS de HT NO toca el Área
+#           de Cliente de KL).
+#           El código de HT se copia DENTRO del archivo de KL: se conserva
+#           el nombre y el pageId de KL, solo cambia el contenido.
+#           Las páginas solo en HT o solo en KL se listan y NO se tocan.
+#   dry_run (DEFAULT true): primera pasada solo analiza/empareja y reporta.
+# =====================================================================
+
+name: Sync KAMISUITE V2 HairTimes to KALONICE
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo analizar y reportar emparejamientos (sin commit ni push)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: sync-kamisuite-ht-to-kl
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar HAIRTIMES (repo origen = este repo)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Descargar KALONICE (repo destino)
+        uses: actions/checkout@v4
+        with:
+          repository: Jal2026/kalonice
+          token: ${{ secrets.KALONICE_SYNC_TOKEN }}
+          path: kalonice-target
+          ref: main
+          fetch-depth: 0
+
+      - name: Analizar y emparejar (backend + page code) — NO modifica nada
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PYTHON'
+          from pathlib import Path
+          import os, json, unicodedata
+
+          ws = Path(os.environ["GITHUB_WORKSPACE"])
+          ht = ws
+          kl = ws / "kalonice-target"
+
+          rep = []
+          def out(s=""):
+              print(s); rep.append(s)
+
+          def norm(s): return unicodedata.normalize("NFC", s).strip()
+
+          # -------- BACKEND: solo comunes --------
+          def bk(root):
+              d = root / "src" / "backend"
+              return set(p.name for p in d.glob("*") if p.is_file() and p.suffix in (".js", ".jsw"))
+          common_bk = sorted(bk(ht) & bk(kl))
+          only_ht_bk = sorted(bk(ht) - bk(kl))
+          only_kl_bk = sorted(bk(kl) - bk(ht))
+          Path("/tmp/common-backend.txt").write_text("\n".join(common_bk), encoding="utf-8")
+
+          out("## Backend")
+          out(f"- Comunes (KL <- HT): **{len(common_bk)}**")
+          out(f"- Solo en HT (no se copian): {', '.join('`'+x+'`' for x in only_ht_bk) or '—'}")
+          out(f"- Solo en KL (intactos): {', '.join('`'+x+'`' for x in only_kl_bk) or '—'}")
+          out("")
+
+          # -------- PAGES: emparejar por función --------
+          def pages(root):
+              d = root / "src" / "pages"
+              items = []
+              for p in sorted(d.glob("*.js"), key=lambda x: x.name):
+                  n = p.name
+                  if n.lower() == "masterpage.js":
+                      items.append({"pid": "__M__", "name": "__M__", "path": p, "file": n}); continue
+                  stem = n[:-3]
+                  if "." not in stem:
+                      items.append({"pid": None, "name": norm(stem), "path": p, "file": n}); continue
+                  vis, pid = stem.rsplit(".", 1)
+                  items.append({"pid": pid, "name": norm(vis), "path": p, "file": n})
+              return items
+
+          ht_items = pages(ht)
+          kl_items = pages(kl)
+
+          kl_by_name, kl_by_pid = {}, {}
+          for k in kl_items:
+              kl_by_name.setdefault(k["name"], []).append(k)
+              if k["pid"]:
+                  kl_by_pid.setdefault(k["pid"], []).append(k)
+
+          consumed, matched, pairs, via = set(), set(), [], {}
+
+          # Pass 1: por NOMBRE
+          for h in ht_items:
+              c = [k for k in kl_by_name.get(h["name"], []) if k["file"] not in consumed]
+              if len(c) == 1:
+                  pairs.append((h, c[0])); consumed.add(c[0]["file"]); matched.add(h["file"]); via[h["file"]] = "nombre"
+          # Pass 2: por pageId (solo HT no emparejadas, KL no consumida)
+          for h in ht_items:
+              if h["file"] in matched or not h["pid"]:
+                  continue
+              c = [k for k in kl_by_pid.get(h["pid"], []) if k["file"] not in consumed]
+              if len(c) == 1:
+                  pairs.append((h, c[0])); consumed.add(c[0]["file"]); matched.add(h["file"]); via[h["file"]] = "pageId"
+
+          un_ht = [h["file"] for h in ht_items if h["file"] not in matched]
+          un_kl = [k["file"] for k in kl_items if k["file"] not in consumed]
+
+          json.dump(
+              [{"source": str(h["path"]), "target": str(kln["path"])} for h, kln in pairs],
+              open("/tmp/page-pairs.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2
+          )
+
+          out("## Page code — emparejado por función (nombre, luego pageId)")
+          out(f"- Pares a sincronizar: **{len(pairs)}**")
+          out("")
+          out("| vía | HAIRTIMES | KALONICE (destino, se conserva su nombre/pageId) |")
+          out("|---|---|---|")
+          for h, kln in sorted(pairs, key=lambda pr: pr[0]["file"]):
+              out(f"| {via[h['file']]} | {h['file'][:-3]} | {kln['file'][:-3]} |")
+          out("")
+          out(f"### Solo en HAIRTIMES ({len(un_ht)}) — NO se tocan (crear en KL y re-ejecutar)")
+          for n in sorted(un_ht):
+              out(f"- `{n}`")
+          out("")
+          out(f"### Solo en KALONICE ({len(un_kl)}) — intactas")
+          for n in sorted(un_kl):
+              out(f"- `{n}`")
+
+          report = "\n".join(rep)
+          Path("/tmp/sync-report.md").write_text(report, encoding="utf-8")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              open(summary, "a", encoding="utf-8").write(report + "\n")
+          PYTHON
+
+      - name: Subir informe como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-report
+          path: /tmp/sync-report.md
+          if-no-files-found: warn
+
+      - name: Crear rama de copia de seguridad
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kalonice-target
+          SAFETY_BRANCH="backup-before-sync-${GITHUB_RUN_ID}"
+          git branch "$SAFETY_BRANCH" HEAD
+          git push origin "$SAFETY_BRANCH"
+          echo "SAFETY_BRANCH=$SAFETY_BRANCH" >> "$GITHUB_ENV"
+
+      - name: Sincronizar backend comunes + public + config (KL <- HT)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          while IFS= read -r base; do
+            [ -z "$base" ] && continue
+            cp "src/backend/$base" "kalonice-target/src/backend/$base"
+          done < /tmp/common-backend.txt
+
+          rsync -a src/public/ kalonice-target/src/public/
+
+          cp package.json kalonice-target/package.json
+          [ -f dependencies-metadata.json ] && cp dependencies-metadata.json kalonice-target/dependencies-metadata.json || true
+          [ -f .eslintrc.json ] && cp .eslintrc.json kalonice-target/.eslintrc.json || true
+
+      - name: Sincronizar page code emparejado (contenido HT dentro del archivo de KL)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PYTHON'
+          import json, shutil
+          from pathlib import Path
+          pairs = json.loads(Path("/tmp/page-pairs.json").read_text(encoding="utf-8"))
+          for pr in pairs:
+              shutil.copyfile(pr["source"], pr["target"])
+          print(f"Page codes actualizados: {len(pairs)}")
+          PYTHON
+
+      - name: Verificar que no se tocó nada prohibido
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kalonice-target
+
+          # wix.config.json / wix.lock intactos
+          if ! git diff --quiet -- wix.config.json wix.lock; then
+            echo "ERROR: se tocó wix.config.json o wix.lock."
+            exit 1
+          fi
+
+          # src/pages: solo MODIFICACIONES (nunca add/borrar/renombrar)
+          git add -A src/pages
+          BAD="$(git diff --cached --name-status -- src/pages | awk 'NF && $1 != "M" { print }')"
+          if [ -n "$BAD" ]; then
+            echo "ERROR: cambio no permitido en src/pages (add/delete/rename):"
+            printf '%s\n' "$BAD"
+            exit 1
+          fi
+          echo "OK: wix.config/lock intactos; src/pages solo con modificaciones de contenido."
+
+      - name: Commit y envío a KALONICE
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kalonice-target
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add src package.json
+          [ -f dependencies-metadata.json ] && git add dependencies-metadata.json || true
+          [ -f .eslintrc.json ] && git add .eslintrc.json || true
+
+          # Guard: nunca config Wix protegida; en src/pages solo M
+          if git diff --cached --name-only | grep -Eq '^wix\.config\.json$|^wix\.lock$'; then
+            echo "ERROR: intento de commitear config Wix protegida."; exit 1
+          fi
+          BAD="$(git diff --cached --name-status -- src/pages | awk 'NF && $1 != "M" { print }')"
+          if [ -n "$BAD" ]; then
+            echo "ERROR: src/pages con add/delete/rename:"; printf '%s\n' "$BAD"; exit 1
+          fi
+
+          if git diff --cached --quiet; then
+            echo "No hay cambios que enviar."; exit 0
+          fi
+
+          git commit -m "Sync KAMISUITE V2 backend+public+config+pagecode desde HAIRTIMES"
+          git push origin HEAD:main
+
+          echo "SINCRONIZACION COMPLETADA. Backup: ${SAFETY_BRANCH:-(ver paso backup)}"
