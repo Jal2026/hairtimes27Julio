@@ -1,0 +1,1239 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAMISUITE — Tarjetas Promocionales</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════
+   KAMISUITE — Widget público Tarjetas Promocionales v1.0.2
+
+   Sistema de tokens y skins reutilizado del widget de reservas
+   (kr-styles.js + kr-skins.js).
+
+   Defaults = skin "Niebla" (paleta neutra base).
+   El page code envía el skin del salón (SalonConfig.widgetSkin) en
+   el bootstrap; el script aplica los tokens del skin como custom
+   properties inline en :root, igual que KR_applySkin hace sobre el
+   Custom Element del widget de reservas.
+
+   CHANGELOG:
+   v1.0.2: Añadido checkbox de aceptación de Términos y Condiciones
+     en la vista de checkout, antes del botón Pagar. Activado por
+     defecto. El link apunta a SalonConfig.termsConditionsUrl (que
+     el page code propaga en el bootstrap). Si la URL está vacía,
+     el bloque se oculta y el botón Pagar funciona sin restricción.
+   v1.0.1: Reescritura completa de la paleta. Eliminados todos los
+     colores hardcoded (fucsia, navy, grey-light) que pertenecían a
+     la marca HairTimes. Ahora todo viene de tokens --kr-* idénticos
+     a los del widget público de reservas. Misma identidad visual,
+     misma elección de skin del salón.
+   v1.0.0: Versión inicial F2.1.
+   ═══════════════════════════════════════════════════ */
+
+/* Defaults = Niebla (copiado literal de kr-styles.js) */
+:root {
+  --kr-bg:            oklch(98.6% 0.003 250);
+  --kr-surface:       oklch(100% 0 0);
+  --kr-surface-2:     oklch(97.4% 0.004 250);
+  --kr-inset:         oklch(96.2% 0.005 252);
+  --kr-line:          oklch(91% 0.006 252);
+  --kr-line-2:        oklch(84% 0.008 252);
+  --kr-ink:           oklch(30% 0.013 258);
+  --kr-ink-2:         oklch(48% 0.011 258);
+  --kr-ink-3:         oklch(64% 0.009 258);
+  --kr-accent:        oklch(40% 0.022 258);
+  --kr-accent-2:      oklch(33% 0.024 258);
+  --kr-accent-ink:    oklch(98.5% 0.003 250);
+  --kr-accent-soft:   oklch(93.5% 0.012 256);
+  --kr-accent-line:   oklch(62% 0.02 256);
+  --kr-focus:         oklch(58% 0.13 256);
+  --kr-danger:        oklch(55% 0.18 25);
+  --kr-danger-soft:   oklch(95% 0.035 28);
+  --kr-green-soft:    oklch(94% 0.05 152);
+  --kr-green:         oklch(53% 0.115 153);
+
+  --kr-font:          "Bai Jamjuree", ui-sans-serif, system-ui, sans-serif;
+  --kr-fs-eyebrow:    0.72rem;
+  --kr-fs-xs:         0.8rem;
+  --kr-fs-sm:         0.875rem;
+  --kr-fs-base:       0.95rem;
+  --kr-fs-md:         1.0625rem;
+  --kr-fs-lg:         1.25rem;
+  --kr-fs-xl:         1.7rem;
+  --kr-w-medium:      500;
+  --kr-w-semi:        600;
+  --kr-w-bold:        700;
+
+  --kr-radius:        10px;
+  --kr-radius-sm:     max(4px, calc(var(--kr-radius) - 5px));
+  --kr-radius-lg:     calc(var(--kr-radius) + 6px);
+  --kr-radius-pill:   999px;
+  --kr-gap:           12px;
+  --kr-pad:           20px;
+  --kr-maxw:          920px;
+
+  --kr-shadow-1:      0 1px 2px oklch(40% 0.02 258 / .05), 0 1px 1px oklch(40% 0.02 258 / .04);
+  --kr-shadow-2:      0 14px 40px -18px oklch(40% 0.03 258 / .28), 0 2px 8px oklch(40% 0.02 258 / .06);
+  --kr-dur:           170ms;
+  --kr-ease:          cubic-bezier(.2,.7,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: var(--kr-font);
+  background: var(--kr-bg);
+  color: var(--kr-ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+}
+
+/* ── Header ── */
+.kp-header {
+  background: var(--kr-surface);
+  border-bottom: 1px solid var(--kr-line);
+  padding: 24px 20px 22px;
+}
+.kp-header-row {
+  display: flex; align-items: center; gap: 14px;
+  max-width: var(--kr-maxw); margin: 0 auto;
+}
+.kp-header-icon {
+  width: 44px; height: 44px;
+  border-radius: var(--kr-radius);
+  background: var(--kr-accent);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--kr-shadow-1);
+  flex-shrink: 0;
+}
+.kp-header-icon svg { width: 21px; height: 21px; color: var(--kr-accent-ink); }
+.kp-header-title {
+  font-size: var(--kr-fs-lg);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  letter-spacing: -0.01em;
+}
+.kp-header-sub {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  margin-top: 3px;
+}
+
+.kp-back {
+  background: transparent;
+  border: 1px solid var(--kr-line);
+  color: var(--kr-ink-2);
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--kr-fs-xs);
+  padding: 6px 13px;
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  margin-bottom: 14px;
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-back:hover {
+  border-color: var(--kr-line-2);
+  color: var(--kr-ink);
+  background: var(--kr-surface-2);
+}
+.kp-back svg { width: 13px; height: 13px; }
+
+/* ── Content layout ── */
+.kp-content {
+  max-width: var(--kr-maxw);
+  margin: 0 auto;
+  padding: 22px 16px 40px;
+}
+
+/* ── Estados loading / empty ── */
+.kp-loading, .kp-empty {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--kr-ink-3);
+  font-size: var(--kr-fs-sm);
+}
+.kp-spinner {
+  width: 34px; height: 34px;
+  border: 3px solid var(--kr-line);
+  border-top-color: var(--kr-accent);
+  border-radius: 50%;
+  animation: kp-spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+@keyframes kp-spin { to { transform: rotate(360deg); } }
+
+/* ── Cards ── */
+.kp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 18px;
+}
+.kp-card {
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius-lg);
+  overflow: hidden;
+  box-shadow: var(--kr-shadow-1);
+  border: 1px solid var(--kr-line);
+  cursor: pointer;
+  transition: transform 0.22s var(--kr-ease), box-shadow 0.22s var(--kr-ease), border-color 0.22s var(--kr-ease);
+  display: flex;
+  flex-direction: column;
+}
+.kp-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--kr-shadow-2);
+  border-color: var(--kr-accent-line);
+}
+.kp-card-img {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  background: var(--kr-inset);
+}
+.kp-card-img img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transition: transform 0.35s var(--kr-ease);
+}
+.kp-card:hover .kp-card-img img { transform: scale(1.04); }
+.kp-badge {
+  position: absolute;
+  top: 12px; right: 12px;
+  background: var(--kr-accent);
+  color: var(--kr-accent-ink);
+  padding: 5px 11px;
+  border-radius: var(--kr-radius-pill);
+  font-size: var(--kr-fs-xs); font-weight: var(--kr-w-bold);
+  letter-spacing: 0.3px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-card-overlay {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: linear-gradient(transparent, oklch(20% 0.013 258 / .82));
+  padding: 30px 14px 12px;
+}
+.kp-card-overlay h3 {
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-semi);
+  color: oklch(99% 0 0);
+  line-height: 1.25;
+}
+.kp-card-body {
+  padding: 14px 16px 18px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.kp-card-svc {
+  color: var(--kr-ink-2);
+  font-size: var(--kr-fs-eyebrow);
+  font-weight: var(--kr-w-semi);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 8px;
+}
+.kp-card-desc {
+  color: var(--kr-ink-2);
+  font-size: var(--kr-fs-sm);
+  line-height: 1.5;
+  margin-bottom: 12px;
+  flex: 1;
+  max-height: 60px;
+  overflow: hidden;
+}
+.kp-card-pricing {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.kp-price-final {
+  font-size: var(--kr-fs-xl); font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: -0.01em;
+}
+.kp-price-old {
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink-3);
+  text-decoration: line-through;
+  margin-left: 6px;
+}
+.kp-validity {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  display: flex; align-items: center; gap: 4px;
+}
+
+/* ── Buttons ── */
+.kp-btn {
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-btn:active { transform: translateY(1px); }
+.kp-btn-primary {
+  background: var(--kr-accent);
+  color: var(--kr-accent-ink);
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-btn-primary:hover { background: var(--kr-accent-2); }
+.kp-btn-primary:disabled {
+  background: var(--kr-inset); color: var(--kr-ink-3);
+  box-shadow: none; cursor: not-allowed;
+}
+.kp-btn-ghost {
+  background: var(--kr-surface);
+  color: var(--kr-ink);
+  border: 1px solid var(--kr-line);
+}
+.kp-btn-ghost:hover {
+  background: var(--kr-surface-2);
+  border-color: var(--kr-line-2);
+}
+
+/* ── Panel ── */
+.kp-panel {
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius-lg);
+  overflow: hidden;
+  box-shadow: var(--kr-shadow-1);
+  border: 1px solid var(--kr-line);
+}
+.kp-panel-hero {
+  position: relative;
+  height: 130px;
+  background: var(--kr-inset);
+  overflow: hidden;
+}
+.kp-panel-hero img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  filter: brightness(0.6);
+}
+.kp-panel-hero-info {
+  position: absolute;
+  bottom: 14px; left: 18px; right: 18px;
+  color: oklch(99% 0 0);
+}
+.kp-panel-hero-info h3 {
+  font-size: var(--kr-fs-lg);
+  font-weight: var(--kr-w-semi);
+  line-height: 1.2;
+}
+.kp-panel-hero-price {
+  font-weight: var(--kr-w-semi);
+  font-size: var(--kr-fs-md);
+  margin-top: 4px;
+  color: oklch(99% 0 0);
+}
+.kp-panel-hero-price span {
+  text-decoration: line-through;
+  font-size: var(--kr-fs-xs);
+  font-weight: var(--kr-w-medium);
+  margin-left: 6px;
+  opacity: 0.65;
+}
+.kp-panel-body { padding: 22px 20px 24px; }
+.kp-panel-h {
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  margin-bottom: 16px;
+  letter-spacing: -0.01em;
+}
+
+/* ── Segmented (para mí / regalar) ── */
+.kp-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  background: var(--kr-inset);
+  border: 1px solid var(--kr-line);
+  padding: 4px;
+  border-radius: var(--kr-radius);
+  margin-bottom: 18px;
+}
+.kp-seg-btn {
+  background: transparent;
+  border: 0;
+  padding: 10px 12px;
+  border-radius: max(4px, calc(var(--kr-radius) - 4px));
+  font-family: inherit;
+  font-size: var(--kr-fs-sm);
+  font-weight: var(--kr-w-medium);
+  color: var(--kr-ink-2);
+  cursor: pointer;
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-seg-btn:hover:not(.active) { color: var(--kr-ink); }
+.kp-seg-btn.active {
+  background: var(--kr-surface);
+  color: var(--kr-ink);
+  box-shadow: var(--kr-shadow-1);
+}
+
+/* ── Form ── */
+.kp-field { margin-bottom: 14px; }
+.kp-label {
+  display: block;
+  font-size: var(--kr-fs-sm);
+  font-weight: var(--kr-w-medium);
+  color: var(--kr-ink-2);
+  margin-bottom: 6px;
+}
+.kp-input, .kp-textarea {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--kr-line-2);
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink);
+  outline: none;
+  background: var(--kr-surface);
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-input:focus, .kp-textarea:focus {
+  border-color: var(--kr-accent);
+  box-shadow: 0 0 0 3px var(--kr-accent-soft);
+}
+.kp-textarea { resize: vertical; min-height: 88px; }
+.kp-row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 480px) {
+  .kp-row2 { grid-template-columns: 1fr; }
+}
+
+/* ── Summary ── */
+.kp-summary {
+  background: var(--kr-inset);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 16px;
+  margin-bottom: 18px;
+}
+.kp-s-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: var(--kr-fs-sm);
+  margin-bottom: 7px;
+  color: var(--kr-ink);
+}
+.kp-s-row.main {
+  font-weight: var(--kr-w-bold);
+  font-size: var(--kr-fs-base);
+}
+.kp-s-row.old {
+  color: var(--kr-ink-3);
+  font-size: var(--kr-fs-xs);
+}
+.kp-s-row.old .v { text-decoration: line-through; }
+.kp-s-row.save {
+  color: var(--kr-accent);
+  font-weight: var(--kr-w-bold);
+  font-size: var(--kr-fs-xs);
+}
+.kp-s-hr {
+  border: 0;
+  border-top: 1px solid var(--kr-line);
+  margin: 12px 0;
+}
+.kp-s-detail {
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink);
+  line-height: 1.7;
+}
+.kp-s-detail strong { font-weight: var(--kr-w-semi); }
+.kp-s-detail .msg {
+  font-style: italic;
+  color: var(--kr-ink-2);
+  margin-top: 4px;
+}
+
+/* ── Success / Error ── */
+.kp-result {
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius-lg);
+  border: 1px solid var(--kr-line);
+  text-align: center;
+  padding: 44px 28px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-result-icon {
+  width: 70px; height: 70px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 20px;
+}
+.kp-result-icon.ok {
+  background: var(--kr-accent);
+  box-shadow: var(--kr-shadow-2);
+}
+.kp-result-icon.err {
+  background: var(--kr-danger);
+}
+.kp-result-icon svg { width: 28px; height: 28px; color: var(--kr-accent-ink); }
+.kp-result h3 {
+  font-size: var(--kr-fs-xl);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  margin-bottom: 10px;
+  letter-spacing: -0.01em;
+}
+.kp-result p {
+  color: var(--kr-ink-2);
+  font-size: var(--kr-fs-sm);
+  line-height: 1.6;
+  margin-bottom: 22px;
+}
+.kp-result p strong { color: var(--kr-ink); }
+.kp-code-box {
+  background: var(--kr-inset);
+  border: 1.5px dashed var(--kr-accent-line);
+  border-radius: var(--kr-radius);
+  padding: 14px;
+  margin: 0 0 22px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: 2px;
+}
+
+/* ── Notice ── */
+.kp-notice {
+  background: var(--kr-accent-soft);
+  border: 1px solid var(--kr-accent-line);
+  color: var(--kr-accent-2);
+  padding: 14px 16px;
+  border-radius: var(--kr-radius);
+  font-size: var(--kr-fs-sm);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+/* ── Checkbox T&C ── */
+.kp-terms {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.45;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--kr-inset);
+  border-radius: var(--kr-radius);
+}
+.kp-terms input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  accent-color: var(--kr-accent);
+  cursor: pointer;
+}
+.kp-terms label {
+  cursor: pointer;
+  flex: 1;
+}
+.kp-terms a {
+  color: var(--kr-accent);
+  text-decoration: underline;
+  font-weight: var(--kr-w-medium);
+}
+.kp-terms a:hover { color: var(--kr-accent-2); }
+
+.kp-hidden { display: none !important; }
+
+.kp-footer {
+  text-align: center;
+  padding: 14px;
+  font-size: var(--kr-fs-eyebrow);
+  color: var(--kr-ink-3);
+}
+.kp-footer strong { color: var(--kr-ink-2); }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="kp-header">
+  <div style="max-width:920px; margin:0 auto;">
+    <button class="kp-back kp-hidden" id="btnBack">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      Volver
+    </button>
+  </div>
+  <div class="kp-header-row">
+    <div class="kp-header-icon">
+      <svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <polyline points="20 12 20 22 4 22 4 12"/>
+        <rect x="2" y="7" width="20" height="5"/>
+        <line x1="12" y1="22" x2="12" y2="7"/>
+        <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
+        <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
+      </svg>
+    </div>
+    <div>
+      <div class="kp-header-title">Tarjetas Promocionales</div>
+      <div class="kp-header-sub">Promociones exclusivas del salón</div>
+    </div>
+  </div>
+</div>
+
+<div class="kp-content">
+
+  <div id="viewLoading" class="kp-loading">
+    <div class="kp-spinner"></div>
+    <p>Cargando promociones...</p>
+  </div>
+
+  <div id="viewBrowse" class="kp-hidden">
+    <div id="cardsGrid" class="kp-grid"></div>
+  </div>
+
+  <div id="viewEmpty" class="kp-empty kp-hidden">
+    <p>Ahora mismo no hay promociones activas.<br>Vuelve a echar un vistazo más adelante.</p>
+  </div>
+
+  <div id="viewCustomize" class="kp-hidden">
+    <div class="kp-panel">
+      <div class="kp-panel-hero">
+        <img id="custImg" src="" alt="">
+        <div class="kp-panel-hero-info">
+          <h3 id="custTitle"></h3>
+          <div class="kp-panel-hero-price">
+            <span id="custPromo"></span>
+            <span id="custOrig"></span>
+          </div>
+        </div>
+      </div>
+      <div class="kp-panel-body">
+        <h4 class="kp-panel-h">Tus datos</h4>
+
+        <div class="kp-seg" role="tablist">
+          <button type="button" class="kp-seg-btn active" data-mode="self">Para mí</button>
+          <button type="button" class="kp-seg-btn" data-mode="gift">Es un regalo</button>
+        </div>
+
+        <div class="kp-row2">
+          <div class="kp-field">
+            <label class="kp-label">Tu nombre</label>
+            <input type="text" class="kp-input" id="inputBuyerName" placeholder="Nombre y apellidos">
+          </div>
+          <div class="kp-field">
+            <label class="kp-label">Tu teléfono</label>
+            <input type="tel" class="kp-input" id="inputBuyerPhone" placeholder="600 000 000">
+          </div>
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Tu email</label>
+          <input type="email" class="kp-input" id="inputBuyerEmail" placeholder="tu@email.com">
+        </div>
+
+        <div id="giftBlock" class="kp-hidden" style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--kr-line);">
+          <h4 class="kp-panel-h">Datos del beneficiario</h4>
+          <div class="kp-field">
+            <label class="kp-label">Nombre de la persona que recibe el regalo</label>
+            <input type="text" class="kp-input" id="inputRecipientName" placeholder="Nombre y apellidos">
+          </div>
+          <div class="kp-field">
+            <label class="kp-label">Email del beneficiario</label>
+            <input type="email" class="kp-input" id="inputRecipientEmail" placeholder="email@destinatario.com">
+          </div>
+          <div class="kp-field">
+            <label class="kp-label">Mensaje personal (opcional)</label>
+            <textarea class="kp-textarea" id="inputRecipientMessage" rows="3" placeholder="Escribe un mensaje bonito..."></textarea>
+          </div>
+        </div>
+
+        <button type="button" class="kp-btn kp-btn-primary" id="btnContinue" disabled style="margin-top: 8px;">Continuar al pago</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="viewCheckout" class="kp-hidden">
+    <div class="kp-panel">
+      <div class="kp-panel-body">
+        <h4 class="kp-panel-h">Resumen de la compra</h4>
+        <div class="kp-summary">
+          <div class="kp-s-row main">
+            <span id="chkTitle"></span>
+            <span class="v" id="chkPromo"></span>
+          </div>
+          <div class="kp-s-row old">
+            <span>PVP</span>
+            <span class="v" id="chkOrig"></span>
+          </div>
+          <div class="kp-s-row save">
+            <span>Tu ahorro</span>
+            <span id="chkSave"></span>
+          </div>
+          <hr class="kp-s-hr">
+          <div class="kp-s-detail">
+            <div>Comprador: <strong id="chkBuyer"></strong></div>
+            <div id="chkRecipientLine" class="kp-hidden">Para: <strong id="chkRecipient"></strong></div>
+            <div id="chkMessageLine" class="kp-hidden msg">"<span id="chkMessage"></span>"</div>
+          </div>
+        </div>
+        <div id="loginNotice" class="kp-notice kp-hidden">
+          Para finalizar la compra hace falta iniciar sesión. Te abriremos la ventana de acceso al pulsar Pagar.
+        </div>
+        <div class="kp-terms" id="termsBlock">
+          <input type="checkbox" id="inputTerms" checked>
+          <label for="inputTerms">
+            He leído y acepto los <a id="termsLink" href="#" target="_blank" rel="noopener">Términos y Condiciones</a>.
+          </label>
+        </div>
+        <button type="button" class="kp-btn kp-btn-primary" id="btnPay">Pagar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="viewRedirecting" class="kp-loading kp-hidden">
+    <div class="kp-spinner"></div>
+    <p>Procesando el pago...</p>
+  </div>
+
+  <div id="viewSuccess" class="kp-result kp-hidden">
+    <div class="kp-result-icon ok">
+      <svg fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>
+    <h3 id="successTitle">¡Compra completada!</h3>
+    <p id="successText"></p>
+    <div class="kp-code-box" id="successCode"></div>
+    <button type="button" class="kp-btn kp-btn-ghost" id="btnReset">Ver más promociones</button>
+  </div>
+
+  <div id="viewError" class="kp-result kp-hidden">
+    <div class="kp-result-icon err">
+      <svg fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </div>
+    <h3 id="errorTitle">Algo ha fallado</h3>
+    <p id="errorText">Inténtalo de nuevo en un momento</p>
+    <button type="button" class="kp-btn kp-btn-ghost" id="btnErrorReset">Volver al catálogo</button>
+  </div>
+
+</div>
+
+<div class="kp-footer">Powered by <strong>KAMISUITE</strong></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ═══════════════════════════════════════════════════
+  // KR_SKINS — Copia literal de kr-skins.js
+  // Mantener sincronizado si se actualizan los skins en el widget de
+  // reservas. Cualquier cambio de paleta del salón se hace en este
+  // objeto Y en kr-skins.js.
+  // ═══════════════════════════════════════════════════
+  var KR_SKINS = {
+    niebla: { tokens: {} /* :host defaults */ },
+    arena: {
+      tokens: {
+        "--kr-bg": "oklch(98.4% 0.009 78)",
+        "--kr-surface": "oklch(99.6% 0.006 80)",
+        "--kr-surface-2": "oklch(97% 0.012 78)",
+        "--kr-inset": "oklch(95.6% 0.014 76)",
+        "--kr-line": "oklch(90% 0.016 72)",
+        "--kr-line-2": "oklch(82% 0.02 68)",
+        "--kr-ink": "oklch(31% 0.018 60)",
+        "--kr-ink-2": "oklch(48% 0.016 60)",
+        "--kr-ink-3": "oklch(64% 0.014 62)",
+        "--kr-accent": "oklch(42% 0.028 64)",
+        "--kr-accent-2": "oklch(35% 0.03 62)",
+        "--kr-accent-soft": "oklch(93% 0.022 72)",
+        "--kr-accent-line": "oklch(64% 0.026 66)",
+        "--kr-focus": "oklch(58% 0.09 70)",
+        "--kr-radius": "13px"
+      }
+    },
+    grafito: {
+      tokens: {
+        "--kr-bg": "oklch(99% 0 0)",
+        "--kr-surface": "oklch(100% 0 0)",
+        "--kr-surface-2": "oklch(97% 0 0)",
+        "--kr-inset": "oklch(95.5% 0 0)",
+        "--kr-line": "oklch(89% 0 0)",
+        "--kr-line-2": "oklch(80% 0 0)",
+        "--kr-ink": "oklch(20% 0 0)",
+        "--kr-ink-2": "oklch(42% 0 0)",
+        "--kr-ink-3": "oklch(62% 0 0)",
+        "--kr-accent": "oklch(22% 0 0)",
+        "--kr-accent-2": "oklch(12% 0 0)",
+        "--kr-accent-ink": "oklch(99% 0 0)",
+        "--kr-accent-soft": "oklch(94.5% 0 0)",
+        "--kr-accent-line": "oklch(55% 0 0)",
+        "--kr-focus": "oklch(50% 0 0)",
+        "--kr-radius": "6px"
+      }
+    },
+    lumiere: {
+      tokens: {
+        "--kr-bg": "oklch(98.2% 0.012 88)",
+        "--kr-surface": "oklch(99.6% 0.008 88)",
+        "--kr-surface-2": "oklch(96.6% 0.016 86)",
+        "--kr-inset": "oklch(95% 0.02 84)",
+        "--kr-line": "oklch(90% 0.022 82)",
+        "--kr-line-2": "oklch(80% 0.03 80)",
+        "--kr-ink": "oklch(26% 0.012 70)",
+        "--kr-ink-2": "oklch(45% 0.014 72)",
+        "--kr-ink-3": "oklch(62% 0.018 76)",
+        "--kr-accent": "oklch(56% 0.085 78)",
+        "--kr-accent-2": "oklch(47% 0.08 74)",
+        "--kr-accent-ink": "oklch(99% 0.01 88)",
+        "--kr-accent-soft": "oklch(93% 0.035 84)",
+        "--kr-accent-line": "oklch(66% 0.075 80)",
+        "--kr-focus": "oklch(58% 0.085 78)",
+        "--kr-radius": "4px"
+      }
+    },
+    botanica: {
+      tokens: {
+        "--kr-bg": "oklch(98.6% 0.01 150)",
+        "--kr-surface": "oklch(99.8% 0.006 150)",
+        "--kr-surface-2": "oklch(97% 0.016 152)",
+        "--kr-inset": "oklch(95.4% 0.02 152)",
+        "--kr-line": "oklch(90% 0.022 154)",
+        "--kr-line-2": "oklch(81% 0.03 156)",
+        "--kr-ink": "oklch(28% 0.025 160)",
+        "--kr-ink-2": "oklch(46% 0.022 158)",
+        "--kr-ink-3": "oklch(63% 0.02 156)",
+        "--kr-accent": "oklch(48% 0.09 156)",
+        "--kr-accent-2": "oklch(40% 0.085 158)",
+        "--kr-accent-soft": "oklch(93% 0.03 152)",
+        "--kr-accent-line": "oklch(62% 0.08 156)",
+        "--kr-focus": "oklch(56% 0.1 156)",
+        "--kr-radius": "16px"
+      }
+    },
+    aurora: {
+      tokens: {
+        "--kr-bg": "oklch(98.7% 0.006 320)",
+        "--kr-surface": "oklch(100% 0 0)",
+        "--kr-surface-2": "oklch(97.4% 0.01 322)",
+        "--kr-inset": "oklch(96% 0.014 326)",
+        "--kr-line": "oklch(91% 0.016 330)",
+        "--kr-line-2": "oklch(82% 0.024 336)",
+        "--kr-ink": "oklch(27% 0.03 326)",
+        "--kr-ink-2": "oklch(46% 0.026 330)",
+        "--kr-ink-3": "oklch(64% 0.022 334)",
+        "--kr-accent": "oklch(56% 0.16 350)",
+        "--kr-accent-2": "oklch(48% 0.17 352)",
+        "--kr-accent-soft": "oklch(94% 0.04 348)",
+        "--kr-accent-line": "oklch(66% 0.14 350)",
+        "--kr-focus": "oklch(58% 0.16 350)",
+        "--kr-radius": "12px",
+        "--kr-font": '"Instrument Sans", ui-sans-serif, system-ui, sans-serif'
+      }
+    }
+  };
+
+  // Aplica un skin a :root. Equivalente a KR_applySkin del widget de
+  // reservas, pero sobre document.documentElement (raíz del iframe).
+  // Limpia previamente todos los tokens skinneables antes de aplicar
+  // los nuevos, para que el cambio sea limpio.
+  function applySkin(name) {
+    var skin = KR_SKINS[name];
+    if (!skin) return;
+    var all = {};
+    Object.keys(KR_SKINS).forEach(function (k) {
+      Object.keys(KR_SKINS[k].tokens || {}).forEach(function (t) { all[t] = true; });
+    });
+    var root = document.documentElement;
+    Object.keys(all).forEach(function (t) { root.style.removeProperty(t); });
+    Object.keys(skin.tokens).forEach(function (t) {
+      root.style.setProperty(t, skin.tokens[t]);
+    });
+    root.dataset.skin = name;
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ESTADO
+  // ═══════════════════════════════════════════════════
+  var state = {
+    campaigns: [],
+    selected: null,
+    mode: 'self',
+    termsUrl: '',
+    bootstrapped: false,
+    currentView: 'loading'
+  };
+
+  var views = ['Loading', 'Browse', 'Empty', 'Customize', 'Checkout', 'Redirecting', 'Success', 'Error'];
+
+  // ═══════════════════════════════════════════════════
+  // UTILIDADES
+  // ═══════════════════════════════════════════════════
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function fmtMoney(n) {
+    if (n === null || n === undefined || isNaN(n)) return '—';
+    return Number(n).toFixed(2).replace('.', ',') + ' €';
+  }
+  function fmtDate(d) {
+    if (!d) return '—';
+    try {
+      var dt = new Date(d);
+      if (isNaN(dt.getTime())) return '—';
+      return dt.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch (e) { return '—'; }
+  }
+  function discount(c) {
+    if (!c.retailPrice || c.retailPrice <= 0) return 0;
+    return Math.round(((c.retailPrice - c.promoPrice) / c.retailPrice) * 100);
+  }
+  function emailValido(e) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
+  }
+
+  function showView(name) {
+    state.currentView = name;
+    views.forEach(function (v) {
+      var el = $('view' + v);
+      if (el) el.classList.add('kp-hidden');
+    });
+    var target = $('view' + name.charAt(0).toUpperCase() + name.slice(1));
+    if (target) target.classList.remove('kp-hidden');
+    if (name === 'customize' || name === 'checkout') {
+      $('btnBack').classList.remove('kp-hidden');
+    } else {
+      $('btnBack').classList.add('kp-hidden');
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  // POST MESSAGE BRIDGE
+  // ═══════════════════════════════════════════════════
+  function send(type, payload) {
+    try {
+      window.parent.postMessage({ type: type, payload: payload || {} }, '*');
+    } catch (e) {
+      console.error('[BonosPromos] postMessage error:', e);
+    }
+  }
+
+  var readyTimer = null;
+  function startReadyRetry() {
+    var fired = 0;
+    function ping() {
+      if (state.bootstrapped) {
+        if (readyTimer) clearInterval(readyTimer);
+        return;
+      }
+      fired++;
+      send('ready');
+      if (fired > 20) {
+        if (readyTimer) clearInterval(readyTimer);
+        showError('No se ha podido cargar el catálogo. Recarga la página.');
+      }
+    }
+    ping();
+    readyTimer = setInterval(ping, 700);
+  }
+
+  window.addEventListener('message', function (event) {
+    var msg = event.data;
+    if (!msg || typeof msg !== 'object' || !msg.type) return;
+    handleMessage(msg);
+  });
+
+  function handleMessage(msg) {
+    var p = msg.payload || {};
+    switch (msg.type) {
+
+      case 'bootstrap':
+        // v1.0.2: bootstrap trae campaigns + skin + termsConditionsUrl.
+        if (p.skin) applySkin(p.skin);
+        state.termsUrl = p.termsConditionsUrl || '';
+        if (state.termsUrl) {
+          $('termsLink').href = state.termsUrl;
+          $('termsBlock').style.display = '';
+        } else {
+          // Sin URL → ocultamos el bloque para no enseñar link roto.
+          // La compra sigue funcionando sin checkbox de T&C.
+          $('termsBlock').style.display = 'none';
+        }
+        state.campaigns = p.campaigns || [];
+        state.bootstrapped = true;
+        if (!state.campaigns.length) {
+          showView('empty');
+        } else {
+          renderCards();
+          showView('browse');
+        }
+        break;
+
+      case 'loginRequired':
+        $('loginNotice').classList.remove('kp-hidden');
+        showView('checkout');
+        break;
+
+      case 'purchaseSuccess':
+        mostrarSuccess(p);
+        break;
+
+      case 'purchaseCancelled':
+        showView('checkout');
+        break;
+
+      case 'purchaseError':
+        showError(msg.message || 'No se pudo completar el pago');
+        break;
+
+      case 'error':
+        showError(msg.message || 'Error');
+        break;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  // RENDER CATÁLOGO
+  // ═══════════════════════════════════════════════════
+  function renderCards() {
+    var grid = $('cardsGrid');
+    var html = '';
+    state.campaigns.forEach(function (c, idx) {
+      var img = c.imagePublicUrl || '';
+      var dto = discount(c);
+      var validity = c.endDate ? ('Hasta ' + fmtDate(c.endDate)) : '';
+      html += '<div class="kp-card" data-idx="' + idx + '">'
+        + '<div class="kp-card-img">'
+          + (img ? '<img src="' + esc(img) + '" alt="' + esc(c.label) + '" loading="lazy">' : '')
+          + (dto > 0 ? '<div class="kp-badge">-' + dto + '%</div>' : '')
+          + '<div class="kp-card-overlay"><h3>' + esc(c.label) + '</h3></div>'
+        + '</div>'
+        + '<div class="kp-card-body">'
+          + (c.serviceLabel ? '<div class="kp-card-svc">' + esc(c.serviceLabel) + '</div>' : '')
+          + '<div class="kp-card-desc">' + esc(c.description || '') + '</div>'
+          + '<div class="kp-card-pricing">'
+            + '<div><span class="kp-price-final">' + fmtMoney(c.promoPrice) + '</span>'
+            + (c.retailPrice && c.retailPrice > c.promoPrice ? '<span class="kp-price-old">' + fmtMoney(c.retailPrice) + '</span>' : '')
+            + '</div>'
+            + (validity ? '<div class="kp-validity">' + esc(validity) + '</div>' : '')
+          + '</div>'
+          + '<button type="button" class="kp-btn kp-btn-primary">Regalar / comprar</button>'
+        + '</div>'
+        + '</div>';
+    });
+    grid.innerHTML = html;
+    grid.querySelectorAll('.kp-card').forEach(function (card) {
+      card.addEventListener('click', function () {
+        var idx = parseInt(card.getAttribute('data-idx'), 10);
+        seleccionarCampaign(idx);
+      });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════
+  // FLUJO DE COMPRA
+  // ═══════════════════════════════════════════════════
+  function seleccionarCampaign(idx) {
+    var c = state.campaigns[idx];
+    if (!c) return;
+    state.selected = c;
+    state.mode = 'self';
+
+    $('custImg').src = c.imagePublicUrl || '';
+    $('custTitle').textContent = c.label || '';
+    $('custPromo').textContent = fmtMoney(c.promoPrice);
+    $('custOrig').textContent = (c.retailPrice && c.retailPrice > c.promoPrice) ? fmtMoney(c.retailPrice) : '';
+    $('btnContinue').textContent = 'Continuar al pago · ' + fmtMoney(c.promoPrice);
+
+    $('inputBuyerName').value = '';
+    $('inputBuyerEmail').value = '';
+    $('inputBuyerPhone').value = '';
+    $('inputRecipientName').value = '';
+    $('inputRecipientEmail').value = '';
+    $('inputRecipientMessage').value = '';
+
+    setMode('self');
+    validarForm();
+    showView('customize');
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    document.querySelectorAll('.kp-seg-btn').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+    });
+    if (mode === 'gift') {
+      $('giftBlock').classList.remove('kp-hidden');
+    } else {
+      $('giftBlock').classList.add('kp-hidden');
+    }
+    validarForm();
+  }
+
+  function validarForm() {
+    var buyerName = $('inputBuyerName').value.trim();
+    var buyerEmail = $('inputBuyerEmail').value.trim();
+    var ok = !!buyerName && emailValido(buyerEmail);
+    if (state.mode === 'gift') {
+      var recName = $('inputRecipientName').value.trim();
+      var recEmail = $('inputRecipientEmail').value.trim();
+      ok = ok && !!recName && emailValido(recEmail);
+    }
+    $('btnContinue').disabled = !ok;
+  }
+
+  function irACheckout() {
+    if (!state.selected) return;
+    var c = state.selected;
+    var buyerName = $('inputBuyerName').value.trim();
+    var buyerEmail = $('inputBuyerEmail').value.trim();
+    var ahorro = Math.max(0, (c.retailPrice || 0) - (c.promoPrice || 0));
+
+    $('chkTitle').textContent = c.label || '';
+    $('chkPromo').textContent = fmtMoney(c.promoPrice);
+    $('chkOrig').textContent = fmtMoney(c.retailPrice);
+    $('chkSave').textContent = '-' + fmtMoney(ahorro);
+    $('chkBuyer').textContent = buyerName + ' · ' + buyerEmail;
+
+    if (state.mode === 'gift') {
+      var recName = $('inputRecipientName').value.trim();
+      var recEmail = $('inputRecipientEmail').value.trim();
+      var recMsg = $('inputRecipientMessage').value.trim();
+      $('chkRecipient').textContent = recName + ' · ' + recEmail;
+      $('chkRecipientLine').classList.remove('kp-hidden');
+      if (recMsg) {
+        $('chkMessage').textContent = recMsg;
+        $('chkMessageLine').classList.remove('kp-hidden');
+      } else {
+        $('chkMessageLine').classList.add('kp-hidden');
+      }
+    } else {
+      $('chkRecipientLine').classList.add('kp-hidden');
+      $('chkMessageLine').classList.add('kp-hidden');
+    }
+
+    $('btnPay').textContent = 'Pagar ' + fmtMoney(c.promoPrice);
+    $('loginNotice').classList.add('kp-hidden');
+    // v1.0.2 — checkbox T&C marcado por defecto al entrar al checkout.
+    $('inputTerms').checked = true;
+    validarCheckout();
+    showView('checkout');
+  }
+
+  // v1.0.2 — Valida estado del botón Pagar en función del checkbox T&C.
+  // Si el bloque T&C está oculto (porque no hay URL configurada en
+  // SalonConfig), el botón siempre está activo.
+  function validarCheckout() {
+    var termsVisible = $('termsBlock').style.display !== 'none';
+    $('btnPay').disabled = termsVisible && !$('inputTerms').checked;
+  }
+
+  function pagar() {
+    if (!state.selected) return;
+    var payload = {
+      campaignId: state.selected._id,
+      buyerName: $('inputBuyerName').value.trim(),
+      buyerEmail: $('inputBuyerEmail').value.trim(),
+      buyerPhone: $('inputBuyerPhone').value.trim(),
+      isGift: state.mode === 'gift'
+    };
+    if (state.mode === 'gift') {
+      payload.recipientName = $('inputRecipientName').value.trim();
+      payload.recipientEmail = $('inputRecipientEmail').value.trim();
+      payload.recipientMessage = $('inputRecipientMessage').value.trim();
+    }
+    showView('redirecting');
+    send('purchase', payload);
+  }
+
+  function mostrarSuccess(p) {
+    var code = p && p.code ? String(p.code) : '—';
+    var isGift = !!(p && p.isGift);
+    $('successCode').textContent = code;
+    if (isGift) {
+      $('successTitle').textContent = '¡Regalo en camino!';
+      var recName = p.recipientName || '';
+      $('successText').innerHTML = 'Tu tarjeta promocional ha sido emitida. '
+        + (recName ? 'La hemos preparado para <strong>' + esc(recName) + '</strong>. ' : '')
+        + 'Te enviaremos por email los datos para entregar el regalo. Guarda el código de canje:';
+    } else {
+      $('successTitle').textContent = '¡Compra completada!';
+      $('successText').innerHTML = 'Tu tarjeta promocional ha sido emitida. Presenta este código en el salón al pedir tu cita:';
+    }
+    showView('success');
+  }
+
+  function showError(msg) {
+    $('errorText').textContent = msg || 'Inténtalo de nuevo en un momento';
+    showView('error');
+  }
+
+  function reset() {
+    state.selected = null;
+    state.mode = 'self';
+    showView('browse');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // EVENT LISTENERS
+  // ═══════════════════════════════════════════════════
+  $('btnBack').addEventListener('click', function () {
+    if (state.currentView === 'checkout') showView('customize');
+    else reset();
+  });
+
+  document.querySelectorAll('.kp-seg-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      setMode(b.getAttribute('data-mode'));
+    });
+  });
+
+  ['inputBuyerName', 'inputBuyerEmail', 'inputBuyerPhone',
+   'inputRecipientName', 'inputRecipientEmail'].forEach(function (id) {
+    $(id).addEventListener('input', validarForm);
+  });
+
+  $('btnContinue').addEventListener('click', irACheckout);
+  $('btnPay').addEventListener('click', pagar);
+  $('inputTerms').addEventListener('change', validarCheckout);
+  $('btnReset').addEventListener('click', reset);
+  $('btnErrorReset').addEventListener('click', reset);
+
+  // ═══════════════════════════════════════════════════
+  // ARRANQUE
+  // ═══════════════════════════════════════════════════
+  startReadyRetry();
+
+})();
+</script>
+</body>
+</html>
