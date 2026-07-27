@@ -1,0 +1,1040 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAMISUITE — Tarjeta PRIME</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════
+   KAMISUITE — Widget público Tarjeta PRIME v1.0.3
+
+   v1.0.3: FIX layout. Hasta v1.0.2 todo estaba apilado en filas con
+           container estrecho (620px) → mucho aire lateral en desktop
+           y la tarjeta huérfana sobre el precio. Cambios:
+             · --kr-maxw 620 → 780px (menos vuelo lateral).
+             · Grid 2 columnas (280px | 1fr) en la zona superior:
+               izquierda la tarjeta, derecha precio + beneficios.
+             · El bloque de precio pasa a tener su propio panel
+               (mismo aspecto que beneficios) en lugar de ir suelto.
+             · En móvil (<640px) el grid colapsa a una sola columna.
+             · El form sigue ancho completo debajo (es donde necesita
+               sitio para nombre/teléfono en dos columnas).
+   v1.0.2: Compactación + T&C checkbox.
+   v1.0.1: brandName en header.
+   v1.0.0: Versión inicial F2.2.
+   ═══════════════════════════════════════════════════ */
+
+:root {
+  --kr-bg:            oklch(98.6% 0.003 250);
+  --kr-surface:       oklch(100% 0 0);
+  --kr-surface-2:     oklch(97.4% 0.004 250);
+  --kr-inset:         oklch(96.2% 0.005 252);
+  --kr-line:          oklch(91% 0.006 252);
+  --kr-line-2:        oklch(84% 0.008 252);
+  --kr-ink:           oklch(30% 0.013 258);
+  --kr-ink-2:         oklch(48% 0.011 258);
+  --kr-ink-3:         oklch(64% 0.009 258);
+  --kr-accent:        oklch(40% 0.022 258);
+  --kr-accent-2:      oklch(33% 0.024 258);
+  --kr-accent-ink:    oklch(98.5% 0.003 250);
+  --kr-accent-soft:   oklch(93.5% 0.012 256);
+  --kr-accent-line:   oklch(62% 0.02 256);
+  --kr-focus:         oklch(58% 0.13 256);
+  --kr-danger:        oklch(55% 0.18 25);
+  --kr-danger-soft:   oklch(95% 0.035 28);
+  --kr-green-soft:    oklch(94% 0.05 152);
+  --kr-green:         oklch(53% 0.115 153);
+
+  --kr-font:          "Bai Jamjuree", ui-sans-serif, system-ui, sans-serif;
+  --kr-fs-eyebrow:    0.7rem;
+  --kr-fs-xs:         0.78rem;
+  --kr-fs-sm:         0.86rem;
+  --kr-fs-base:       0.94rem;
+  --kr-fs-md:         1.0rem;
+  --kr-fs-lg:         1.15rem;
+  --kr-fs-xl:         1.4rem;
+  --kr-w-medium:      500;
+  --kr-w-semi:        600;
+  --kr-w-bold:        700;
+
+  --kr-radius:        10px;
+  --kr-radius-sm:     max(4px, calc(var(--kr-radius) - 5px));
+  --kr-radius-lg:     calc(var(--kr-radius) + 4px);
+  --kr-radius-pill:   999px;
+  --kr-gap:           10px;
+  --kr-maxw:          780px;
+
+  --kr-shadow-1:      0 1px 2px oklch(40% 0.02 258 / .05), 0 1px 1px oklch(40% 0.02 258 / .04);
+  --kr-shadow-2:      0 14px 40px -18px oklch(40% 0.03 258 / .28), 0 2px 8px oklch(40% 0.02 258 / .06);
+  --kr-shadow-card:   0 18px 40px -20px oklch(40% 0.03 258 / .32);
+  --kr-dur:           170ms;
+  --kr-ease:          cubic-bezier(.2,.7,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  font-family: var(--kr-font);
+  background: var(--kr-bg);
+  color: var(--kr-ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Header (compacto) ── */
+.kp-header {
+  background: var(--kr-surface);
+  border-bottom: 1px solid var(--kr-line);
+}
+.kp-header-inner {
+  max-width: var(--kr-maxw);
+  margin: 0 auto;
+  padding: 16px;
+}
+.kp-header-eyebrow {
+  font-size: var(--kr-fs-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-medium);
+  margin-bottom: 2px;
+}
+.kp-header-title {
+  font-size: var(--kr-fs-lg);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  letter-spacing: -0.015em;
+}
+.kp-header-brand {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-medium);
+  margin-top: 2px;
+}
+.kp-header-brand:empty { display: none; }
+
+/* ── Content (maxw 780px, paddings reducidos) ── */
+.kp-content {
+  max-width: var(--kr-maxw);
+  margin: 0 auto;
+  padding: 16px;
+}
+
+/* ── Estados loading ── */
+.kp-loading {
+  text-align: center;
+  padding: 50px 24px;
+  color: var(--kr-ink-3);
+  font-size: var(--kr-fs-sm);
+}
+.kp-spinner {
+  width: 28px; height: 28px;
+  border: 3px solid var(--kr-line);
+  border-top-color: var(--kr-accent);
+  border-radius: 50%;
+  animation: kp-spin 0.8s linear infinite;
+  margin: 0 auto 12px;
+}
+@keyframes kp-spin { to { transform: rotate(360deg); } }
+
+/* ── Empty / Próximamente ── */
+.kp-empty {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius-lg);
+  padding: 36px 24px;
+  text-align: center;
+  color: var(--kr-ink-2);
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-empty h2 {
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  margin-bottom: 6px;
+}
+.kp-empty p {
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink-3);
+  max-width: 380px;
+  margin: 0 auto;
+  line-height: 1.55;
+}
+
+/* ── Grid superior: tarjeta + precio/beneficios en 2 columnas ── */
+.kp-top-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 18px;
+  margin-bottom: 14px;
+  align-items: start;
+}
+.kp-top-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Card visual (proporción 1.585:1) ── */
+.kp-card-art-wrap {
+  margin: 0;
+}
+.kp-card-art {
+  position: relative;
+  aspect-ratio: 1.585 / 1;
+  background: var(--kr-inset);
+  border-radius: calc(var(--kr-radius) + 2px);
+  overflow: hidden;
+  box-shadow: var(--kr-shadow-card);
+  border: 1px solid var(--kr-line);
+}
+.kp-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.kp-card-art-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--kr-ink-3);
+  font-size: var(--kr-fs-xs);
+  text-align: center;
+  padding: 12px;
+}
+
+/* ── Hero info (precio en panel propio, alineado a izquierda) ── */
+.kp-hero {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 14px 16px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-hero-price {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.kp-hero-price .amount {
+  font-size: 1.85rem;
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.kp-hero-price .currency {
+  font-size: 1.05rem;
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink-2);
+}
+.kp-hero-duration {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-medium);
+  margin-top: 2px;
+}
+
+/* Responsive: en móvil colapsa a una sola columna y la tarjeta se centra */
+@media (max-width: 640px) {
+  .kp-top-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .kp-card-art-wrap {
+    max-width: 320px;
+    margin: 0 auto;
+  }
+  .kp-hero { text-align: center; }
+  .kp-hero-price { justify-content: center; }
+}
+
+/* ── Benefits compacto ── */
+.kp-benefits {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 14px 16px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-benefits h3 {
+  font-size: var(--kr-fs-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--kr-ink-3);
+  font-weight: var(--kr-w-semi);
+  margin-bottom: 6px;
+}
+.kp-benefits p {
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink);
+  line-height: 1.55;
+  white-space: pre-line;
+}
+
+/* ── Already PRIME card ── */
+.kp-prime-active {
+  background: var(--kr-accent-soft);
+  border: 1px solid var(--kr-accent-line);
+  border-radius: var(--kr-radius);
+  padding: 14px 16px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-prime-active h3 {
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-accent-2);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kp-prime-active h3 svg { width: 16px; height: 16px; }
+.kp-prime-active .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink);
+  padding: 3px 0;
+}
+.kp-prime-active .row .label {
+  color: var(--kr-ink-2);
+  font-weight: var(--kr-w-medium);
+}
+.kp-prime-active .row .value {
+  font-weight: var(--kr-w-semi);
+}
+.kp-prime-active .code-box {
+  background: var(--kr-surface);
+  border: 1.5px dashed var(--kr-accent-line);
+  border-radius: var(--kr-radius);
+  padding: 8px;
+  margin-top: 8px;
+  text-align: center;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: 1.5px;
+}
+
+/* ── Form compacto ── */
+.kp-form {
+  background: var(--kr-surface);
+  border: 1px solid var(--kr-line);
+  border-radius: var(--kr-radius);
+  padding: 14px 16px 16px;
+  margin-bottom: 12px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-form h3 {
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  color: var(--kr-ink);
+  margin-bottom: 10px;
+}
+.kp-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+@media (max-width: 460px) {
+  .kp-form-row { grid-template-columns: 1fr; }
+}
+.kp-field { margin-bottom: 10px; }
+.kp-field:last-of-type { margin-bottom: 12px; }
+.kp-label {
+  display: block;
+  font-size: var(--kr-fs-xs);
+  font-weight: var(--kr-w-medium);
+  color: var(--kr-ink-2);
+  margin-bottom: 4px;
+}
+.kp-input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--kr-line-2);
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  font-size: var(--kr-fs-sm);
+  color: var(--kr-ink);
+  outline: none;
+  background: var(--kr-surface);
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-input:focus {
+  border-color: var(--kr-accent);
+  box-shadow: 0 0 0 3px var(--kr-accent-soft);
+}
+
+/* ── Checkbox T&C ── */
+.kp-terms {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.45;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--kr-inset);
+  border-radius: var(--kr-radius-sm);
+}
+.kp-terms input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  accent-color: var(--kr-accent);
+  cursor: pointer;
+}
+.kp-terms label {
+  cursor: pointer;
+  flex: 1;
+}
+.kp-terms a {
+  color: var(--kr-accent);
+  text-decoration: underline;
+  font-weight: var(--kr-w-medium);
+}
+.kp-terms a:hover { color: var(--kr-accent-2); }
+
+/* ── Buttons compactos ── */
+.kp-btn {
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: var(--kr-radius);
+  font-family: inherit;
+  font-size: var(--kr-fs-base);
+  font-weight: var(--kr-w-semi);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all var(--kr-dur) var(--kr-ease);
+}
+.kp-btn:active { transform: translateY(1px); }
+.kp-btn-primary {
+  background: var(--kr-accent);
+  color: var(--kr-accent-ink);
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-btn-primary:hover { background: var(--kr-accent-2); }
+.kp-btn-primary:disabled {
+  background: var(--kr-inset);
+  color: var(--kr-ink-3);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.kp-btn-ghost {
+  background: var(--kr-surface);
+  color: var(--kr-ink);
+  border: 1px solid var(--kr-line);
+}
+.kp-btn-ghost:hover {
+  background: var(--kr-surface-2);
+  border-color: var(--kr-line-2);
+}
+
+/* ── Notice ── */
+.kp-notice {
+  background: var(--kr-accent-soft);
+  border: 1px solid var(--kr-accent-line);
+  color: var(--kr-accent-2);
+  padding: 10px 12px;
+  border-radius: var(--kr-radius-sm);
+  font-size: var(--kr-fs-xs);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+/* ── Result (success / error) ── */
+.kp-result {
+  background: var(--kr-surface);
+  border-radius: var(--kr-radius-lg);
+  border: 1px solid var(--kr-line);
+  text-align: center;
+  padding: 32px 24px;
+  box-shadow: var(--kr-shadow-1);
+}
+.kp-result-icon {
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 14px;
+}
+.kp-result-icon.ok {
+  background: var(--kr-accent);
+  box-shadow: var(--kr-shadow-2);
+}
+.kp-result-icon.err {
+  background: var(--kr-danger);
+}
+.kp-result-icon svg { width: 24px; height: 24px; color: var(--kr-accent-ink); }
+.kp-result h3 {
+  font-size: var(--kr-fs-lg);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  margin-bottom: 8px;
+  letter-spacing: -0.01em;
+}
+.kp-result p {
+  color: var(--kr-ink-2);
+  font-size: var(--kr-fs-sm);
+  line-height: 1.55;
+  margin-bottom: 16px;
+}
+.kp-result p strong { color: var(--kr-ink); }
+.kp-code-box {
+  background: var(--kr-inset);
+  border: 1.5px dashed var(--kr-accent-line);
+  border-radius: var(--kr-radius);
+  padding: 10px;
+  margin: 0 0 16px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--kr-fs-md);
+  font-weight: var(--kr-w-bold);
+  color: var(--kr-ink);
+  letter-spacing: 2px;
+}
+
+.kp-hidden { display: none !important; }
+
+.kp-footer {
+  text-align: center;
+  padding: 8px 10px;
+  font-size: var(--kr-fs-eyebrow);
+  color: var(--kr-ink-3);
+}
+.kp-footer strong { color: var(--kr-ink-2); }
+</style>
+</head>
+<body>
+
+<div class="kp-header">
+  <div class="kp-header-inner">
+    <div class="kp-header-eyebrow">Membresía anual</div>
+    <div class="kp-header-title">Tarjeta PRIME</div>
+    <div class="kp-header-brand" id="headerBrand"></div>
+  </div>
+</div>
+
+<div class="kp-content">
+
+  <!-- LOADING -->
+  <div id="viewLoading" class="kp-loading">
+    <div class="kp-spinner"></div>
+    <p>Cargando...</p>
+  </div>
+
+  <!-- PRÓXIMAMENTE / NO DISPONIBLE -->
+  <div id="viewEmpty" class="kp-empty kp-hidden">
+    <h2>Próximamente</h2>
+    <p>La Tarjeta PRIME aún no está disponible en este salón. Vuelve a echar un vistazo más adelante.</p>
+  </div>
+
+  <!-- COMPRA -->
+  <div id="viewBuy" class="kp-hidden">
+
+    <!-- Grid superior: tarjeta (izq) + precio + beneficios (der) -->
+    <div class="kp-top-grid">
+
+      <!-- Columna izquierda: tarjeta visual proporción 1.585:1 -->
+      <div class="kp-card-art-wrap">
+        <div class="kp-card-art">
+          <img id="cardImage" src="" alt="Tarjeta PRIME" style="display:none">
+          <div id="cardPlaceholder" class="kp-card-art-placeholder">Imagen de la tarjeta</div>
+        </div>
+      </div>
+
+      <!-- Columna derecha: precio + beneficios (+ bloque already PRIME) -->
+      <div class="kp-top-right">
+
+        <div class="kp-hero">
+          <div class="kp-hero-price">
+            <span class="amount" id="heroPrice">—</span>
+            <span class="currency">€</span>
+          </div>
+          <div class="kp-hero-duration" id="heroDuration">por año</div>
+        </div>
+
+        <div class="kp-benefits" id="benefitsBlock">
+          <h3>¿Qué incluye?</h3>
+          <p id="benefitsText"></p>
+        </div>
+
+        <!-- Bloque si ya eres PRIME activo -->
+        <div id="primeActiveBlock" class="kp-prime-active kp-hidden">
+          <h3>
+            <svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            Ya eres PRIME
+          </h3>
+          <div class="row"><span class="label">Vence el</span><span class="value" id="primeActiveExpiration">—</span></div>
+          <div class="code-box" id="primeActiveCode">—</div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Formulario de compra (ancho completo abajo) -->
+    <div id="formBlock" class="kp-form">
+      <h3>Tus datos</h3>
+      <div class="kp-form-row">
+        <div class="kp-field">
+          <label class="kp-label">Nombre</label>
+          <input type="text" class="kp-input" id="inputBuyerName" placeholder="Nombre y apellidos">
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Teléfono</label>
+          <input type="tel" class="kp-input" id="inputBuyerPhone" placeholder="600 000 000">
+        </div>
+      </div>
+      <div class="kp-field">
+        <label class="kp-label">Email</label>
+        <input type="email" class="kp-input" id="inputBuyerEmail" placeholder="tu@email.com">
+      </div>
+
+      <div id="loginNotice" class="kp-notice kp-hidden">
+        Para finalizar la compra hace falta iniciar sesión. Te abriremos la ventana de acceso al pulsar Comprar.
+      </div>
+
+      <div class="kp-terms" id="termsBlock">
+        <input type="checkbox" id="inputTerms" checked>
+        <label for="inputTerms">
+          He leído y acepto los <a id="termsLink" href="#" target="_blank" rel="noopener">Términos y Condiciones</a>.
+        </label>
+      </div>
+
+      <button type="button" class="kp-btn kp-btn-primary" id="btnBuy" disabled>Hazte PRIME</button>
+    </div>
+
+  </div>
+
+  <!-- REDIRECTING -->
+  <div id="viewRedirecting" class="kp-loading kp-hidden">
+    <div class="kp-spinner"></div>
+    <p>Procesando el pago...</p>
+  </div>
+
+  <!-- SUCCESS -->
+  <div id="viewSuccess" class="kp-result kp-hidden">
+    <div class="kp-result-icon ok">
+      <svg fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+    </div>
+    <h3>¡Ya eres PRIME!</h3>
+    <p id="successText">Tu membresía está activa.</p>
+    <div class="kp-code-box" id="successCode"></div>
+    <button type="button" class="kp-btn kp-btn-ghost" id="btnSuccessClose">Cerrar</button>
+  </div>
+
+  <!-- ERROR -->
+  <div id="viewError" class="kp-result kp-hidden">
+    <div class="kp-result-icon err">
+      <svg fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <line x1="18" y1="6" x2="6" y2="18"/>
+        <line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </div>
+    <h3 id="errorTitle">Algo ha fallado</h3>
+    <p id="errorText">Inténtalo de nuevo en un momento</p>
+    <button type="button" class="kp-btn kp-btn-ghost" id="btnErrorReset">Volver</button>
+  </div>
+
+</div>
+
+<div class="kp-footer">Powered by <strong>KAMISUITE</strong></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ═══════════════════════════════════════════════════
+  // KR_SKINS — copia literal de kr-skins.js
+  // ═══════════════════════════════════════════════════
+  var KR_SKINS = {
+    niebla: { tokens: {} },
+    arena: {
+      tokens: {
+        "--kr-bg": "oklch(98.4% 0.009 78)",
+        "--kr-surface": "oklch(99.6% 0.006 80)",
+        "--kr-surface-2": "oklch(97% 0.012 78)",
+        "--kr-inset": "oklch(95.6% 0.014 76)",
+        "--kr-line": "oklch(90% 0.016 72)",
+        "--kr-line-2": "oklch(82% 0.02 68)",
+        "--kr-ink": "oklch(31% 0.018 60)",
+        "--kr-ink-2": "oklch(48% 0.016 60)",
+        "--kr-ink-3": "oklch(64% 0.014 62)",
+        "--kr-accent": "oklch(42% 0.028 64)",
+        "--kr-accent-2": "oklch(35% 0.03 62)",
+        "--kr-accent-soft": "oklch(93% 0.022 72)",
+        "--kr-accent-line": "oklch(64% 0.026 66)",
+        "--kr-focus": "oklch(58% 0.09 70)",
+        "--kr-radius": "13px"
+      }
+    },
+    grafito: {
+      tokens: {
+        "--kr-bg": "oklch(99% 0 0)",
+        "--kr-surface": "oklch(100% 0 0)",
+        "--kr-surface-2": "oklch(97% 0 0)",
+        "--kr-inset": "oklch(95.5% 0 0)",
+        "--kr-line": "oklch(89% 0 0)",
+        "--kr-line-2": "oklch(80% 0 0)",
+        "--kr-ink": "oklch(20% 0 0)",
+        "--kr-ink-2": "oklch(42% 0 0)",
+        "--kr-ink-3": "oklch(62% 0 0)",
+        "--kr-accent": "oklch(22% 0 0)",
+        "--kr-accent-2": "oklch(12% 0 0)",
+        "--kr-accent-ink": "oklch(99% 0 0)",
+        "--kr-accent-soft": "oklch(94.5% 0 0)",
+        "--kr-accent-line": "oklch(55% 0 0)",
+        "--kr-focus": "oklch(50% 0 0)",
+        "--kr-radius": "6px"
+      }
+    },
+    lumiere: {
+      tokens: {
+        "--kr-bg": "oklch(98.2% 0.012 88)",
+        "--kr-surface": "oklch(99.6% 0.008 88)",
+        "--kr-surface-2": "oklch(96.6% 0.016 86)",
+        "--kr-inset": "oklch(95% 0.02 84)",
+        "--kr-line": "oklch(90% 0.022 82)",
+        "--kr-line-2": "oklch(80% 0.03 80)",
+        "--kr-ink": "oklch(26% 0.012 70)",
+        "--kr-ink-2": "oklch(45% 0.014 72)",
+        "--kr-ink-3": "oklch(62% 0.018 76)",
+        "--kr-accent": "oklch(56% 0.085 78)",
+        "--kr-accent-2": "oklch(47% 0.08 74)",
+        "--kr-accent-ink": "oklch(99% 0.01 88)",
+        "--kr-accent-soft": "oklch(93% 0.035 84)",
+        "--kr-accent-line": "oklch(66% 0.075 80)",
+        "--kr-focus": "oklch(58% 0.085 78)",
+        "--kr-radius": "4px"
+      }
+    },
+    botanica: {
+      tokens: {
+        "--kr-bg": "oklch(98.6% 0.01 150)",
+        "--kr-surface": "oklch(99.8% 0.006 150)",
+        "--kr-surface-2": "oklch(97% 0.016 152)",
+        "--kr-inset": "oklch(95.4% 0.02 152)",
+        "--kr-line": "oklch(90% 0.022 154)",
+        "--kr-line-2": "oklch(81% 0.03 156)",
+        "--kr-ink": "oklch(28% 0.025 160)",
+        "--kr-ink-2": "oklch(46% 0.022 158)",
+        "--kr-ink-3": "oklch(63% 0.02 156)",
+        "--kr-accent": "oklch(48% 0.09 156)",
+        "--kr-accent-2": "oklch(40% 0.085 158)",
+        "--kr-accent-soft": "oklch(93% 0.03 152)",
+        "--kr-accent-line": "oklch(62% 0.08 156)",
+        "--kr-focus": "oklch(56% 0.1 156)",
+        "--kr-radius": "16px"
+      }
+    },
+    aurora: {
+      tokens: {
+        "--kr-bg": "oklch(98.7% 0.006 320)",
+        "--kr-surface": "oklch(100% 0 0)",
+        "--kr-surface-2": "oklch(97.4% 0.01 322)",
+        "--kr-inset": "oklch(96% 0.014 326)",
+        "--kr-line": "oklch(91% 0.016 330)",
+        "--kr-line-2": "oklch(82% 0.024 336)",
+        "--kr-ink": "oklch(27% 0.03 326)",
+        "--kr-ink-2": "oklch(46% 0.026 330)",
+        "--kr-ink-3": "oklch(64% 0.022 334)",
+        "--kr-accent": "oklch(56% 0.16 350)",
+        "--kr-accent-2": "oklch(48% 0.17 352)",
+        "--kr-accent-soft": "oklch(94% 0.04 348)",
+        "--kr-accent-line": "oklch(66% 0.14 350)",
+        "--kr-focus": "oklch(58% 0.16 350)",
+        "--kr-radius": "12px",
+        "--kr-font": '"Instrument Sans", ui-sans-serif, system-ui, sans-serif'
+      }
+    }
+  };
+
+  function applySkin(name) {
+    var skin = KR_SKINS[name];
+    if (!skin) return;
+    var all = {};
+    Object.keys(KR_SKINS).forEach(function (k) {
+      Object.keys(KR_SKINS[k].tokens || {}).forEach(function (t) { all[t] = true; });
+    });
+    var root = document.documentElement;
+    Object.keys(all).forEach(function (t) { root.style.removeProperty(t); });
+    Object.keys(skin.tokens).forEach(function (t) {
+      root.style.setProperty(t, skin.tokens[t]);
+    });
+    root.dataset.skin = name;
+  }
+
+  // ═══════════════════════════════════════════════════
+  // ESTADO
+  // ═══════════════════════════════════════════════════
+  var state = {
+    product: null,
+    disponible: false,
+    member: { isMember: false, hasPrime: false, membership: null },
+    termsUrl: '',
+    bootstrapped: false,
+    currentView: 'loading'
+  };
+
+  var views = ['Loading', 'Empty', 'Buy', 'Redirecting', 'Success', 'Error'];
+
+  // ═══════════════════════════════════════════════════
+  // UTILIDADES
+  // ═══════════════════════════════════════════════════
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function fmtDate(d) {
+    if (!d) return '—';
+    try {
+      var dt = new Date(d);
+      if (isNaN(dt.getTime())) return '—';
+      return dt.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch (e) { return '—'; }
+  }
+  function emailValido(e) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
+  }
+  function showView(name) {
+    state.currentView = name;
+    views.forEach(function (v) {
+      var el = $('view' + v);
+      if (el) el.classList.add('kp-hidden');
+    });
+    var target = $('view' + name.charAt(0).toUpperCase() + name.slice(1));
+    if (target) target.classList.remove('kp-hidden');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // POST MESSAGE BRIDGE
+  // ═══════════════════════════════════════════════════
+  function send(type, payload) {
+    try {
+      window.parent.postMessage({ type: type, payload: payload || {} }, '*');
+    } catch (e) {
+      console.error('[TarjetaPrime] postMessage error:', e);
+    }
+  }
+
+  var readyTimer = null;
+  function startReadyRetry() {
+    var fired = 0;
+    function ping() {
+      if (state.bootstrapped) {
+        if (readyTimer) clearInterval(readyTimer);
+        return;
+      }
+      fired++;
+      send('ready');
+      if (fired > 20) {
+        if (readyTimer) clearInterval(readyTimer);
+        showError('No se ha podido cargar el producto. Recarga la página.');
+      }
+    }
+    ping();
+    readyTimer = setInterval(ping, 700);
+  }
+
+  window.addEventListener('message', function (event) {
+    var msg = event.data;
+    if (!msg || typeof msg !== 'object' || !msg.type) return;
+    handleMessage(msg);
+  });
+
+  function handleMessage(msg) {
+    var p = msg.payload || {};
+    switch (msg.type) {
+
+      case 'bootstrap':
+        if (p.skin) applySkin(p.skin);
+        if (p.brandName) $('headerBrand').textContent = p.brandName;
+        state.termsUrl = p.termsConditionsUrl || '';
+        if (state.termsUrl) {
+          $('termsLink').href = state.termsUrl;
+          $('termsBlock').style.display = '';
+        } else {
+          // Si el salón no tiene URL configurada, ocultamos el bloque
+          // para no enseñar un link roto. La compra sigue funcionando.
+          $('termsBlock').style.display = 'none';
+        }
+        state.product = p.product || null;
+        state.disponible = !!p.disponible;
+        state.member = p.member || { isMember: false, hasPrime: false, membership: null };
+        state.bootstrapped = true;
+        if (!state.disponible || !state.product) {
+          showView('empty');
+        } else {
+          renderBuy();
+          showView('buy');
+        }
+        break;
+
+      case 'loginRequired':
+        $('loginNotice').classList.remove('kp-hidden');
+        showView('buy');
+        break;
+
+      case 'alreadyPrime':
+        // Mostrar bloque de "ya eres PRIME" + ocultar formulario.
+        var m = p.membership || {};
+        state.member.hasPrime = true;
+        state.member.membership = m;
+        renderBuy();
+        showView('buy');
+        break;
+
+      case 'purchaseSuccess':
+        mostrarSuccess(p);
+        break;
+
+      case 'purchaseCancelled':
+        showView('buy');
+        break;
+
+      case 'purchaseError':
+        showError(msg.message || 'No se pudo completar la compra');
+        break;
+
+      case 'error':
+        showError(msg.message || 'Error');
+        break;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  // RENDER VISTA DE COMPRA
+  // ═══════════════════════════════════════════════════
+  function renderBuy() {
+    var p = state.product;
+    if (!p) return;
+
+    // Imagen tarjeta.
+    var img = $('cardImage');
+    var ph = $('cardPlaceholder');
+    if (p.imagePublicUrl) {
+      img.src = p.imagePublicUrl;
+      img.style.display = 'block';
+      ph.style.display = 'none';
+    } else {
+      img.style.display = 'none';
+      ph.style.display = 'flex';
+    }
+
+    // Precio.
+    $('heroPrice').textContent = Number(p.annualPrice || 0).toFixed(2).replace('.', ',');
+    var months = p.durationMonths || 12;
+    $('heroDuration').textContent = months === 12 ? 'por año' : 'cada ' + months + ' meses';
+
+    // Beneficios.
+    if (p.benefits) {
+      $('benefitsBlock').classList.remove('kp-hidden');
+      $('benefitsText').textContent = p.benefits;
+    } else {
+      $('benefitsBlock').classList.add('kp-hidden');
+    }
+
+    // Si ya es PRIME activo, mostrar bloque y ocultar formulario.
+    if (state.member.hasPrime && state.member.membership) {
+      var m = state.member.membership;
+      $('primeActiveBlock').classList.remove('kp-hidden');
+      $('primeActiveExpiration').textContent = fmtDate(m.expirationDate);
+      $('primeActiveCode').textContent = m.code || '—';
+      $('formBlock').classList.add('kp-hidden');
+    } else {
+      $('primeActiveBlock').classList.add('kp-hidden');
+      $('formBlock').classList.remove('kp-hidden');
+      $('btnBuy').textContent = 'Hazte PRIME · ' + Number(p.annualPrice || 0).toFixed(2).replace('.', ',') + ' €';
+      validarForm();
+    }
+  }
+
+  function validarForm() {
+    var buyerName = $('inputBuyerName').value.trim();
+    var buyerEmail = $('inputBuyerEmail').value.trim();
+    var ok = !!buyerName && emailValido(buyerEmail);
+    // Si el bloque de T&C está visible, el checkbox debe estar marcado.
+    var termsVisible = $('termsBlock').style.display !== 'none';
+    if (termsVisible && !$('inputTerms').checked) ok = false;
+    $('btnBuy').disabled = !ok;
+  }
+
+  function comprar() {
+    var payload = {
+      buyerName: $('inputBuyerName').value.trim(),
+      buyerEmail: $('inputBuyerEmail').value.trim(),
+      buyerPhone: $('inputBuyerPhone').value.trim()
+    };
+    showView('redirecting');
+    send('purchase', payload);
+  }
+
+  function mostrarSuccess(p) {
+    var code = p && p.code ? String(p.code) : '—';
+    var expFmt = p && p.expirationDate ? fmtDate(p.expirationDate) : '';
+    $('successCode').textContent = code;
+    $('successText').innerHTML = 'Tu membresía está activa'
+      + (expFmt ? ' hasta el <strong>' + esc(expFmt) + '</strong>' : '')
+      + '. Disfruta de tus ventajas en cada visita.';
+    showView('success');
+  }
+
+  function showError(msg) {
+    $('errorText').textContent = msg || 'Inténtalo de nuevo en un momento';
+    showView('error');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // EVENT LISTENERS
+  // ═══════════════════════════════════════════════════
+  ['inputBuyerName', 'inputBuyerEmail', 'inputBuyerPhone'].forEach(function (id) {
+    $(id).addEventListener('input', validarForm);
+  });
+  $('inputTerms').addEventListener('change', validarForm);
+  $('btnBuy').addEventListener('click', comprar);
+  $('btnSuccessClose').addEventListener('click', function () {
+    // Tras éxito, recargamos el bootstrap (ahora el miembro ya es PRIME)
+    state.bootstrapped = false;
+    showView('loading');
+    send('ready');
+    startReadyRetry();
+  });
+  $('btnErrorReset').addEventListener('click', function () {
+    showView('buy');
+  });
+
+  // ═══════════════════════════════════════════════════
+  // ARRANQUE
+  // ═══════════════════════════════════════════════════
+  startReadyRetry();
+
+})();
+</script>
+</body>
+</html>
