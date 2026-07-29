@@ -1,9 +1,35 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.38
-// FECHA: 19 de julio de 2026
+// VERSION: 1.0.41
+// FECHA: 29 de julio de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.41: 🧹 FIX quitarItemReserva — al quitar un servicio, quitar también su
+//          fase OCUPANTE de la cascada. Antes solo se borraba del
+//          serviciosDetail (desaparecía del cobro) pero la fase seguía pintada
+//          y ocupando el hueco en calendario y motor de disponibilidad
+//          (regresión respecto a versiones anteriores). Ahora se elimina la
+//          fase ocupante (ocupa:true) cuya label coincide con el item,
+//          alineada por orden de aparición, dejando HUECO (no se desplaza el
+//          resto → libre para rellenar). PROCESO (ocupa:false) se deja
+//          (inocuo). Extras/productos sin fase: solo serviciosDetail, como
+//          antes. Recalcula fechaReserva/duracionTotal.
+//
+// v1.0.40: 📏 FIX redimensionarFase — NO desplazar otras fases. Revert del
+//          desplazamiento introducido en v1.0.39: redimensionar una fase
+//          cambia ÚNICAMENTE su dur/end. Las demás fases NO se tocan; si al
+//          alargar se solapa con la siguiente, se solapa (mismo criterio que
+//          moverFase; el operador decide). Se sigue recalculando
+//          fechaReserva/duracionTotal (agregados de la propia cita).
+//
+// v1.0.39: 📏 NEW redimensionarFase({ reservaId, faseIndex, nuevaDur }).
+//          Ajusta la DURACIÓN de cualquier fase ocupante de una cascada (no
+//          solo la última). Calcado de moverFase: rechaza PAGADO, fija
+//          dur/end de la fase indicada, recalcula fechaReserva/duracionTotal.
+//          Usado por Recepción PRO (asa de resize, ahora en todas las fases).
+//          [NOTA: la build desplegada de v1.0.39 desplazaba las fases
+//          posteriores; corregido en v1.0.40.]
 //
 // v1.0.38: 🏷️ PERSISTIR CATEGORÍA (group) EN CADA RESERVA.
 //          KamisuiteReservations solo grababa `family` (naturaleza técnica:
@@ -854,7 +880,7 @@ import { services } from 'wix-bookings.v2';
 import { contacts } from 'wix-crm-backend';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.38';
+const VERSION = '1.0.41';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -3007,14 +3033,69 @@ export const quitarItemReserva = webMethod(
       // Calcular precio del item eliminado: formato "label|price|cant"
       const itemFuera = items[idx];
       const partes = itemFuera.split('|');
+      const itemLabel = String(partes[0] || '').trim();
       const precioUnit = Number(partes[1]) || 0;
       const cant = Number(partes[2]) || 1;
       const subtotal = Math.round(precioUnit * cant * 100) / 100;
 
-      // Eliminar y recomponer
+      // v1.0.41 — contar cuántos items con la MISMA etiqueta hay ANTES del que
+      // quitamos, para alinear duplicados con su fase correspondiente.
+      let occ = 0;
+      for (let k = 0; k < idx; k++) {
+        if (String((items[k] || '').split('|')[0] || '').trim() === itemLabel) occ++;
+      }
+
+      // Eliminar del serviciosDetail y recomponer precio
       items.splice(idx, 1);
       registro.serviciosDetail = items.join(';;');
       registro.precioTotal = Math.max(0, (Number(registro.precioTotal) || 0) - subtotal);
+
+      // v1.0.41 — BUGFIX: quitar también la fase OCUPANTE correspondiente del
+      // array `fases`. Antes solo se quitaba del serviciosDetail (desaparecía
+      // del cobro) pero la fase seguía pintada y ocupando el hueco en el
+      // calendario y en el motor de disponibilidad. Se elimina la fase ocupante
+      // (ocupa:true) cuya label coincide con el item, alineada por orden de
+      // aparición. Se DEJA HUECO (no se desplaza el resto → queda libre para
+      // rellenar con otro servicio). Las fases PROCESO (ocupa:false) no pintan
+      // ni ocupan, así que se dejan (inocuas). Si no hay fase ocupante que
+      // coincida (p.ej. extras o productos añadidos a mano), solo se toca el
+      // serviciosDetail (comportamiento previo intacto).
+      try {
+        const fasesArr = jsonIn(registro.fases, 'items');
+        if (Array.isArray(fasesArr) && fasesArr.length && itemLabel) {
+          let seen = 0, removeAt = -1;
+          for (let i = 0; i < fasesArr.length; i++) {
+            const f = fasesArr[i];
+            if (f && f.ocupa && String(f.label || '').trim() === itemLabel) {
+              if (seen === occ) { removeAt = i; break; }
+              seen++;
+            }
+          }
+          if (removeAt >= 0) {
+            fasesArr.splice(removeAt, 1);
+            registro.fases = { items: fasesArr };
+            // Recalcular fechaReserva/duracionTotal con las ocupantes restantes.
+            const ocupantes = fasesArr.filter(f => f && f.ocupa);
+            if (ocupantes.length) {
+              let minStart = Infinity, maxEnd = -Infinity;
+              for (const f of ocupantes) {
+                if (f.start) { const s = new Date(f.start).getTime(); if (s < minStart) minStart = s; }
+                if (f.end)   { const e = new Date(f.end).getTime();   if (e > maxEnd)   maxEnd = e; }
+              }
+              if (isFinite(minStart) && isFinite(maxEnd)) {
+                registro.fechaReserva = new Date(minStart);
+                registro.duracionTotal = Math.max(1, Math.round((maxEnd - minStart) / 60000));
+              }
+            }
+            console.log(`${TAG} 🧹 Fase ocupante "${itemLabel}" (fase idx ${removeAt}) quitada de la cascada; hueco liberado.`);
+          } else {
+            console.log(`${TAG} ℹ️ "${itemLabel}" sin fase ocupante coincidente (extra/producto o ya ausente); solo serviciosDetail.`);
+          }
+        }
+      } catch (eFases) {
+        console.error(`${TAG} ⚠️ quitarItem: no se pudo actualizar fases:`, eFases.message);
+        // No abortamos: al menos serviciosDetail/precio quedan corregidos.
+      }
 
       await wixData.update(CMS_RESERVAS, registro, { suppressAuth: true });
       console.log(`${TAG} ✅ Item quitado: "${itemFuera}" (-${subtotal}€). Resto: ${items.length} items, precioTotal=${registro.precioTotal}€`);
@@ -3129,6 +3210,96 @@ export const moverFase = webMethod(
       };
     } catch (e) {
       console.error(`${TAG} ❌ moverFase:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
+
+// =====================================================
+// 8.b REDIMENSIONAR FASE — ajustar la duración de una fase
+// =====================================================
+//   Cambia ÚNICAMENTE la DURACIÓN (dur/end) de la fase `faseIndex`. NO
+//   desplaza ni toca ninguna otra fase: si al alargar se solapa con la
+//   siguiente, se solapa (mismo criterio que moverFase; el operador decide).
+//   - PROCESO (ocupa=false) no se redimensiona (no tiene asa en el widget).
+//   - PAGADO se rechaza (igual que moverFase).
+//   - Recalcula fechaReserva = min(start) y duracionTotal = max(end) − min(start)
+//     de las ocupantes (agregados de la propia cita).
+
+export const redimensionarFase = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId, faseIndex, nuevaDur }) => {
+    try {
+      console.log(`${TAG} 📏 redimensionarFase reserva=${reservaId} idx=${faseIndex} nuevaDur=${nuevaDur}`);
+      if (!reservaId) return { ok: false, error: 'Falta reservaId' };
+      if (faseIndex == null || isNaN(Number(faseIndex))) return { ok: false, error: 'faseIndex inválido' };
+      const nueva = Math.max(1, Math.round(Number(nuevaDur) || 0));
+      if (!nueva) return { ok: false, error: 'nuevaDur inválida' };
+
+      let registro;
+      try {
+        registro = await wixData.get(CMS_RESERVAS, reservaId, { suppressAuth: true });
+      } catch (e) {
+        return { ok: false, error: `Reserva no encontrada: ${reservaId}` };
+      }
+      if (!registro) return { ok: false, error: `Reserva no encontrada: ${reservaId}` };
+      if (registro.status === 'PAGADO') return { ok: false, error: 'No se puede redimensionar una cita ya cobrada' };
+
+      const fasesArr = jsonIn(registro.fases, 'items');
+      const idx = Number(faseIndex);
+      if (idx < 0 || idx >= fasesArr.length) return { ok: false, error: `faseIndex fuera de rango (0..${fasesArr.length - 1})` };
+
+      const faseActual = fasesArr[idx];
+      if (!faseActual) return { ok: false, error: 'Fase no encontrada' };
+      if (faseActual.ocupa === false) return { ok: false, error: 'Las fases de proceso no se redimensionan' };
+      if (!faseActual.start) return { ok: false, error: 'La fase no tiene inicio' };
+
+      // Duración actual de la fase
+      let durOld = Number(faseActual.dur) || 0;
+      if (!durOld && faseActual.end) {
+        durOld = Math.max(1, Math.round((new Date(faseActual.end).getTime() - new Date(faseActual.start).getTime()) / 60000));
+      }
+      if (!durOld) durOld = 30;
+
+      const startMs = new Date(faseActual.start).getTime();
+      const newEndMs = startMs + nueva * 60000;
+
+      // v1.0.40 — SOLO cambia dur/end de ESTA fase. NO se desplaza ni se toca
+      // ninguna otra fase. Si al alargar se solapa con la siguiente, se
+      // solapa: el código no reordena la cita (mismo criterio que moverFase;
+      // el operador es el responsable).
+      const fasesNew = fasesArr.map((f, i) => {
+        if (i === idx) return { ...f, dur: nueva, end: new Date(newEndMs).toISOString() };
+        return { ...f };
+      });
+
+      // Recalcular fechaReserva = min(start) y duracionTotal = max(end) − min(start) de ocupantes
+      const ocupantes = fasesNew.filter(f => f && f.ocupa);
+      let minStart = Infinity, maxEnd = -Infinity;
+      for (const f of ocupantes) {
+        if (f.start) { const s = new Date(f.start).getTime(); if (s < minStart) minStart = s; }
+        if (f.end)   { const e = new Date(f.end).getTime();   if (e > maxEnd)   maxEnd = e; }
+      }
+      if (!isFinite(minStart) || !isFinite(maxEnd)) {
+        minStart = startMs; maxEnd = newEndMs;
+      }
+
+      registro.fases = { items: fasesNew };
+      registro.fechaReserva = new Date(minStart);
+      registro.duracionTotal = Math.max(1, Math.round((maxEnd - minStart) / 60000));
+
+      await wixData.update(CMS_RESERVAS, registro, { suppressAuth: true });
+      console.log(`${TAG} ✅ Fase redimensionada (sin tocar otras): idx=${idx} ${durOld}→${nueva}min | duracionTotal=${registro.duracionTotal}min`);
+      return {
+        ok: true,
+        reservaId,
+        faseIndex: idx,
+        nuevaDur: nueva,
+        fechaReserva: registro.fechaReserva.toISOString(),
+        duracionTotal: registro.duracionTotal
+      };
+    } catch (e) {
+      console.error(`${TAG} ❌ redimensionarFase:`, e.message);
       return { ok: false, error: e.message };
     }
   }
