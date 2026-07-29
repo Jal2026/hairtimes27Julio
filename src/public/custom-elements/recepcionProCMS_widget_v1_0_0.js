@@ -2,7 +2,7 @@
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
  * VERSION: 1.1.68  ·  FIX: el plegado de 1 min se ancla a la fase PRINCIPAL
- * FECHA: 30 de julio de 2026
+ * FECHA: 30 de julio de 2026 
  * ---------------------------------------------------------------------
  * v1.1.68 (30 jul 2026) — FIX del plegado de servicios de 1 min (widget-only).
  *   El plegado (v1.1.67) se anclaba a la PRIMERA fase ocupante de la cascada,
