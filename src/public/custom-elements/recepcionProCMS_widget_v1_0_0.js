@@ -1,8 +1,83 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.63  ·  Copiar informe del día por bloque
- * FECHA: 6 de julio de 2026
+ * VERSION: 1.1.67  ·  Servicios de 1 min plegados en la cartela del principal
+ * FECHA: 29 de julio de 2026
+ * ---------------------------------------------------------------------
+ * v1.1.67 (29 jul 2026) — Servicios de 1 min legibles (widget-only). Las
+ *   fases ocupantes de ≤1 min (marcadores tipo tamaño de pelo) ya NO se
+ *   pintan como bloque propio ilegible: su leyenda se pliega como una línea
+ *   nueva en la cartela de la fase PRINCIPAL, entre el cliente y el rango, y
+ *   su minuto se suma al rango mostrado (p.ej. 10:15-10:44 → 10:15-10:45).
+ *   Solo cambia lo VISUAL: la fase sigue intacta en datos, ledger y CRM
+ *   (serviciosDetail, cobro, ficha). Se pliega en `_apptHTML` (clasifica
+ *   tiny vs normal, ancla en firstIdxGlobal) y se pinta en `_apptBloqueHTML`
+ *   (nueva línea .ks-appt-fold + rango extendido `rangoEndMin`). Caso borde
+ *   cubierto: si TODAS las fases son de 1 min (servicio suelto), se pinta
+ *   normal (no hay principal donde plegar). El tooltip de v1.1.66 se
+ *   mantiene (ayuda con otros bloques cortos), pero ya no hace falta para
+ *   los marcadores de tamaño.
+ * ---------------------------------------------------------------------
+ * v1.1.66 (29 jul 2026) — Dos arreglos (widget-only):
+ *   A) FIX "Catálogo Cargando…" colgado. Cuando Wix desconecta+reconecta el
+ *      custom element (2º connectedCallback), _renderShell repintaba el
+ *      placeholder estático "Cargando catálogo…" pero el catálogo ya había
+ *      llegado (_loading=false) y el retry no re-disparaba → el panel se
+ *      quedaba colgado hasta tocar un filtro. Ahora, tras _renderShell, se
+ *      repintan panel y agenda con lo que ya haya en memoria (en el 1er
+ *      montaje es inocuo: muestra "Cargando…" normal / no-op sin staff).
+ *   B) Tooltip nativo en el bloque de cita (atributo title con
+ *      "servicio · hora · cliente"). Permite leer la cartela de servicios
+ *      muy cortos (p.ej. variantes de tamaño de pelo de 1 min, que ni a
+ *      máximo zoom caben en altura) sin falsear la duración ni desplazar
+ *      nada.
+ * ---------------------------------------------------------------------
+ * v1.1.65 (29 jul 2026) — Extender cualquier servicio de la cascada, no
+ *   solo el último. El asa de resize (borde inferior del bloque) ahora
+ *   aparece en TODAS las fases ocupantes (antes solo en la última). Al
+ *   arrastrarla se ajusta la DURACIÓN de esa fase; el backend nuevo
+ *   redimensionarFase (recepcionProLogic v1.0.39, calcado de moverFase)
+ *   desplaza las fases posteriores para mantener la secuencia. Envía el
+ *   mensaje nuevo 'redimensionar-fase' { reservaId, faseIndex, nuevaDur }
+ *   (page code v1.0.30, handler handleRedimensionarFase). El preview
+ *   muestra el bloque creciendo con su nueva duración y horario.
+ *   · COMPAT: el camino legacy de extensión (extensionMin, buffer rayado
+ *     tras la última fase) se conserva íntegro para reservas SIN fases
+ *     (faseIndex = -1): esas siguen usando 'extender-reserva'. La rama se
+ *     decide en _bindResizeExt por data-fase-idx. El render legacy
+ *     (_extensionHTML) y quitarExtension no se tocan.
+ *   · Nueva respuesta 'fase-redimensionada' en _handleResponse. Gates
+ *     intactos: PAGADO no muestra asa (no redimensionable).
+ * ---------------------------------------------------------------------
+ * v1.1.64 (29 jul 2026) — Ajustes de agenda operativa (widget-only, CERO
+ *   backend / CERO page code / CERO URL / CERO IDs de colección):
+ *   1) GRID 15': default de _settings.interval 30 → 15 (3 inits + radio
+ *      checked). El intervalo ya se soportaba; ahora es el baseline. Los
+ *      ajustes guardados (CalendarViewSettings) mandan sobre el default.
+ *   2) LÍNEAS +DEFINIDAS: solo las variables del grid --ks-line2
+ *      (0.948→0.905) y --ks-line (0.905→0.865). Nada más se toca; el resto
+ *      del CSS hereda estas dos.
+ *   3) POPUP CONFIRMAR HORA antes de pintar: el click en columna (con
+ *      servicio armado) ya no pinta directo; abre _openHoraPicker precargado
+ *      con la hora del click. Selector grande HH:MM (1 min) + ±5/±15 +
+ *      Confirmar → recién ahí _colocarReserva(staffId, hhmm).
+ *   4) ZOOM: slider #sliderSpacing 28–84 → 24–160 (más rango de ampliado).
+ *      Las citas no se descuadran: el render usa ppm = rowPx/60 dinámico.
+ *   5) MOVER EN VIVO: el ghost del drag de fase muestra la hora destino
+ *      HH:MM en vivo; snap del movimiento desacoplado del grid a 5 min.
+ *   6) CARD CON TIEMPOS: cada línea de servicio del modal de cita muestra su
+ *      duración (minutos ocupados de las fases ocupantes; fallback
+ *      duracionTotal si es 1 sola línea). Aditivo, no toca totales.
+ *   7) SERVICIOS 1 MIN: "a medida" min 5→1 / step 5→1 / validación <5→<1;
+ *      suelo visual del bloque 26→10px (y extensión 22→10). La duración
+ *      guardada ya era exacta; solo se elimina el condicionamiento visual.
+ *   8) REAJUSTAR FASE: icono 🕑 (aparece al pasar el ratón sobre el bloque,
+ *      solo en fases movibles = no pagadas) abre el mismo _openHoraPicker en
+ *      modo 'fase' → envía el 'mover-fase' existente (mismo reservaId,
+ *      faseIndex, MISMA fecha, MISMO staff). Reutiliza backend moverFase.
+ *   Nuevo método _openHoraPicker (modos 'colocar'/'fase'). Nuevas clases CSS
+ *   .ks-horapick*, .ks-appt-timeadj, .ks-item-dur, .g-time. Gates existentes
+ *   respetados (PAGADO/_puede) exactamente como el drag/colocar previos.
  * ---------------------------------------------------------------------
  * v1.1.63 (6 jul 2026):
  *   · COPIAR el informe del día al portapapeles, un botón por bloque:
@@ -1098,7 +1173,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.63]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.67]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1184,8 +1259,8 @@
   --ks-ink:    oklch(0.29 0.012 265);
   --ks-ink2:   oklch(0.47 0.012 265);
   --ks-ink3:   oklch(0.63 0.010 265);
-  --ks-line:   oklch(0.905 0.004 265);
-  --ks-line2:  oklch(0.948 0.004 265);
+  --ks-line:   oklch(0.865 0.005 265);
+  --ks-line2:  oklch(0.905 0.005 265);
   --ks-accent: #c9a44a;
   --ks-accent-ink: oklch(0.46 0.072 80);
   --ks-accent-soft: oklch(0.96 0.03 86);
@@ -1483,6 +1558,7 @@ button { font-family: inherit; cursor: pointer; }
 .ks-appt-time { font-size: 9.5px; font-weight: 500; opacity: .82; font-variant-numeric: tabular-nums; flex: none; }
 .ks-appt-client { font-size: 11px; font-weight: 600; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ks-appt-svc { font-size: 10px; font-weight: 500; opacity: .92; line-height: 1.2; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.ks-appt-fold { font-size: 10px; font-weight: 500; opacity: .85; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ks-appt-rango { font-size: 10px; font-weight: 500; opacity: .75; margin-top: 1px; }
 /* v1.1.14 — resize handle (asa en el borde inferior del último bloque) */
 .ks-appt-resize { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%);
@@ -1783,6 +1859,27 @@ button { font-family: inherit; cursor: pointer; }
   max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ks-fase-ghost .g-cli { font-weight: 700; }
 .ks-fase-ghost .g-svc { font-weight: 500; opacity: .85; margin-top: 2px; }
+/* v1.1.64 — hora destino en vivo dentro del ghost del drag de fase */
+.ks-fase-ghost .g-time { font-weight: 800; margin-top: 3px; font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+/* v1.1.64 — icono ajustar hora de inicio de fase (aparece al pasar el ratón sobre el bloque) */
+.ks-appt-timeadj { position: absolute; top: 4px; right: 23px; z-index: 4; width: 16px; height: 16px; border-radius: 5px; display: grid; place-items: center; font-size: 10px; line-height: 1; background: rgba(0,0,0,.30); color: #fff; cursor: pointer; opacity: 0; transition: opacity .12s, background .12s; }
+.ks-appt:hover .ks-appt-timeadj { opacity: 1; }
+.ks-appt-timeadj:hover { background: rgba(0,0,0,.6); }
+/* v1.1.64 — duración por servicio en la card de la cita */
+.ks-item-dur { font-size: 10.5px; color: var(--ks-ink3); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* v1.1.64 — selector de hora (confirmar antes de pintar / reajustar fase) */
+.ks-horapick { position: relative; z-index: 1; width: min(340px, 92vw); background: #fff; border-radius: 16px; box-shadow: var(--ks-shadow-lg); padding: 18px 20px 16px; }
+.ks-horapick-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.ks-horapick-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: var(--ks-accent-ink); }
+.ks-horapick-title { margin: 2px 0 0; font-size: 17px; font-weight: 700; color: var(--ks-ink); }
+.ks-horapick-sub { font-size: 12px; color: var(--ks-ink2); margin-top: 3px; }
+.ks-horapick-display { text-align: center; font-size: 46px; font-weight: 800; letter-spacing: 1px; color: var(--ks-ink); font-variant-numeric: tabular-nums; margin: 10px 0 14px; }
+.ks-horapick-steppers { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+.ks-horapick-step { border: 1px solid var(--ks-line); background: var(--ks-paper2); color: var(--ks-ink2); border-radius: 9px; padding: 8px 10px; font-size: 13px; font-weight: 700; min-width: 46px; }
+.ks-horapick-step:hover { border-color: var(--ks-accent); color: var(--ks-accent-ink); }
+.ks-horapick-input { font-family: inherit; font-size: 20px; font-weight: 700; text-align: center; border: 1px solid var(--ks-line); border-radius: 10px; padding: 6px 8px; color: var(--ks-ink); width: 116px; font-variant-numeric: tabular-nums; }
+.ks-horapick-foot { display: flex; gap: 10px; }
+.ks-horapick-foot .ks-detail-cancel, .ks-horapick-foot .ks-detail-add { flex: 1; }
 .ks-blockpreview { position: absolute; left: 4px; right: 4px; z-index: 7; pointer-events: none; white-space: nowrap;
   background: repeating-linear-gradient(135deg, oklch(0.45 0.03 260 / .18) 0 7px, oklch(0.45 0.03 260 / .06) 7px 14px);
   border: 1.5px dashed var(--ks-ink3); border-radius: 7px;
@@ -1980,7 +2077,7 @@ button { font-family: inherit; cursor: pointer; }
       // v1.1.40 — this._customBlocks ELIMINADO. Los bloqueos persisten en
       // KamisuiteReservations con family='BLOQUEO' y se leen vía this._reservas.
       // v1.1.8 — settings + datepicker + cierre
-      this._settings = { rowHeight: 56, titleMode: 'servicio', interval: 30, staffConfig: {} };
+      this._settings = { rowHeight: 56, titleMode: 'servicio', interval: 15, staffConfig: {} };
       this._settingsLoaded = false;
       this._saveSettingsTimer = null;
       this._dpYear = null;
@@ -2028,6 +2125,19 @@ button { font-family: inherit; cursor: pointer; }
       }
       this._renderShell();
       this._updateSteps();
+      // v1.1.66 — FIX "Catálogo Cargando" colgado. Si Wix desconecta+reconecta
+      // el custom element (2º connectedCallback, habitual en Wix durante la
+      // hidratación/relayout), _renderShell repinta el placeholder estático
+      // "Cargando catálogo…", pero el catálogo YA llegó (_loading=false,
+      // _servicios poblado) y el retry de 'ready' no re-dispara porque
+      // _catalogoRecibido ya es true → el panel se queda colgado hasta tocar
+      // un filtro. La agenda se rescata sola por el polling de 30s; el panel
+      // no tiene rescate. Repintamos ambos con lo que ya haya en memoria:
+      // en el 1er montaje _loading=true → _renderPanel muestra "Cargando…"
+      // normal y _renderCalendar es no-op (aún sin staff); en la reconexión
+      // pintan los datos reales al instante.
+      this._renderPanel();
+      this._renderCalendar();
       this._sendToPage('ready', {});
       this._sendToPage('get-settings', {});
       // v1.1.63 — pedir nombres del salón (brandName/legalName) para las
@@ -2344,6 +2454,11 @@ button { font-family: inherit; cursor: pointer; }
           if (p.ok) { this._toast('Fase movida ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo mover la fase'));
           break;
+        case 'fase-redimensionada':
+          // v1.1.65 — redimensionar duración de fase (empuja las posteriores)
+          if (p.ok) { this._toast('Duración ajustada ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
+          else this._toast('Error: ' + (p.error || 'no se pudo ajustar la duración'));
+          break;
         case 'extra-agregado':
           if (p.ok) { this._toast(`Extra añadido (+${p.precioTotal}€ total)`); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo añadir extra'));
@@ -2645,7 +2760,7 @@ button { font-family: inherit; cursor: pointer; }
             <div class="settings-body">
               <div class="settings-section">
                 <div class="settings-section-title">Espaciado</div>
-                <div class="slider-row"><label>Compacto</label><input type="range" id="sliderSpacing" min="28" max="84" value="56"><label>Amplio</label></div>
+                <div class="slider-row"><label>Compacto</label><input type="range" id="sliderSpacing" min="24" max="160" value="56"><label>Amplio</label></div>
               </div>
               <div class="settings-section">
                 <div class="settings-section-title">Título cita</div>
@@ -2657,8 +2772,8 @@ button { font-family: inherit; cursor: pointer; }
               <div class="settings-section">
                 <div class="settings-section-title">Intervalo</div>
                 <div class="option-group">
-                  <label class="option-item"><input type="radio" name="interval" value="30" checked>30 min</label>
-                  <label class="option-item"><input type="radio" name="interval" value="15">15 min</label>
+                  <label class="option-item"><input type="radio" name="interval" value="30">30 min</label>
+                  <label class="option-item"><input type="radio" name="interval" value="15" checked>15 min</label>
                   <label class="option-item"><input type="radio" name="interval" value="10">10 min</label>
                 </div>
               </div>
@@ -2816,7 +2931,7 @@ button { font-family: inherit; cursor: pointer; }
       root.getElementById('settingsOverlay').addEventListener('click', () => this._closeSettings());
       root.getElementById('btnCloseSettings').addEventListener('click', () => this._closeSettings());
       root.getElementById('btnResetSettings').addEventListener('click', () => {
-        this._settings = { rowHeight: 56, titleMode: 'servicio', interval: 30, staffConfig: {} };
+        this._settings = { rowHeight: 56, titleMode: 'servicio', interval: 15, staffConfig: {} };
         this._initStaffConfig();
         this._applySettingsUI();
         this._renderStaffSettings();
@@ -3668,11 +3783,18 @@ button { font-family: inherit; cursor: pointer; }
         if (armable) {
           col.addEventListener('click', e => {
             if (e.target.closest('.ks-appt')) return;
+            // v1.1.64 — pre-check de cliente antes de abrir el selector (mismo
+            // criterio que _colocarReserva, para feedback inmediato).
+            if (!this._cliente || !this._cliente.nombre) { this._toast('Selecciona un cliente'); return; }
             const rect = col.getBoundingClientRect();
             const y = e.clientY - rect.top;
             const snap = this._settings.interval && [10, 15, 30].includes(this._settings.interval) ? this._settings.interval : 5;
             const mins = CAL_START * 60 + Math.round((y / ppm) / snap) * snap;
-            this._colocarReserva(staffId, minToHHMM(mins));
+            // v1.1.64 — confirmar hora antes de pintar. El pintado real ocurre
+            // al Confirmar dentro de _openHoraPicker → _colocarReserva.
+            const svcSub = (this._armed && this._armed.servicio) ? this._armed.servicio.label : '';
+            const cliSub = (this._cliente && this._cliente.nombre) ? this._cliente.nombre : '';
+            this._openHoraPicker({ mode: 'colocar', staffId, mins, title: 'Hora de inicio', subtitle: [svcSub, cliSub].filter(Boolean).join(' · ') });
           });
         } else {
           this._bindBlockDrag(col, staffId, ppm);
@@ -3681,6 +3803,8 @@ button { font-family: inherit; cursor: pointer; }
       wrap.querySelectorAll('.ks-appt').forEach(a => a.addEventListener('click', e => {
         // v1.1.14 — el resize handle no debe abrir el modal
         if (e.target.closest('.ks-appt-resize')) return;
+        // v1.1.64 — el icono de ajustar hora tampoco abre el modal
+        if (e.target.closest('.ks-appt-timeadj')) return;
         // v1.1.29 — si terminamos drag de fase, no abrir modal
         if (this._suppressApptClick) return;
         e.stopPropagation();
@@ -3691,6 +3815,28 @@ button { font-family: inherit; cursor: pointer; }
         if (b.getAttribute('data-fase-idx') === '-1') return;   // legacy sin fase
         this._bindFaseDrag(wrap, b, ppm);
       });
+      // v1.1.64 — icono 🕑: reajustar la hora de inicio de la fase con el
+      // mismo selector que el pintado. Mismo gate que el drag (solo
+      // draggable=1 → fases no pagadas con índice real). Envía el
+      // 'mover-fase' existente (MISMA fecha, MISMO staff de la columna).
+      wrap.querySelectorAll('.ks-appt-timeadj').forEach(icon => icon.addEventListener('click', e => {
+        e.stopPropagation();
+        const appt = icon.closest('.ks-appt'); if (!appt) return;
+        const reservaId = appt.getAttribute('data-id');
+        const faseIndex = parseInt(appt.getAttribute('data-fase-idx'), 10);
+        if (isNaN(faseIndex) || faseIndex < 0) return;
+        const startISO = appt.getAttribute('data-fase-start');
+        const faseDur = parseInt(appt.getAttribute('data-fase-dur'), 10) || 30;
+        const staffId = appt.closest('.ks-col')?.getAttribute('data-staff') || '';
+        const r = this._reservas.find(x => x._id === reservaId) || {};
+        let minsAct = CAL_START * 60;
+        if (startISO) {
+          const dd = new Date(startISO);
+          const hh = dd.toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hour12: false });
+          minsAct = hhmmToMin(hh);
+        }
+        this._openHoraPicker({ mode: 'fase', reservaId, faseIndex, mins: minsAct, staffId, faseDur, title: 'Ajustar inicio de fase', subtitle: r.clientName || '' });
+      }));
       // v1.1.14 — drag del resize handle (extensión)
       wrap.querySelectorAll('.ks-appt-resize').forEach(h => this._bindResizeExt(wrap, h));
       // v1.1.14 — click ✕ en la extensión rayada → quitar extensión
@@ -3752,6 +3898,8 @@ button { font-family: inherit; cursor: pointer; }
         if (e.button !== 0) return;
         // Si se toca el resize handle, dejarlo
         if (e.target.closest('.ks-appt-resize')) return;
+        // v1.1.64 — el icono de ajustar hora no inicia arrastre
+        if (e.target.closest('.ks-appt-timeadj')) return;
         downX = e.clientX; downY = e.clientY;
         dragging = false;
         const onMove = (ev) => {
@@ -3764,7 +3912,7 @@ button { font-family: inherit; cursor: pointer; }
             ghost.className = 'ks-fase-ghost';
             const cliente = (this._reservas.find(r => r._id === reservaId) || {}).clientName || '';
             const labelTxt = btn.querySelector('.ks-appt-svc, .ks-appt-client')?.textContent || 'Servicio';
-            ghost.innerHTML = `<div class="g-cli">${esc(cliente)}</div><div class="g-svc">${esc(labelTxt)} · ${faseDur}′</div>`;
+            ghost.innerHTML = `<div class="g-cli">${esc(cliente)}</div><div class="g-svc">${esc(labelTxt)} · ${faseDur}′</div><div class="g-time"></div>`;
             this.shadowRoot.appendChild(ghost);
           }
           if (dragging && ghost) {
@@ -3777,6 +3925,19 @@ button { font-family: inherit; cursor: pointer; }
               const r = c.getBoundingClientRect();
               if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) {
                 c.classList.add('is-drop'); break;
+              }
+            }
+            // v1.1.64 — hora destino en vivo (snap 5 min, independiente del grid)
+            const gt = ghost.querySelector('.g-time');
+            const dropCol = this.shadowRoot.querySelector('.ks-col.is-drop');
+            if (gt) {
+              if (dropCol) {
+                const rr = dropCol.getBoundingClientRect();
+                let mm = CAL_START * 60 + Math.round(((ev.clientY - rr.top) / _ppm) / 5) * 5;
+                mm = Math.max(CAL_START * 60, Math.min((CAL_END * 60) - faseDur, mm));
+                gt.textContent = '🕑 ' + minToHHMM(mm);
+              } else {
+                gt.textContent = '';
               }
             }
           }
@@ -3802,8 +3963,9 @@ button { font-family: inherit; cursor: pointer; }
           const rect = target.getBoundingClientRect();
           const yIn = ev.clientY - rect.top;
           const minDesdeInicioGrid = yIn / _ppm;
-          // v1.1.30 — snap atado al settings.interval (10/15/30) con fallback 5
-          const SNAP = this._settings.interval && [10, 15, 30].includes(this._settings.interval) ? this._settings.interval : 5;
+          // v1.1.64 — snap del movimiento desacoplado del grid: siempre 5 min
+          // (el grid puede ser de 15, pero mover una cita va de 5 en 5).
+          const SNAP = 5;
           let minutosAbsolutos = CAL_START * 60 + Math.round(minDesdeInicioGrid / SNAP) * SNAP;
           if (minutosAbsolutos < CAL_START * 60) minutosAbsolutos = CAL_START * 60;
           if (minutosAbsolutos > (CAL_END * 60) - faseDur) minutosAbsolutos = (CAL_END * 60) - faseDur;
@@ -3836,10 +3998,58 @@ button { font-family: inherit; cursor: pointer; }
     _bindResizeExt(wrap, handle) {
       const _ppm = parseFloat(handle.dataset.ppm) || PX_PER_MIN;
       const reservaId = handle.dataset.id;
-      const endMinBase = parseInt(handle.dataset.endMin, 10);   // min absoluto donde acaba la última fase (sin extensión)
-      const extActual = Math.max(0, parseInt(handle.dataset.ext, 10) || 0);
       const appt = handle.closest('.ks-appt');
       if (!appt) return;
+      const faseIndex = parseInt(handle.dataset.faseIdx, 10);
+
+      // ── v1.1.65 — REDIMENSIONAR la duración de la fase (cualquier fase
+      //    ocupante, faseIndex >= 0). El bloque crece/mengua al arrastrar y
+      //    el backend redimensionarFase desplaza las fases posteriores para
+      //    mantener la secuencia de la cascada. Envía 'redimensionar-fase'.
+      if (faseIndex >= 0) {
+        const durBase = parseInt(handle.dataset.faseDur, 10) || 30;
+        const startMin = parseInt(handle.dataset.startMin, 10) || 0;
+        let preview = null, startY = 0, curDur = durBase, dragging = false;
+        handle.addEventListener('mousedown', e => {
+          e.preventDefault(); e.stopPropagation();
+          dragging = true; startY = e.clientY; curDur = durBase;
+          // preview: el propio bloque creciendo desde su borde superior
+          preview = document.createElement('div');
+          preview.className = 'ks-appt-resize-preview';
+          preview.style.top = appt.offsetTop + 'px';
+          preview.style.height = Math.max(curDur * _ppm, 1) + 'px';
+          preview.textContent = `${curDur}′`;
+          appt.parentElement.appendChild(preview);
+          const onMove = ev => {
+            if (!dragging) return;
+            const dy = ev.clientY - startY;
+            let nd = durBase + Math.round((dy / _ppm) / 5) * 5;   // snap 5 min
+            if (nd < 1) nd = 1;
+            curDur = nd;
+            preview.style.height = Math.max(nd * _ppm, 1) + 'px';
+            preview.textContent = `${nd}′ · ${minToHHMM(startMin)}–${minToHHMM(startMin + nd)}`;
+          };
+          const onUp = () => {
+            dragging = false;
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            if (preview) { preview.remove(); preview = null; }
+            if (curDur !== durBase) {
+              this._toast(`Ajustando duración a ${curDur} min…`);
+              this._sendToPage('redimensionar-fase', { reservaId, faseIndex, nuevaDur: curDur });
+            }
+          };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        });
+        return;
+      }
+
+      // ── LEGACY (faseIndex = -1, reservas SIN fases): extensión con
+      //    extensionMin (buffer rayado tras el bloque). Comportamiento previo
+      //    intacto; envía 'extender-reserva'.
+      const endMinBase = parseInt(handle.dataset.endMin, 10);   // min absoluto donde acaba la última fase (sin extensión)
+      const extActual = Math.max(0, parseInt(handle.dataset.ext, 10) || 0);
       let preview = null, startY = 0, currentExt = extActual, dragging = false;
       handle.addEventListener('mousedown', e => {
         e.preventDefault(); e.stopPropagation();
@@ -4042,23 +4252,62 @@ button { font-family: inherit; cursor: pointer; }
       const lastIdxGlobal = fasesOcupanTodas.length ? fasesOcupanTodas[fasesOcupanTodas.length - 1].idx : -1;
       const firstIdxGlobal = fasesOcupanTodas.length ? fasesOcupanTodas[0].idx : -1;
 
-      let lastFaseEndISO = null;
-      let html = fasesOcupanCol.map(f => {
+      // v1.1.67 — Fases de 1 min (marcadores tipo tamaño de pelo) NO se pintan
+      // como bloque propio (ilegible): su leyenda se pliega en la cartela de la
+      // fase principal y su minuto se suma al rango mostrado de esa fase. Es
+      // SOLO visual: la fase sigue intacta en datos/ledger/CRM.
+      const _durFase = (f) => {
+        let d = Number(f.dur) || 0;
+        if (!d && f.end && f.start) d = Math.max(1, (new Date(f.end).getTime() - new Date(f.start).getTime()) / 60000);
+        return d || 30;
+      };
+      const _esTiny = (f) => Math.round(_durFase(f)) <= 1;
+      const tinyCol = fasesOcupanCol.filter(_esTiny);
+      const normalCol = fasesOcupanCol.filter(f => !_esTiny(f));
+      // Solo se pliega si hay al menos una fase normal donde anclar; si todas
+      // son tiny (servicio suelto de 1 min), se pinta todo normal.
+      const plegar = normalCol.length > 0 && tinyCol.length > 0;
+      const anchorIdx = plegar
+        ? (normalCol.some(f => f.idx === firstIdxGlobal) ? firstIdxGlobal : normalCol[0].idx)
+        : -999;
+      const foldLabels = plegar ? tinyCol.map(f => f.label || 'Servicio') : [];
+      let foldMaxEndMin = null;
+      if (plegar) {
+        for (const f of tinyCol) {
+          const endISO = f.end || new Date(new Date(f.start || r.fechaReserva).getTime() + _durFase(f) * 60000).toISOString();
+          const m = this._isoToMadridMin(endISO);
+          if (m != null && (foldMaxEndMin == null || m > foldMaxEndMin)) foldMaxEndMin = m;
+        }
+      }
+      const fasesAPintar = plegar ? normalCol : fasesOcupanCol;
+
+      // Fin de la última fase ocupante GLOBAL en esta columna (incl. tiny),
+      // para la extensión legacy (extensionMin). Independiente del plegado.
+      const _ultCol = fasesOcupanCol.find(f => f.idx === lastIdxGlobal);
+      let lastFaseEndISO = _ultCol
+        ? (_ultCol.end || new Date(new Date(_ultCol.start || r.fechaReserva).getTime() + _durFase(_ultCol) * 60000).toISOString())
+        : null;
+
+      let html = fasesAPintar.map(f => {
         const startISO = f.start || r.fechaReserva;
-        let dur = Number(f.dur) || 0;
-        if (!dur && f.end && f.start) dur = Math.max(1, (new Date(f.end).getTime() - new Date(f.start).getTime()) / 60000);
-        if (!dur) dur = 30;
-        const esUlt = f.idx === lastIdxGlobal;
-        if (esUlt) lastFaseEndISO = f.end || new Date(new Date(startISO).getTime() + dur * 60000).toISOString();
+        const dur = _durFase(f);
+        // Rango extendido con el minuto de las tiny SOLO en la fase ancla.
+        let rangoEndMin = null;
+        if (plegar && f.idx === anchorIdx && foldMaxEndMin != null) {
+          const propioEndMin = this._isoToMadridMin(startISO) + Math.round(dur);
+          rangoEndMin = Math.max(propioEndMin, foldMaxEndMin);
+        }
         return this._apptBloqueHTML(r, staff, ppm, {
           startISO,
           dur,
           label: f.label || 'Servicio',
           esFasePrincipal: (f.idx === firstIdxGlobal),
-          esUltimaFase: esUlt,
+          esUltimaFase: (f.idx === lastIdxGlobal),
           cascada: esCascada,
           faseIndex: f.idx,
-          laneInfo: staff.lanesMap?.[`${r._id}__${f.idx}`] || null   // v1.1.36
+          laneInfo: staff.lanesMap?.[`${r._id}__${f.idx}`] || null,   // v1.1.36
+          foldLabels: (f.idx === anchorIdx) ? foldLabels : null,       // v1.1.67
+          rangoEndMin                                                  // v1.1.67
         });
       }).join('');
       // Extensión: solo en la columna donde está la última fase
@@ -4075,7 +4324,7 @@ button { font-family: inherit; cursor: pointer; }
       const hhmm = d.toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hour12: false });
       const startMin = hhmmToMin(hhmm);
       const top = (startMin - CAL_START * 60) * _ppm;
-      const height = Math.max(min * _ppm, 22);
+      const height = Math.max(min * _ppm, 10);
       return `<div class="ks-appt-ext" data-id="${esc(r._id)}" style="top:${top}px;height:${height}px;--staff:${staff.color}">
         <span class="ks-appt-ext-lbl">EXTENSIÓN · ${min} MIN</span>
         <button class="ks-appt-ext-rm" data-id="${esc(r._id)}" title="Quitar extensión">✕</button>
@@ -4088,7 +4337,9 @@ button { font-family: inherit; cursor: pointer; }
       const startMin = hhmmToMin(hhmm);
       const top = (startMin - CAL_START * 60) * _ppm;
       const dur = Number(opts.dur) || 30;
-      const height = Math.max(dur * _ppm, 26);
+      // v1.1.64 — suelo visual mínimo bajado a 10px para no condicionar
+      // servicios cortos (p.ej. 1 min). La duración real (dur) es exacta.
+      const height = Math.max(dur * _ppm, 10);
       const endHHMM = minToHHMM(startMin + Math.round(dur));
       // Resolver grupo del servicio principal para el color de familia
       let grupo = '';
@@ -4109,7 +4360,13 @@ button { font-family: inherit; cursor: pointer; }
       const lineaAbajo = titleMode === 'servicio'
         ? `<span class="ks-appt-svc">${esc(cliente)}</span>`
         : `<span class="ks-appt-svc">${esc(labelFase)}${opts.cascada && opts.esFasePrincipal ? '<span class="ks-cascade-flag">⛓ cascada</span>' : ''}</span>`;
-      const lineaHora = height >= 60 ? `<span class="ks-appt-rango">${hhmm} - ${endHHMM}</span>` : '';
+      // v1.1.67 — rango extendido con el minuto de las fases plegadas (tiny),
+      // y línea de leyenda plegada (marcadores de 1 min, p.ej. tamaño de pelo).
+      const rangoEndTxt = (opts.rangoEndMin != null) ? minToHHMM(opts.rangoEndMin) : endHHMM;
+      const foldLine = (opts.foldLabels && opts.foldLabels.length)
+        ? `<span class="ks-appt-fold">${opts.foldLabels.map(esc).join(' · ')}</span>`
+        : '';
+      const lineaHora = height >= 60 ? `<span class="ks-appt-rango">${hhmm} - ${rangoEndTxt}</span>` : '';
       // v1.1.29 — atributos para drag&drop por fase. Cita PAGADA no es draggable.
       const draggable = (!paid && opts.faseIndex >= 0) ? 1 : 0;
       // v1.1.36 — Side-by-side overlap rendering.
@@ -4125,14 +4382,16 @@ button { font-family: inherit; cursor: pointer; }
         // 3px de gap visual entre lanes.
         lanePos = `left:calc(${left}% + 3px);width:calc(${w}% - 6px);right:auto;`;
       }
-      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
+      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" title="${esc(labelFase)} · ${hhmm}–${endHHMM}${cliente ? ' · ' + esc(cliente) : ''}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
         <span class="ks-appt-statusdot">${paid ? '✓' : '€'}</span>
+        ${draggable ? `<span class="ks-appt-timeadj" title="Ajustar hora de inicio">🕑</span>` : ''}
         <span class="ks-appt-inner">
           <span class="ks-appt-topline">${lineaArriba}</span>
           ${height >= 44 ? lineaAbajo : ''}
+          ${height >= 44 ? foldLine : ''}
           ${lineaHora}
         </span>
-        ${opts.esUltimaFase ? `<span class="ks-appt-resize" data-id="${esc(r._id)}" data-ppm="${_ppm}" data-end-iso="${esc(opts.startISO)}" data-end-min="${startMin + Math.round(dur)}" data-ext="${Number(r.extensionMin) || 0}" title="Arrastra para extender"></span>` : ''}
+        ${(!paid && (opts.faseIndex >= 0 || opts.esUltimaFase)) ? `<span class="ks-appt-resize" data-id="${esc(r._id)}" data-ppm="${_ppm}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${Math.round(dur)}" data-start-min="${startMin}" data-end-iso="${esc(opts.startISO)}" data-end-min="${startMin + Math.round(dur)}" data-ext="${Number(r.extensionMin) || 0}" title="${opts.faseIndex >= 0 ? 'Arrastra para ajustar la duración de este servicio' : 'Arrastra para extender'}"></span>` : ''}
       </button>`;
     }
     // v1.1.40 — _blockHTML ahora recibe una RESERVA con family='BLOQUEO'
@@ -4287,6 +4546,93 @@ button { font-family: inherit; cursor: pointer; }
     }
 
     // ═══════════════════════════════════════════════════
+    // v1.1.64 — SELECTOR DE HORA (confirmar antes de pintar / reajustar fase)
+    //   Popup mínimo: display grande HH:MM + input time (paso 1 min) + ±5/±15
+    //   + Confirmar. Dos modos:
+    //     · 'colocar' → al confirmar llama _colocarReserva(staffId, hhmm)
+    //       (crea la cita/cascada del servicio armado desde esa hora).
+    //     · 'fase'    → al confirmar envía 'mover-fase' (contrato existente,
+    //       backend moverFase) con la nueva hora, MISMA fecha y MISMO staff.
+    //   Cero backend nuevo, cero colecciones, cero IDs.
+    // ═══════════════════════════════════════════════════
+    _openHoraPicker(opts) {
+      const o = opts || {};
+      const root = this.shadowRoot;
+      root.getElementById('horaPickScrim')?.remove();
+
+      const durGuard = (o.mode === 'fase') ? (Number(o.faseDur) || 0) : 0;
+      const minMin = CAL_START * 60;
+      const maxMin = (CAL_END * 60) - Math.max(1, durGuard);
+      const clamp = (m) => Math.max(minMin, Math.min(maxMin, Math.round(m)));
+      let mins = Number(o.mins);
+      if (!isFinite(mins)) mins = minMin;
+      mins = clamp(mins);
+
+      const scrim = document.createElement('div');
+      scrim.className = 'ks-modal-scrim'; scrim.id = 'horaPickScrim';
+      scrim.addEventListener('click', (e) => { if (e.target === scrim) scrim.remove(); });
+
+      const box = document.createElement('div');
+      box.className = 'ks-horapick';
+      const eyebrow = o.mode === 'fase' ? 'Reajustar fase' : 'Confirmar hora';
+      const title = o.title || (o.mode === 'fase' ? 'Ajustar inicio' : 'Hora de inicio');
+      const sub = o.subtitle ? `<div class="ks-horapick-sub">${esc(o.subtitle)}</div>` : '';
+      box.innerHTML = `
+        <div class="ks-horapick-head">
+          <div><span class="ks-horapick-eyebrow">${eyebrow}</span><h3 class="ks-horapick-title">${esc(title)}</h3>${sub}</div>
+          <button class="ks-modal-x" id="hpX">✕</button>
+        </div>
+        <div class="ks-horapick-display" id="hpDisplay">${minToHHMM(mins)}</div>
+        <div class="ks-horapick-steppers">
+          <button class="ks-horapick-step" data-d="-15">−15</button>
+          <button class="ks-horapick-step" data-d="-5">−5</button>
+          <input type="time" id="hpTime" class="ks-horapick-input" step="60" value="${minToHHMM(mins)}">
+          <button class="ks-horapick-step" data-d="5">+5</button>
+          <button class="ks-horapick-step" data-d="15">+15</button>
+        </div>
+        <div class="ks-horapick-foot">
+          <button class="ks-detail-cancel" id="hpCancel">Cancelar</button>
+          <button class="ks-detail-add" id="hpOk">Confirmar</button>
+        </div>`;
+      scrim.appendChild(box); root.appendChild(scrim);
+
+      const input = box.querySelector('#hpTime');
+      const display = box.querySelector('#hpDisplay');
+      const setMins = (m) => { mins = clamp(m); input.value = minToHHMM(mins); display.textContent = minToHHMM(mins); };
+      input.addEventListener('input', () => { if (input.value) { mins = clamp(hhmmToMin(input.value)); display.textContent = minToHHMM(mins); } });
+      input.addEventListener('change', () => setMins(input.value ? hhmmToMin(input.value) : mins));
+      box.querySelectorAll('.ks-horapick-step').forEach(b => b.addEventListener('click', () => {
+        setMins(mins + (parseInt(b.getAttribute('data-d'), 10) || 0));
+      }));
+      box.querySelector('#hpX').addEventListener('click', () => scrim.remove());
+      box.querySelector('#hpCancel').addEventListener('click', () => scrim.remove());
+      box.querySelector('#hpOk').addEventListener('click', () => {
+        const finalMin = clamp(mins);
+        const hhmm = minToHHMM(finalMin);
+        scrim.remove();
+        if (o.mode === 'fase') {
+          // Reajuste de hora de inicio de fase: MISMA fecha, MISMO staff.
+          // Construye el ISO igual que el drag (navegador en Madrid).
+          const [yyyy, mm, dd] = String(this._fecha).split('-').map(Number);
+          const hh = Math.floor(finalMin / 60), mi = finalMin % 60;
+          const nuevaISO = new Date(yyyy, mm - 1, dd, hh, mi, 0, 0).toISOString();
+          this._toast(`Ajustando a ${hhmm}…`);
+          this._sendToPage('mover-fase', {
+            reservaId: o.reservaId,
+            faseIndex: o.faseIndex,
+            nuevoStartISO: nuevaISO,
+            nuevoStaffId: o.staffId
+          });
+        } else {
+          // Colocar el servicio armado desde esta hora (las validaciones de
+          // cliente/permiso/armado viven en _colocarReserva).
+          this._colocarReserva(o.staffId, hhmm);
+        }
+      });
+      setTimeout(() => { try { input.focus(); } catch (_) {} }, 30);
+    }
+
+    // ═══════════════════════════════════════════════════
     // MODAL DE CITA + COBRO
     // ═══════════════════════════════════════════════════
     _openModal(r) {
@@ -4332,7 +4678,23 @@ button { font-family: inherit; cursor: pointer; }
       const hhmm = d ? d.toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
       const endH = d ? minToHHMM(hhmmToMin(hhmm) + (Number(r.duracionTotal) || 0)) : '';
       const items = (r.serviciosDetail || '').split(';;').filter(Boolean).map(x => { const [l, p] = x.split('|'); return { label: l || '', price: Number(p) || 0 }; });
-      const itemsHTML = (items.length ? items : [{ label: r.title || 'Servicio', price: Number(r.precioTotal) || 0 }]).map((it, i) => `<div class="ks-modal-item ${i > 0 ? 'is-compl' : ''}" data-i="${i}"><span class="ks-item-label">${i > 0 ? '<span class="ks-item-complflag">⛓</span>' : ''}${esc(it.label)}</span><span class="ks-item-right"><span class="ks-item-price">${it.price}€</span>${items.length > 1 ? `<button class="ks-item-rm" data-i="${i}" title="Quitar este servicio" aria-label="Quitar">✕</button>` : ''}</span></div>`).join('');
+      // v1.1.64 — minutos ocupados por servicio (de las fases ocupantes de la
+      // reserva), para mostrar el tiempo de cada línea en la card de la cita.
+      const _fasesModal = Array.isArray(r.fases) ? r.fases : (r.fases?.items || []);
+      const _labelDur = {};
+      for (const f of _fasesModal) {
+        if (!f || !f.ocupa) continue;
+        const _l = String(f.label || '').trim(); if (!_l) continue;
+        let _d = Number(f.dur) || 0;
+        if (!_d && f.end && f.start) _d = Math.max(1, (new Date(f.end).getTime() - new Date(f.start).getTime()) / 60000);
+        _labelDur[_l] = (_labelDur[_l] || 0) + _d;
+      }
+      const _durLinea = (label) => {
+        let _d = _labelDur[String(label || '').trim()] || 0;
+        if (!_d && items.length <= 1) _d = Number(r.duracionTotal) || 0;
+        return _d > 0 ? `<span class="ks-item-dur">${Math.round(_d)}′</span>` : '';
+      };
+      const itemsHTML = (items.length ? items : [{ label: r.title || 'Servicio', price: Number(r.precioTotal) || 0 }]).map((it, i) => `<div class="ks-modal-item ${i > 0 ? 'is-compl' : ''}" data-i="${i}"><span class="ks-item-label">${i > 0 ? '<span class="ks-item-complflag">⛓</span>' : ''}${esc(it.label)}</span><span class="ks-item-right">${_durLinea(it.label)}<span class="ks-item-price">${it.price}€</span>${items.length > 1 ? `<button class="ks-item-rm" data-i="${i}" title="Quitar este servicio" aria-label="Quitar">✕</button>` : ''}</span></div>`).join('');
       // v1.1.24 — Productos vendidos asociados a esta cita
       const productosVendidos = Array.isArray(r.productosVendidos) ? r.productosVendidos : [];
       const productosHTML = productosVendidos.map(p => {
@@ -5469,7 +5831,7 @@ button { font-family: inherit; cursor: pointer; }
         <p class="ks-blank-note">Cliente: <b>${esc(this._cliente.nombre)}</b>. Al armar, haz click sobre la columna del personal y hora deseados (igual que un servicio del catálogo).</p>
         <label class="ks-field"><span>Descripción del servicio</span><input id="bDesc" placeholder="Ej. Tratamiento especial" autofocus></label>
         <div class="ks-field-row">
-          <label class="ks-field"><span>Duración (min)</span><input id="bDur" type="number" min="5" step="5" value="30"></label>
+          <label class="ks-field"><span>Duración (min)</span><input id="bDur" type="number" min="1" step="1" value="30"></label>
           <label class="ks-field"><span>Precio (€)</span><input id="bPrice" type="number" min="0" step="0.01" placeholder="0"></label>
         </div>
         <div class="ks-blank-foot"><button class="ks-detail-cancel" id="bcancel">Cancelar</button><button class="ks-detail-add" id="bsave">Armar</button></div>`;
@@ -5481,7 +5843,7 @@ button { font-family: inherit; cursor: pointer; }
         const dur = parseInt(form.querySelector('#bDur').value, 10) || 0;
         const precio = parseFloat(form.querySelector('#bPrice').value) || 0;
         if (!desc) { this._toast('Falta descripción'); return; }
-        if (!dur || dur < 5) { this._toast('Duración mínimo 5 min'); return; }
+        if (!dur || dur < 1) { this._toast('Duración mínimo 1 min'); return; }
         if (precio < 0) { this._toast('Precio inválido'); return; }
         // Armar como un servicio normal pero con flag medida
         this._armed = {
