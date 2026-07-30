@@ -9,10 +9,16 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.14.6
+       KAMISUITE — Edición Servicios Widget v1.14.7
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.14.7: 🎟️ BONOS: dos campos nuevos en el bloque de bono —
+         "Caducidad del bono (días)" (fBonoValidezDias → bonusValidityDays)
+         y "Días entre usos" (fBonoIntervaloDias → bonusUseIntervalDays).
+         Conectados en poblar/reset/payload (save y create) y en el update
+         de estado local post-guardado. Vacío en caducidad = usa el global
+         en meses; 0/vacío en intervalo = LIBRE. Sin cambios en el resto.
        v1.14.6: 🔄 FIX: refresco inmediato de familias y grupos tras
          guardar. Al crear una familia nueva (ej. "Moldeados") tecleando
          en el input +Nueva Familia y guardar el servicio, la nueva
@@ -558,7 +564,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.14.6</span>
+    <span class="header-version"> v1.14.7</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -698,6 +704,17 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
               <div class="form-group">
                 <label class="form-label">Descuento del bono (%)</label>
                 <input type="number" class="form-input" id="fBonoDescuento" min="0" max="100" step="1" placeholder="0">
+              </div>
+            </div>
+            <!-- v1.14.7 — caducidad (días) + frecuencia mínima entre usos (días) -->
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Caducidad del bono (días)</label>
+                <input type="number" class="form-input" id="fBonoValidezDias" min="1" step="1" placeholder="Global si vacío">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Días entre usos</label>
+                <input type="number" class="form-input" id="fBonoIntervaloDias" min="0" step="1" placeholder="0 = libre">
               </div>
             </div>
 
@@ -981,7 +998,9 @@ const el = {
   swBonoActivo: document.getElementById('swBonoActivo'),
   lblBonoActivo: document.getElementById('lblBonoActivo'),
   fBonoNumero: document.getElementById('fBonoNumero'),
-  fBonoDescuento: document.getElementById('fBonoDescuento')
+  fBonoDescuento: document.getElementById('fBonoDescuento'),
+  fBonoValidezDias: document.getElementById('fBonoValidezDias'),
+  fBonoIntervaloDias: document.getElementById('fBonoIntervaloDias')
 };
 
 function render(data) {
@@ -1840,6 +1859,8 @@ function openEditModal(catalogId) {
   setSwitchVisual(el.swBonoActivo, el.lblBonoActivo, s.bonoActivo === true);
   if (el.fBonoNumero) el.fBonoNumero.value = (typeof s.bonoNumero === 'number') ? s.bonoNumero : '';
   if (el.fBonoDescuento) el.fBonoDescuento.value = (typeof s.bonoDescuento === 'number') ? s.bonoDescuento : '';
+  if (el.fBonoValidezDias) el.fBonoValidezDias.value = (typeof s.bonusValidityDays === 'number') ? s.bonusValidityDays : '';
+  if (el.fBonoIntervaloDias) el.fBonoIntervaloDias.value = (typeof s.bonusUseIntervalDays === 'number') ? s.bonusUseIntervalDays : '';
   aplicarTipologia();
   el.btnSave.disabled = false;
   el.modal.classList.add('open');
@@ -1883,6 +1904,8 @@ function openNuevoModal() {
   setSwitchVisual(el.swBonoActivo, el.lblBonoActivo, false);
   if (el.fBonoNumero) el.fBonoNumero.value = '';
   if (el.fBonoDescuento) el.fBonoDescuento.value = '';
+  if (el.fBonoValidezDias) el.fBonoValidezDias.value = '';
+  if (el.fBonoIntervaloDias) el.fBonoIntervaloDias.value = '';
   aplicarTipologia();
   el.btnSave.disabled = false;
   el.modal.classList.add('open');
@@ -1961,6 +1984,10 @@ function buildPayloadComun() {
   const bonoNumero = (bnRaw === '' || bnRaw === null) ? null : (parseInt(bnRaw, 10) || 0);
   const bdRaw = el.fBonoDescuento ? el.fBonoDescuento.value : '';
   const bonoDescuento = (bdRaw === '' || bdRaw === null) ? null : (parseInt(bdRaw, 10) || 0);
+  const bvdRaw = el.fBonoValidezDias ? el.fBonoValidezDias.value : '';
+  const bonusValidityDays = (bvdRaw === '' || bvdRaw === null) ? null : (parseInt(bvdRaw, 10) || 0);
+  const bidRaw = el.fBonoIntervaloDias ? el.fBonoIntervaloDias.value : '';
+  const bonusUseIntervalDays = (bidRaw === '' || bidRaw === null) ? null : (parseInt(bidRaw, 10) || 0);
 
   return {
     nombre: el.fNombre.value.trim(),
@@ -1989,7 +2016,9 @@ function buildPayloadComun() {
     precioGramo,
     bonoActivo,
     bonoNumero,
-    bonoDescuento
+    bonoDescuento,
+    bonusValidityDays,
+    bonusUseIntervalDays
   };
 }
 
@@ -2029,7 +2058,9 @@ function saveModal() {
       precioGramo: comun.precioGramo,
       bonoActivo: comun.bonoActivo,
       bonoNumero: comun.bonoNumero,
-      bonoDescuento: comun.bonoDescuento
+      bonoDescuento: comun.bonoDescuento,
+      bonusValidityDays: comun.bonusValidityDays,
+      bonusUseIntervalDays: comun.bonusUseIntervalDays
     };
     if (fImageBase64) {
       payload.base64Data = fImageBase64;
@@ -2261,6 +2292,8 @@ window.addEventListener('message', (event) => {
         if (sv.bonoActivo !== undefined) x.bonoActivo = sv.bonoActivo;
         if (sv.bonoNumero !== undefined) x.bonoNumero = sv.bonoNumero;
         if (sv.bonoDescuento !== undefined) x.bonoDescuento = sv.bonoDescuento;
+        if (sv.bonusValidityDays !== undefined) x.bonusValidityDays = sv.bonusValidityDays;
+        if (sv.bonusUseIntervalDays !== undefined) x.bonusUseIntervalDays = sv.bonusUseIntervalDays;
       }
       recomputeTaxonomias(); // v1.14.6 — refrescar listas derivadas (allGroups, allFamilies)
       applyFilters();
