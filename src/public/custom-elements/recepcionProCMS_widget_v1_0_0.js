@@ -1,9 +1,81 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.68  ·  FIX: el plegado de 1 min se ancla a la fase PRINCIPAL
- * FECHA: 30 de julio de 2026 
+ * VERSION: 1.1.74  ·  Evidencia "Arqueo guardado" bajo el botón
+ * FECHA: 1 de agosto de 2026
  * ---------------------------------------------------------------------
+ * v1.1.74 (1 ago 2026) — Evidencia persistente "✓ Arqueo guardado"
+ *   debajo del botón Guardar arqueo. Antes solo había un toast fugaz y
+ *   el botón quedaba activo, sin señal de que el guardado había ido
+ *   bien. Ahora, cuando el registro del día está en status 'saved', se
+ *   pinta bajo el botón "✓ Arqueo guardado · dif X€" en verde. Como se
+ *   basa en el estado del registro, sobrevive al refresco (no es
+ *   fugaz). El botón sigue activo a propósito (permite re-guardar tras
+ *   cambiar el conteo). Cambio aislado a _renderCajaBody.
+ * v1.1.73 (1 ago 2026) — FONDO INICIAL arrastra el cash de ayer +
+ *   "Forzar fondo inicial". El "Fondo inicial" del arqueo ya no es un
+ *   input: es texto que muestra el fondo del día, que el backend
+ *   (v1.1.2) rellena arrastrando el efectivo contado del cierre
+ *   anterior. Debajo, una fila "Forzar fondo inicial" con input + botón
+ *   "Forzar" permite sobrescribir ese valor cuando el arranque real es
+ *   distinto (el placeholder muestra el fondo actual). Con el campo
+ *   vacío no fuerza nada. Mensaje/handler 'caja-set-fondo' sin cambios;
+ *   solo cambia el texto (Forzar) y el toast.
+ * v1.1.72 (1 ago 2026) — FONDO INICIAL editable directamente en el
+ *   cuadro del arqueo (🏦). El "Fondo inicial" deja de ser texto fijo:
+ *   si la caja no está cerrada, es un input con botón "Guardar" que
+ *   escribe openingBalance del día (mensaje 'caja-set-fondo' → backend
+ *   setOpeningBalance v1.1.1, exista o no la caja). El "Efectivo
+ *   esperado" se recalcula al instante. Sin campos nuevos en el CMS,
+ *   sin depender de qué día sea ni de ningún toggle. Cambio aislado a
+ *   la línea del Fondo inicial en _renderCajaBody + 1 handler de
+ *   respuesta. Todo lo demás intacto.
+ * v1.1.71 (1 ago 2026) — APERTURA DE CAJA (fondo inicial del día). El
+ *   arqueo es un módulo OPCIONAL: cuando el salón tiene SalonConfig.
+ *   arqueoActivo=true, al abrir Recepción PRO por la mañana aparece un
+ *   modal profesional de apertura con el fondo inicial SUGERIDO ya
+ *   pre-rellenado (fondo fijo del salón, o el efectivo contado al cerrar
+ *   ayer, o 0 si no hay historial). El operador confirma en un click o
+ *   pulsa "Saltar hoy". El flag arqueoActivo y la sugerencia se calculan
+ *   en el backend/page code (check-apertura-caja → caja-fondo-sugerido);
+ *   el widget solo dispara el check una vez para HOY y reacciona.
+ *   · Estado nuevo: _aperturaChequeada (¿ya se pidió el check?),
+ *     _aperturaSaltadaFecha (fecha para la que se saltó la apertura),
+ *     _aperturaFondo (importe editable del modal).
+ *   · connectedCallback dispara _maybeCheckApertura() — solo si la fecha
+ *     mostrada es HOY (todayISO). Navegar a otro día no re-dispara.
+ *   · Handlers nuevos en _handleResponse: 'caja-fondo-sugerido' (abre el
+ *     modal, con guards de HOY / no-saltado / sin otro modal abierto),
+ *     'caja-abierta' (toast + refresca el arqueo si está abierto),
+ *     'apertura-estado' (informativo, no pinta nada).
+ *   · Modal _openAperturaModal reutiliza las clases del modal existente
+ *     (ks-modal-scrim, ks-modal, ks-disc-row, ks-pay pay-efectivo…). Sin
+ *     CSS nuevo. No cierra al clicar fuera (acto consciente): solo
+ *     "Saltar hoy" o "Confirmar apertura". Firma automática con el
+ *     empleado logueado la resuelve el page code (recordedBy).
+ *   · FUERA DE ALCANCE (sesión futura si se quiere): botón manual
+ *     "Registrar fondo inicial" DENTRO del arqueo para un registro ya
+ *     creado con fondo 0 — requiere una función backend que ACTUALICE
+ *     openingBalance de un registro existente (abrirCaja solo crea). No
+ *     se toca ahora para mantener el cambio quirúrgico. El workaround
+ *     de apuntar el fondo como "+ Entrada" sigue disponible.
+ *   · NO se toca: arqueo/cierre existente, ESPECIALES, cobro, drag&drop,
+ *     login PIN, calendario, banner promo, ni ningún flujo de negocio.
+ *     Solo se AÑADE el flujo de apertura (estado + 1 disparo + 3
+ *     handlers + 1 modal), todo add-only.
+ * v1.1.70 (31 jul 2026) — ESPECIALES · buen gusto en las respuestas. Los
+ *   avisos del modal (bloqueo por no-PRIME, bono ya activo, PRIME ya activa,
+ *   éxito) dejan de pintarse como toast negro al pie y se muestran DENTRO del
+ *   modal, con tono cálido y una salida útil (el bloqueo por PRIME ofrece un
+ *   botón "Dar de alta PRIME" que salta a esa pestaña). Validaciones de campo
+ *   (nombre, destinatario del regalo) con resaltado suave sin perder lo escrito.
+ * v1.1.69 (31 jul 2026) — ESPECIALES. El botón AKIRA (zombi) pasa a ESPECIALES
+ *   y abre un modal de venta manual de los tres productos comerciales; se
+ *   elimina el botón Inicio (zombi). El modal reutiliza la búsqueda de clientes
+ *   (mensajes propios espBuscarCliente/espClientesEncontrados), tres pestañas
+ *   PRIME/Bono/Tarjeta pobladas por getEspecialesData, método de pago y emisión
+ *   (emitirBono/emitirPrime/emitirTarjeta). Sin selector de variante: ningún
+ *   servicio con bono de KALÓNICE tiene variantes.
  * v1.1.68 (30 jul 2026) — FIX del plegado de servicios de 1 min (widget-only).
  *   El plegado (v1.1.67) se anclaba a la PRIMERA fase ocupante de la cascada,
  *   no a la principal. Si la primera fase era corta (p.ej. "Lavado previo" de
@@ -1185,7 +1257,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.68]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.74]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1306,11 +1378,49 @@ button { font-family: inherit; cursor: pointer; }
 }
 .ks-brandhint { color: var(--ks-ink3); font-size: 12.5px; font-weight: 500; letter-spacing: .2px; }
 .ks-brandactions { margin-left: auto; display: flex; align-items: center; gap: 9px; }
-.ks-akira {
-  border: 1px solid var(--ks-line); background: #fff; color: var(--ks-ink);
-  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+.ks-especiales {
+  border: 1px solid var(--ks-accent); background: var(--ks-accent); color: #fff;
+  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
 }
-.ks-akira:hover { border-color: var(--ks-accent); color: var(--ks-accent-ink); }
+.ks-especiales:hover { filter: brightness(1.06); }
+/* ── Modal ESPECIALES (venta manual) ── */
+.esp-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.esp-modal { background: #fff; border-radius: 14px; width: min(560px,96vw); max-height: 92vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.esp-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); position: sticky; top: 0; background: #fff; z-index: 1; }
+.esp-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
+.esp-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
+.esp-body { padding: 16px 20px; }
+.esp-sec { margin-bottom: 16px; }
+.esp-eyebrow { font-size: 10.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: #9ca3af; margin-bottom: 7px; display: block; }
+.esp-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; }
+.esp-select { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; background: #fff; }
+.esp-cli-results { border: 1px solid var(--ks-line); border-radius: 8px; margin-top: 6px; max-height: 180px; overflow: auto; }
+.esp-cli-item { padding: 8px 11px; cursor: pointer; border-bottom: 1px solid var(--ks-paper2); }
+.esp-cli-item:last-child { border-bottom: none; }
+.esp-cli-item:hover { background: var(--ks-paper2); }
+.esp-cli-name { font-size: 13px; font-weight: 600; color: var(--ks-ink); }
+.esp-cli-sub { font-size: 11px; color: #9ca3af; }
+.esp-chip { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--ks-accent); border-radius: 8px; background: var(--ks-paper2); }
+.esp-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.esp-tab { flex: 1; padding: 9px 4px; border: 1px solid var(--ks-line); background: #fff; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ks-ink); }
+.esp-tab.active { background: var(--ks-accent); color: #fff; border-color: var(--ks-accent); }
+.esp-price { margin-top: 9px; font-size: 14px; font-weight: 700; color: var(--ks-ink); }
+.esp-price small { font-weight: 500; color: #9ca3af; font-size: 11px; }
+.esp-pay { display: flex; gap: 6px; }
+.esp-paybtn { flex: 1; padding: 9px; border: 1px solid var(--ks-line); background: #fff; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ks-ink); }
+.esp-paybtn.active { background: var(--ks-ink); color: #fff; border-color: var(--ks-ink); }
+.esp-emit { width: 100%; margin-top: 4px; padding: 13px; border: none; border-radius: 10px; background: var(--ks-accent); color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; }
+.esp-emit:disabled { opacity: .45; cursor: not-allowed; }
+.esp-row2 { display: flex; gap: 8px; }
+.esp-row2 > * { flex: 1; }
+.esp-link { background: none; border: none; color: var(--ks-accent); font-size: 12px; font-weight: 600; cursor: pointer; padding: 6px 0; }
+.esp-gift { margin-top: 10px; }
+.esp-muted { font-size: 12px; color: #9ca3af; }
+.esp-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 11px; font-size: 12.5px; line-height: 1.5; margin-bottom: 12px; }
+.esp-notice.warn { background: #fbf4e6; border: 1px solid #ecd9ae; color: #7a5714; }
+.esp-notice.ok { background: #eef8f1; border: 1px solid #c4e4cd; color: #1f7a3d; }
+.esp-notice-act { flex-shrink: 0; background: var(--ks-accent); color: #fff; border: none; border-radius: 8px; padding: 8px 13px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.esp-notice-act:hover { filter: brightness(1.06); }
 .ks-automodel {
   border: 1px solid var(--ks-line); background: var(--ks-paper2); color: var(--ks-ink2);
   padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
@@ -2125,6 +2235,11 @@ button { font-family: inherit; cursor: pointer; }
       this._facturaFormLegalName = '';  // valor input razón social
       this._facturaGenerando = false;   // pulsado Ticket o Factura, esperando respuesta
       this._pagoCita = null;            // datos pago {tipoPago, desglose...} para mostrar método
+      // v1.1.71 — Apertura de caja (fondo inicial del día). Módulo opcional
+      // gobernado por SalonConfig.arqueoActivo (lo decide el page code).
+      this._aperturaChequeada = false;   // ¿ya se disparó check-apertura-caja?
+      this._aperturaSaltadaFecha = null; // fecha para la que el operador saltó
+      this._aperturaFondo = 0;           // importe editable del modal de apertura
     }
 
     connectedCallback() {
@@ -2211,7 +2326,112 @@ button { font-family: inherit; cursor: pointer; }
       // queries vs polling fijo cuando hay pestañas abiertas en background.
       this._startAutoRefresh();
 
+      // v1.1.71 — Apertura de caja: pedir el check UNA vez y solo para HOY.
+      // El page code decide (según SalonConfig.arqueoActivo) si responde con
+      // una sugerencia de fondo ('caja-fondo-sugerido') o no hace nada
+      // ('apertura-estado'). Fire-and-forget: nunca bloquea el montaje.
+      this._maybeCheckApertura();
+
       console.log(`${TAG} Montado.`);
+    }
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.71 — APERTURA DE CAJA (fondo inicial del día)
+    // ═══════════════════════════════════════════════════
+    _maybeCheckApertura() {
+      if (this._aperturaChequeada) return;
+      if (this._fecha !== todayISO()) return;   // solo para HOY
+      this._aperturaChequeada = true;
+      this._sendToPage('check-apertura-caja', { fechaISO: this._fecha });
+    }
+
+    _onFondoSugerido(p) {
+      // Guards: solo HOY, solo si no se ha saltado hoy, y sin otro modal
+      // de caja/apertura ya abierto (no interrumpir un arqueo en curso).
+      if (this._fecha !== todayISO()) return;
+      if (this._aperturaSaltadaFecha === this._fecha) return;
+      if (this.shadowRoot.getElementById('aperturaScrim')) return;
+      if (this.shadowRoot.getElementById('cajaScrim')) return;
+      this._openAperturaModal({
+        fondoSugerido: Number(p.fondoSugerido || 0),
+        origen: p.origen || 'cero',
+        fechaOrigen: p.fechaOrigen || ''
+      });
+    }
+
+    _onCajaAbierta(p) {
+      if (p && p.ok) {
+        const fondo = Number((p.registro && p.registro.openingBalance) || 0);
+        this._toast(`Caja abierta ✓ · fondo ${fondo}€`);
+        this._cerrarApertura();
+        // Si el arqueo está abierto en este momento, refrescar para que el
+        // "Fondo inicial" y el "Efectivo esperado" reflejen el nuevo fondo.
+        this._cajaRefresh();
+      } else {
+        this._toast(`No se pudo abrir la caja${p && p.error ? ': ' + p.error : ''}`);
+      }
+    }
+
+    _origenAperturaTexto(origen, fechaOrigen, fondo) {
+      const eur = `${fondo || 0}€`;
+      switch (origen) {
+        case 'fondoFijo':
+          return `Fondo fijo configurado para tu salón: <strong>${eur}</strong>.`;
+        case 'cierreAyer':
+          return `Efectivo contado al cerrar caja el <strong>${esc(fechaOrigen || 'día anterior')}</strong>: <strong>${eur}</strong>.`;
+        case 'esperadoAyer':
+          return `Último efectivo registrado el <strong>${esc(fechaOrigen || 'día anterior')}</strong>: <strong>${eur}</strong>.`;
+        default:
+          return `No hay historial previo de caja. Empezamos desde <strong>0€</strong> (edítalo si tu caja arranca con otro fondo).`;
+      }
+    }
+
+    _openAperturaModal({ fondoSugerido, origen, fechaOrigen }) {
+      const root = this.shadowRoot;
+      root.getElementById('aperturaScrim')?.remove();
+      this._aperturaFondo = Number(fondoSugerido || 0);
+
+      const scrim = document.createElement('div');
+      scrim.className = 'ks-modal-scrim';
+      scrim.id = 'aperturaScrim';
+      // La apertura es un acto consciente: NO se cierra al clicar fuera.
+      // Solo "Saltar hoy" o "Confirmar apertura" cierran el modal.
+
+      const modal = document.createElement('div');
+      modal.className = 'ks-modal';
+      modal.id = 'aperturaModal';
+      modal.innerHTML = `
+        <div class="ks-modal-head">
+          <span class="ks-modal-staff">🌅 APERTURA DE CAJA</span>
+          <span class="ks-modal-status pending">Nuevo día</span>
+        </div>
+        <div class="ks-modal-meta">${this._fecha}</div>
+        <p class="ks-detail-note">${this._origenAperturaTexto(origen, fechaOrigen, this._aperturaFondo)}</p>
+        <div class="ks-disc-row">
+          <span class="ks-disc-lbl">💶 Fondo inicial</span>
+          <div class="ks-disc-input"><input id="aperturaInput" type="number" min="0" step="0.01" value="${this._aperturaFondo || ''}" placeholder="0"><span>€</span></div>
+        </div>
+        <div class="ks-modal-pays" style="margin-top:12px">
+          <button class="ks-pay" id="aperturaSaltar" style="flex:1;background:#fff;color:var(--ks-ink);border:1px solid var(--ks-line)">Saltar hoy</button>
+          <button class="ks-pay pay-efectivo" id="aperturaConfirm" style="flex:1">Confirmar apertura</button>
+        </div>`;
+      scrim.appendChild(modal);
+      root.appendChild(scrim);
+
+      const inp = modal.querySelector('#aperturaInput');
+      inp?.addEventListener('input', e => { this._aperturaFondo = parseFloat(e.target.value) || 0; });
+      modal.querySelector('#aperturaSaltar')?.addEventListener('click', () => {
+        this._aperturaSaltadaFecha = this._fecha;
+        this._cerrarApertura();
+      });
+      modal.querySelector('#aperturaConfirm')?.addEventListener('click', () => {
+        this._sendToPage('caja-abrir', { fechaISO: this._fecha, openingBalance: this._aperturaFondo });
+      });
+      setTimeout(() => { try { inp?.focus(); inp?.select(); } catch (_) {} }, 60);
+    }
+
+    _cerrarApertura() {
+      this.shadowRoot.getElementById('aperturaScrim')?.remove();
     }
 
     // v1.1.35 — Polling adaptativo
@@ -2522,6 +2742,13 @@ button { font-family: inherit; cursor: pointer; }
           break;
         }
         case 'clientesEncontrados': this._renderCliResults(p.clientes || []); break;
+        // v1.1.69 — ESPECIALES (venta manual)
+        case 'espClientesEncontrados': this._renderEspCli(p.clientes || []); break;
+        case 'espClienteCreado': this._onEspClienteCreado(p.data); break;
+        case 'especialesData': this._onEspData(p); break;
+        case 'bonoEmitido': this._onEspEmitido('bono', p.data); break;
+        case 'primeEmitido': this._onEspEmitido('prime', p.data); break;
+        case 'tarjetaEmitido': this._onEspEmitido('tarjeta', p.data); break;
         case 'clienteCreado': {
           const r = p.data || {};
           if (r.ok && r.cliente) { this._closeBlankForm(); this._seleccionarCliente(r.cliente); this._toast('Cliente creado'); }
@@ -2691,6 +2918,25 @@ button { font-family: inherit; cursor: pointer; }
         case 'pinValidated':
           this._onPinValidated(p);
           break;
+        // ─── v1.1.71: apertura de caja (fondo inicial del día) ───
+        case 'caja-fondo-sugerido':
+          this._onFondoSugerido(p);
+          break;
+        case 'caja-abierta':
+          this._onCajaAbierta(p);
+          break;
+        case 'apertura-estado':
+          // Informativo: módulo inactivo, o ya hay caja hoy. Nada que pintar.
+          break;
+        // v1.1.73 — fondo inicial forzado desde el arqueo
+        case 'caja-fondo-guardado':
+          if (p && p.ok) {
+            this._toast(`Fondo inicial forzado: ${Number((p.registro && p.registro.openingBalance) || 0)}€`);
+            this._cajaRefresh();
+          } else {
+            this._toast(`No se pudo forzar el fondo${p && p.error ? ': ' + p.error : ''}`);
+          }
+          break;
         default: break;
       }
     }
@@ -2815,9 +3061,8 @@ button { font-family: inherit; cursor: pointer; }
             </div>
             <div class="ks-brandhint">Recepción PRO · agenda operativa · CMS-first</div>
             <div class="ks-brandactions">
-              <button class="ks-akira">✦ AKIRA</button>
+              <button class="ks-especiales" id="espBtn">✦ ESPECIALES</button>
               <button class="ks-automodel">Modelo automático</button>
-              <button class="ks-homebtn" title="Inicio">⌂</button>
             </div>
           </div>
           <div class="ks-toolbar">
@@ -2930,6 +3175,10 @@ button { font-family: inherit; cursor: pointer; }
         if (!this._puede('ajustes')) { this._toast('No tienes permiso para esta acción'); return; }
         this._openSettings();
       });
+
+      // v1.1.69 — ESPECIALES: venta manual de PRIME/Bonos/Tarjetas
+      const espBtnEl = root.getElementById('espBtn');
+      if (espBtnEl) espBtnEl.addEventListener('click', () => this._openEspeciales());
 
       // ── Datepicker (V1) ──
       const openDp = (e) => { e.stopPropagation(); this._openDatePicker(); };
@@ -5919,6 +6168,7 @@ button { font-family: inherit; cursor: pointer; }
       const d = this._cajaData || {};
       if (d.error) { body.innerHTML = `<div class="ks-empty">Error: ${esc(d.error)}</div>`; return; }
       const cerrada = d.registro && d.registro.status === 'closed';
+      const guardado = d.registro && d.registro.status === 'saved';
       const st = this.shadowRoot.getElementById('cajaStatus');
       if (st) { st.textContent = cerrada ? 'Cerrada' : (d.registro?.status === 'saved' ? 'Guardada' : 'Abierta'); st.className = 'ks-modal-status ' + (cerrada ? 'paid' : 'pending'); }
 
@@ -5930,6 +6180,7 @@ button { font-family: inherit; cursor: pointer; }
       body.innerHTML = `
         <div class="ks-modal-items">
           <div class="ks-modal-item"><span class="ks-item-label">Fondo inicial</span><span class="ks-item-price">${Number(d.fondoInicial || 0)}€</span></div>
+          ${cerrada ? '' : `<div class="ks-disc-row" style="margin:2px 0 6px"><span class="ks-disc-lbl" style="font-size:11px;color:var(--ks-ink2)">Forzar fondo inicial</span><div class="ks-disc-input" style="display:flex;align-items:center;gap:6px"><input id="cajaFondo" type="number" min="0" step="0.01" value="" placeholder="${Number(d.fondoInicial || 0)}" style="width:72px;text-align:right;border:1px solid var(--ks-line);border-radius:6px;padding:3px 6px;font:inherit;color:var(--ks-ink)"><span>€</span><button id="cajaFondoSave" style="border:0;background:var(--ks-accent);color:#2a230f;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer">Forzar</button></div></div>`}
           <div class="ks-modal-item"><span class="ks-item-label">Cobros en efectivo</span><span class="ks-item-price">${Number(d.cobrosEfectivo || 0)}€</span></div>
           ${d.entradas ? `<div class="ks-modal-item"><span class="ks-item-label">+ Entradas manuales</span><span class="ks-item-price">${d.entradas}€</span></div>` : ''}
           ${d.salidas ? `<div class="ks-modal-item is-compl"><span class="ks-item-label">− Salidas</span><span class="ks-item-price">${d.salidas}€</span></div>` : ''}
@@ -5949,7 +6200,8 @@ button { font-family: inherit; cursor: pointer; }
         <div class="ks-modal-pays" style="margin-top:10px">
           <button class="ks-pay pay-tarjeta" id="cajaGuardar" style="flex:1">Guardar arqueo</button>
           ${this._cajaModo === 'cierre' ? `<button class="ks-pay pay-efectivo" id="cajaCerrar" style="flex:1">🔒 Cerrar día</button>` : ''}
-        </div>`}
+        </div>
+        ${guardado ? `<div style="text-align:center;margin-top:8px;font-size:12px;font-weight:800;color:oklch(0.5 0.14 150)">✓ Arqueo guardado${d.registro && d.registro.difference != null ? ` · dif ${Number(d.registro.difference)}€` : ''}</div>` : ''}`}
         ${movimientos.length ? `<div class="ks-modal-items" style="border-top:1px solid var(--ks-line2);margin-top:8px"><div class="ks-eyebrow" style="padding:6px 0">Movimientos del día</div>${movimientos.map(m => `<div class="ks-modal-item"><span class="ks-item-label">${esc(this._movLabel(m.movementType))} · ${esc(m.description || '')}</span><span class="ks-item-price">${Number(m.amount || 0)}€</span></div>`).join('')}</div>` : ''}
         <div class="ks-modal-foot"><span></span><button class="ks-modal-close" id="cajaClose">Cerrar</button></div>`;
 
@@ -5966,6 +6218,14 @@ button { font-family: inherit; cursor: pointer; }
         body.querySelector('#movEntry')?.addEventListener('click', () => this._cajaMovimiento('entry'));
         body.querySelector('#movExit')?.addEventListener('click', () => this._cajaMovimiento('exit'));
         body.querySelector('#movWithdraw')?.addEventListener('click', () => this._cajaMovimiento('withdrawal'));
+        // v1.1.73 — Forzar fondo inicial: sobrescribe openingBalance del día.
+        // Con el campo vacío no hace nada (evita forzar 0 por accidente).
+        body.querySelector('#cajaFondoSave')?.addEventListener('click', () => {
+          const raw = body.querySelector('#cajaFondo')?.value;
+          if (raw === '' || raw == null) { this._toast('Escribe un importe para forzar el fondo'); return; }
+          const v = parseFloat(raw) || 0;
+          this._sendToPage('caja-set-fondo', { fechaISO: this._fecha, openingBalance: v });
+        });
         body.querySelector('#cajaGuardar')?.addEventListener('click', () => {
           this._sendToPage('caja-guardar', { fechaISO: this._fecha, countedCash: this._cajaContado, differenceNote: this._cajaNota, countBreakdown: '', closedBy: '' });
         });
@@ -6852,6 +7112,316 @@ button { font-family: inherit; cursor: pointer; }
       root.appendChild(t);
       clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => t.remove(), 2600);
+    }
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.69 — ESPECIALES (venta manual PRIME/Bonos/Tarjetas)
+    // ═══════════════════════════════════════════════════
+    _openEspeciales() {
+      this._espCliente = null;
+      this._espNuevoAbierto = false;
+      this._espTab = 'bono';
+      this._espBonoIdx = -1;
+      this._espCampIdx = -1;
+      this._espRegalo = false;
+      this._espMetodo = 'Efectivo';
+      this._espEmitiendo = false;
+      this._espMsg = null;
+      const root = this.shadowRoot;
+      root.getElementById('espScrim')?.remove();
+      const scrim = document.createElement('div');
+      scrim.className = 'esp-scrim';
+      scrim.id = 'espScrim';
+      root.appendChild(scrim);
+      this._renderEsp();
+      // Datos frescos: config PRIME + servicios con bono + campañas vigentes.
+      this._sendToPage('getEspecialesData', {});
+    }
+
+    _closeEspeciales() {
+      this.shadowRoot.getElementById('espScrim')?.remove();
+    }
+
+    _renderEsp() {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const cli = this._espCliente;
+      const data = this._espData;
+      const tab = this._espTab;
+
+      // ── Bloque cliente ──
+      let cliHTML;
+      if (cli) {
+        cliHTML = `<div class="esp-chip">
+          <div><div class="esp-cli-name">${esc(cli.nombre || 'Cliente')}</div>
+          <div class="esp-cli-sub">${esc(cli.telefono || '')}${cli.email ? ' · ' + esc(cli.email) : ''}</div></div>
+          <button class="esp-link" id="espCliChange">Cambiar</button>
+        </div>`;
+      } else if (this._espNuevoAbierto) {
+        const d = this._espNvDraft || {};
+        cliHTML = `<div class="esp-row2">
+            <input class="esp-input" id="espNvNombre" placeholder="Nombre *" autocomplete="off" value="${esc(d.nombre || '')}" />
+            <input class="esp-input" id="espNvApellido" placeholder="Apellido" autocomplete="off" value="${esc(d.apellido || '')}" />
+          </div>
+          <div class="esp-row2" style="margin-top:8px;">
+            <input class="esp-input" id="espNvTel" placeholder="Teléfono" autocomplete="off" value="${esc(d.telefono || '')}" />
+            <input class="esp-input" id="espNvEmail" placeholder="Email" autocomplete="off" value="${esc(d.email || '')}" />
+          </div>
+          <div class="esp-row2" style="margin-top:8px;">
+            <button class="esp-link" id="espNvCancel">Cancelar</button>
+            <button class="esp-emit" id="espNvSave" style="margin-top:0;padding:9px;">Guardar cliente</button>
+          </div>`;
+      } else {
+        cliHTML = `<input class="esp-input" id="espCliBuscar" placeholder="Buscar por nombre, teléfono o email…" autocomplete="off" />
+          <div id="espCliResults"></div>
+          <button class="esp-link" id="espCliNuevo">+ Cliente nuevo</button>`;
+      }
+
+      // ── Bloque producto ──
+      let prodHTML = '';
+      if (!data) {
+        prodHTML = `<div class="esp-muted">Cargando productos…</div>`;
+      } else if (tab === 'prime') {
+        const cfg = data.config || {};
+        const precio = (typeof cfg.primeAnnualPrice === 'number') ? cfg.primeAnnualPrice : 0;
+        const meses = (typeof cfg.primeDurationMonths === 'number') ? cfg.primeDurationMonths : 12;
+        prodHTML = `<div class="esp-price">Tarjeta PRIME — ${precio}€ <small>· ${meses} meses de vigencia</small></div>`;
+      } else if (tab === 'bono') {
+        const servicios = data.servicios || [];
+        if (!servicios.length) {
+          prodHTML = `<div class="esp-muted">No hay servicios con bono activo.</div>`;
+        } else {
+          const opts = servicios.map((s, i) => `<option value="${i}"${i === this._espBonoIdx ? ' selected' : ''}>${esc(s.label)}</option>`).join('');
+          prodHTML = `<select class="esp-select" id="espBonoSel"><option value="-1">— Elige un servicio con bono —</option>${opts}</select>`;
+          const s = servicios[this._espBonoIdx];
+          if (s) {
+            prodHTML += `<div class="esp-price">${s.bonoNumero} sesiones — ${s.precioBonoCalculado}€ <small>· ${s.bonoDescuento}% dto sobre ${s.precioBrutoCalculado}€</small></div>`;
+          }
+        }
+      } else if (tab === 'tarjeta') {
+        const camps = data.campaigns || [];
+        if (!camps.length) {
+          prodHTML = `<div class="esp-muted">No hay campañas de tarjeta vigentes.</div>`;
+        } else {
+          const opts = camps.map((c, i) => `<option value="${i}"${i === this._espCampIdx ? ' selected' : ''}>${esc(c.name || c.serviceLabel || 'Tarjeta')}</option>`).join('');
+          prodHTML = `<select class="esp-select" id="espCampSel"><option value="-1">— Elige una campaña —</option>${opts}</select>`;
+          const c = camps[this._espCampIdx];
+          if (c) {
+            prodHTML += `<div class="esp-price">${c.promoPrice}€${c.serviceLabel ? ` <small>· ${esc(c.serviceLabel)}</small>` : ''}</div>`;
+            prodHTML += `<div class="esp-gift">
+              <label class="esp-muted"><input type="checkbox" id="espRegalo"${this._espRegalo ? ' checked' : ''}/> Es un regalo</label>
+              ${this._espRegalo ? `<div class="esp-row2" style="margin-top:8px;">
+                <input class="esp-input" id="espRecNombre" placeholder="Nombre destinatario *" autocomplete="off" />
+                <input class="esp-input" id="espRecEmail" placeholder="Email destinatario *" autocomplete="off" />
+              </div>
+              <input class="esp-input" id="espRecMsg" placeholder="Mensaje (opcional)" autocomplete="off" style="margin-top:8px;" />` : ''}
+            </div>`;
+          }
+        }
+      }
+
+      const precio = this._espPrecioActual();
+      const payHTML = ['Efectivo', 'Tarjeta', 'Bizum']
+        .map(m => `<button class="esp-paybtn${this._espMetodo === m ? ' active' : ''}" data-m="${m}">${m}</button>`).join('');
+      const puede = this._espPuedeEmitir();
+
+      scrim.innerHTML = `<div class="esp-modal">
+        <div class="esp-head"><span class="esp-title">✦ ESPECIALES · Venta manual</span><button class="esp-x" id="espX">✕</button></div>
+        <div class="esp-body">
+          <div class="esp-sec"><span class="esp-eyebrow">Cliente</span>${cliHTML}</div>
+          <div class="esp-sec"><span class="esp-eyebrow">Producto</span>
+            <div class="esp-tabs">
+              <button class="esp-tab${tab === 'prime' ? ' active' : ''}" data-tab="prime">⭐ PRIME</button>
+              <button class="esp-tab${tab === 'bono' ? ' active' : ''}" data-tab="bono">🎟️ Bono</button>
+              <button class="esp-tab${tab === 'tarjeta' ? ' active' : ''}" data-tab="tarjeta">🎁 Tarjeta</button>
+            </div>
+            ${prodHTML}
+          </div>
+          <div class="esp-sec"><span class="esp-eyebrow">Método de pago</span><div class="esp-pay">${payHTML}</div></div>
+          ${this._espMsg ? `<div class="esp-notice ${this._espMsg.tipo}"><span>${esc(this._espMsg.texto)}</span>${this._espMsg.accion ? `<button class="esp-notice-act" id="espMsgAct">${esc(this._espMsg.accion.label)}</button>` : ''}</div>` : ''}
+          <button class="esp-emit" id="espEmit"${puede ? '' : ' disabled'}>${this._espEmitiendo ? 'Emitiendo…' : `Emitir y cobrar${precio > 0 ? ` · ${precio}€` : ''}`}</button>
+        </div>
+      </div>`;
+      this._espRewire();
+    }
+
+    _espRewire() {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const $ = (id) => scrim.querySelector('#' + id);
+      const clr = () => { this._espMsg = null; };
+
+      $('espX') && $('espX').addEventListener('click', () => this._closeEspeciales());
+
+      const buscar = $('espCliBuscar');
+      if (buscar) {
+        buscar.addEventListener('input', e => {
+          const q = e.target.value;
+          clearTimeout(this._espBuscarTimer);
+          if (q.trim().length < 2) { this._renderEspCli([]); return; }
+          this._espBuscarTimer = setTimeout(() => this._sendToPage('espBuscarCliente', { query: q }), 250);
+        });
+      }
+      $('espCliNuevo') && $('espCliNuevo').addEventListener('click', () => { clr(); this._espNvDraft = {}; this._espNuevoAbierto = true; this._renderEsp(); });
+      $('espCliChange') && $('espCliChange').addEventListener('click', () => { clr(); this._espCliente = null; this._renderEsp(); });
+      $('espNvCancel') && $('espNvCancel').addEventListener('click', () => { clr(); this._espNuevoAbierto = false; this._renderEsp(); });
+      $('espNvSave') && $('espNvSave').addEventListener('click', () => this._espGuardarNuevo());
+
+      scrim.querySelectorAll('.esp-tab').forEach(b => b.addEventListener('click', () => {
+        clr(); this._espTab = b.getAttribute('data-tab'); this._renderEsp();
+      }));
+
+      $('espBonoSel') && $('espBonoSel').addEventListener('change', e => { clr(); this._espBonoIdx = parseInt(e.target.value, 10); this._renderEsp(); });
+      $('espCampSel') && $('espCampSel').addEventListener('change', e => { clr(); this._espCampIdx = parseInt(e.target.value, 10); this._renderEsp(); });
+      $('espRegalo') && $('espRegalo').addEventListener('change', e => { clr(); this._espRegalo = e.target.checked; this._renderEsp(); });
+
+      scrim.querySelectorAll('.esp-paybtn').forEach(b => b.addEventListener('click', () => {
+        this._espMetodo = b.getAttribute('data-m'); this._renderEsp();
+      }));
+
+      $('espMsgAct') && $('espMsgAct').addEventListener('click', () => {
+        const a = this._espMsg && this._espMsg.accion;
+        this._espMsg = null;
+        if (a && a.tipo === 'prime') this._espTab = 'prime';
+        this._renderEsp();
+      });
+
+      $('espEmit') && $('espEmit').addEventListener('click', () => this._espEmitir());
+    }
+
+    _renderEspCli(clientes) {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const wrap = scrim.querySelector('#espCliResults');
+      if (!wrap) return;
+      if (!clientes || !clientes.length) { wrap.innerHTML = ''; return; }
+      this._espUltimosCli = clientes;
+      wrap.innerHTML = `<div class="esp-cli-results">${clientes.map((c, i) => `
+        <div class="esp-cli-item" data-idx="${i}">
+          <div class="esp-cli-name">${esc(c.nombreCompleto || c.nombre || 'Sin nombre')}</div>
+          <div class="esp-cli-sub">${esc(c.telefono || '')}${c.email ? ' · ' + esc(c.email) : ''}</div>
+        </div>`).join('')}</div>`;
+      wrap.querySelectorAll('.esp-cli-item').forEach(it => it.addEventListener('click', () => {
+        this._espSelectCliente(this._espUltimosCli[parseInt(it.getAttribute('data-idx'), 10)]);
+      }));
+    }
+
+    _espSelectCliente(c) {
+      if (!c) return;
+      this._espCliente = { contactId: c.contactId || '', nombre: c.nombreCompleto || c.nombre || '', telefono: c.telefono || '', email: c.email || '' };
+      this._espNuevoAbierto = false;
+      this._renderEsp();
+    }
+
+    _espGuardarNuevo() {
+      const scrim = this.shadowRoot.getElementById('espScrim');
+      if (!scrim) return;
+      const elNom = scrim.querySelector('#espNvNombre');
+      const nombre = (elNom?.value || '').trim();
+      // Guardamos lo escrito por si la creación falla y hay que repintar el form.
+      this._espNvDraft = {
+        nombre,
+        apellido: (scrim.querySelector('#espNvApellido')?.value || '').trim(),
+        telefono: (scrim.querySelector('#espNvTel')?.value || '').trim(),
+        email: (scrim.querySelector('#espNvEmail')?.value || '').trim()
+      };
+      if (!nombre) { if (elNom) { elNom.style.borderColor = '#d9a54d'; elNom.focus(); } return; }
+      this._sendToPage('espCrearCliente', this._espNvDraft);
+    }
+
+    _onEspClienteCreado(data) {
+      if (data && data.ok && data.cliente) {
+        this._espNvDraft = {};
+        this._espSelectCliente(data.cliente);
+      } else {
+        this._espMsg = { tipo: 'warn', texto: 'No se ha podido guardar el cliente. Revisa los datos e inténtalo de nuevo.' };
+        this._renderEsp();
+      }
+    }
+
+    _onEspData(p) {
+      this._espData = { config: p.config || null, servicios: p.servicios || [], campaigns: p.campaigns || [] };
+      if (this.shadowRoot.getElementById('espScrim') && !this._espNuevoAbierto) this._renderEsp();
+    }
+
+    _espPrecioActual() {
+      const d = this._espData; if (!d) return 0;
+      if (this._espTab === 'prime') return (d.config && typeof d.config.primeAnnualPrice === 'number') ? d.config.primeAnnualPrice : 0;
+      if (this._espTab === 'bono') { const s = (d.servicios || [])[this._espBonoIdx]; return s ? (s.precioBonoCalculado || 0) : 0; }
+      if (this._espTab === 'tarjeta') { const c = (d.campaigns || [])[this._espCampIdx]; return c ? (c.promoPrice || 0) : 0; }
+      return 0;
+    }
+
+    _espPuedeEmitir() {
+      if (this._espEmitiendo) return false;
+      if (!this._espCliente || !this._espCliente.contactId) return false;
+      if (this._espTab === 'prime') return true;
+      if (this._espTab === 'bono') return this._espBonoIdx >= 0 && !!((this._espData && this._espData.servicios) || [])[this._espBonoIdx];
+      if (this._espTab === 'tarjeta') return this._espCampIdx >= 0 && !!((this._espData && this._espData.campaigns) || [])[this._espCampIdx];
+      return false;
+    }
+
+    _espEmitir() {
+      if (!this._espPuedeEmitir()) return;
+      this._espMsg = null;
+      const cli = this._espCliente;
+      const base = { contactId: cli.contactId, clientName: cli.nombre, buyerEmail: cli.email || '', buyerPhone: cli.telefono || '', metodoPago: this._espMetodo };
+      const scrim = this.shadowRoot.getElementById('espScrim');
+
+      if (this._espTab === 'prime') {
+        this._espEmitiendo = true; this._renderEsp();
+        this._sendToPage('emitirPrime', { payload: base });
+
+      } else if (this._espTab === 'bono') {
+        const s = this._espData.servicios[this._espBonoIdx];
+        this._espEmitiendo = true; this._renderEsp();
+        this._sendToPage('emitirBono', { payload: Object.assign({}, base, { serviceSetupUid: s.setupUid }) });
+
+      } else if (this._espTab === 'tarjeta') {
+        const c = this._espData.campaigns[this._espCampIdx];
+        const payload = Object.assign({}, base, { campaignId: c._id, isGift: this._espRegalo });
+        if (this._espRegalo && scrim) {
+          const rn = scrim.querySelector('#espRecNombre'), re = scrim.querySelector('#espRecEmail');
+          payload.recipientName = (rn?.value || '').trim();
+          payload.recipientEmail = (re?.value || '').trim();
+          payload.recipientMessage = (scrim.querySelector('#espRecMsg')?.value || '').trim();
+          if (!payload.recipientName || !payload.recipientEmail) {
+            if (!payload.recipientName && rn) { rn.style.borderColor = '#d9a54d'; rn.focus(); }
+            if (!payload.recipientEmail && re) { re.style.borderColor = '#d9a54d'; if (payload.recipientName) re.focus(); }
+            return;
+          }
+        }
+        this._espEmitiendo = true; this._renderEsp();
+        this._sendToPage('emitirTarjeta', { payload });
+      }
+    }
+
+    _onEspEmitido(tipo, data) {
+      this._espEmitiendo = false;
+      const nom = (this._espCliente && this._espCliente.nombre ? this._espCliente.nombre.split(/\s+/)[0] : 'el cliente');
+      if (data && data.success) {
+        const label = { bono: 'El bono', prime: 'La tarjeta PRIME', tarjeta: 'La tarjeta' }[tipo] || 'El producto';
+        this._espMsg = { tipo: 'ok', texto: `¡Listo! ${label} ya está activa para ${nom}.` };
+        this._renderEsp();
+        clearTimeout(this._espCloseTimer);
+        this._espCloseTimer = setTimeout(() => this._closeEspeciales(), 1700);
+        return;
+      }
+      if (data && data.needsPrime) {
+        this._espMsg = {
+          tipo: 'warn',
+          texto: `Los bonos son un detalle para socios del Club PRIME, y ${nom} todavía no forma parte. Puedes darle de alta la tarjeta PRIME y, ya dentro, ofrecerle el bono.`,
+          accion: { label: 'Dar de alta PRIME', tipo: 'prime' }
+        };
+      } else if (data && data.alreadyHasVoucher) {
+        const svc = (this._espData && this._espData.servicios[this._espBonoIdx] && this._espData.servicios[this._espBonoIdx].label) || 'ese servicio';
+        this._espMsg = { tipo: 'warn', texto: `${nom} ya tiene un bono en marcha de ${svc}. Cuando lo termine, podrás ofrecerle uno nuevo.` };
+      } else if (data && data.alreadyActive) {
+        this._espMsg = { tipo: 'warn', texto: `${nom} ya es socio del Club PRIME, no hace falta activarla de nuevo.` };
+      } else {
+        this._espMsg = { tipo: 'warn', texto: 'No se ha podido completar la venta. Inténtalo de nuevo en un momento.' };
+      }
+      this._renderEsp();
     }
   }
 
