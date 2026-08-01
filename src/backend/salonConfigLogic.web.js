@@ -1,8 +1,39 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.6
+   salonConfigLogic.web.js  v1.0.8
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.8 · 1 Ago 2026 · LIMPIEZA — revertido v1.0.7. Quitados
+     arqueoActivo (de ALL_FIELDS y BOOLEAN_FIELDS) y fondoCajaFijo (de
+     ALL_FIELDS y NUMBER_FIELDS): eran campos del enfoque descartado del
+     arqueo. El fondo inicial se resuelve solo con el arrastre
+     (cashRegisterLogic v1.1.3, sin leer SalonConfig). Recomendado borrar
+     también esos 2 campos del CMS SalonConfig. Otros 43 campos intactos.
+   v1.0.7 · 1 Ago 2026 · Arqueo de caja: fondoCajaFijo + arqueoActivo
+     - ALL_FIELDS     += fondoCajaFijo, arqueoActivo
+     - NUMBER_FIELDS  += fondoCajaFijo
+     - BOOLEAN_FIELDS += arqueoActivo
+     - arqueoActivo (Boolean): activa el MÓDULO de arqueo/cierre de caja
+       para el salón. Cuando está activo, Recepción PRO ofrece por la
+       mañana el modal de APERTURA DE CAJA (fondo inicial del día) y el
+       botón manual "Registrar fondo inicial" dentro del arqueo. Cuando
+       está desactivado (o vacío), Recepción PRO NO muestra el modal de
+       apertura — comportamiento histórico intacto. El arqueo es un
+       módulo opcional (el manual ya lo declara así): cada salón decide.
+     - fondoCajaFijo (Number): fondo fijo de caja diario en euros. Si el
+       salón trabaja con fondo fijo cada mañana (retira el resto a
+       diario), aquí indica ese importe y la apertura lo propone. Si se
+       deja vacío/0, la apertura propone el efectivo CONTADO en el cierre
+       del día anterior (arrastre natural del saldo). Vacío/no-numérico
+       → 0 (interpretado como "sin fondo fijo → arrastrar cierre").
+     - LO CONSUME: cashRegisterLogic.web.js v1.1.0 (getFondoSugerido lee
+       fondoCajaFijo como prioridad 1 de la cascada) y el page code de
+       Recepción PRO (lee arqueoActivo para decidir si dispara el modal
+       de apertura).
+     - Sin estos campos en ALL_FIELDS el backend los descartaría en el
+       merge de updateSalonConfig y NO se guardarían.
+     - Pareja widget: widget_salon_config v1.0.12 (fondoCajaFijo en
+       sección Operativa; arqueoActivo en Módulos Opcionales).
    v1.0.6 · 8 Jul 2026 · closingGraceMin — margen de extensión horario
      - ALL_FIELDS    += closingGraceMin
      - NUMBER_FIELDS += closingGraceMin
@@ -80,7 +111,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[SalonConfig v1.0.6]';
+const TAG = '[SalonConfig v1.0.8]';
 const COLLECTION = 'SalonConfig';
 
 // ── Lista completa de field IDs (53 user fields) ──
@@ -141,7 +172,7 @@ const ALL_FIELDS = [
   // v1.0.5 — ANCLA Wix Bookings del salón (Service ID único)
   'wixAnclaId',
   // v1.0.6 — Margen extensión horario (min) para reservas ONLINE
-  'closingGraceMin'
+  'closingGraceMin',
 ];
 
 // ── Campos booleanos (para parseo correcto) ──
@@ -152,7 +183,7 @@ const BOOLEAN_FIELDS = [
   'waActive',
   'whatsappPro',
   // v1.0.3 — toggle del sistema de login de Recepción
-  'usersActivation'
+  'usersActivation',
 ];
 
 // ── Campos numéricos ──
@@ -177,7 +208,7 @@ const NUMBER_FIELDS = [
   'ticketStartNumber',
   // v1.0.6 — margen extensión horario (min) para reservas ONLINE.
   // Aplicado por widgetPublicoLogic.web.js v0.8.0. Vacío/null → 0.
-  'closingGraceMin'
+  'closingGraceMin',
 ];
 
 /**
