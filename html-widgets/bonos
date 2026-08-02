@@ -10,8 +10,40 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════
-   KAMISUITE — Widget público Bonos v1.0.3
+   KAMISUITE — Widget público Bonos v1.0.6
    F2.3 del módulo Productos Custom.
+
+   v1.0.6 (2 ago 2026):
+     · 🗂️ Catálogo ordenado ALFABÉTICAMENTE por group (categoría),
+       agrupando las cards en bloques. Se ordena una lista de índices
+       (no state.vouchers) para conservar el data-idx original del
+       click; desempate por label dentro del mismo grupo.
+     · ➖ LÍNEA DE SEPARACIÓN entre bloques de categoría: separador
+       full-width en el grid (.kp-group-sep, grid-column:1/-1) que se
+       inserta cada vez que cambia el group.
+
+   v1.0.5 (2 ago 2026):
+     · 🏷️ FIX categoría de la card del catálogo: se leía serviceFamily
+       (con fallback a serviceGroup); ahora lee SOLO serviceGroup, que
+       es el campo `group` de ServiceCatalog (la categoría correcta).
+       Sin fallback a family (mostraba el dato equivocado). Sin cambios
+       en backend: getVoucherCatalog ya enviaba serviceGroup = c.group.
+
+   v1.0.4 (2 ago 2026):
+     · 🏷️ DETALLE DEL BONO: la categoría (serviceFamily) del hero se
+       sustituye por el PLAZO DE USO y la FRECUENCIA del bono. La card
+       del catálogo NO cambia (sigue mostrando familia + usos).
+       - Plazo de uso: bonusValidityDays días si el servicio lo define
+         (>0); si no, el plazo global en meses (globalValidityMonths).
+       - Frecuencia: "cada N días" si bonusUseIntervalDays > 0; si 0/
+         vacío, "USO LIBRE".
+       Datos de solo lectura que envía voucherPublicLogic.web.js v1.2.0
+       en getVoucherCatalog (mismo criterio que la emisión del bono).
+       Nuevo bloque #custTerms (sustituye a #custFamily) + CSS
+       .kp-panel-hero-info .kp-hero-terms. Helper renderTerms().
+     · Cero cambios en la card del catálogo, variantes, precios, flujo
+       de compra, estados de vista, skins ni backend salvo el shape
+       ampliado de getVoucherCatalog.
 
    v1.0.3 (3 jul 2026):
      · 🔧 Selector de variante MOVIDO de la card al modal.
@@ -245,6 +277,14 @@ html, body {
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 14px;
 }
+/* v1.0.6 — Línea de separación entre bloques de categoría (group).
+   Ocupa toda la fila del grid para forzar el salto de bloque. */
+.kp-group-sep {
+  grid-column: 1 / -1;
+  height: 0;
+  border-top: 1px solid var(--kr-line-2);
+  margin: 2px 0;
+}
 .kp-card {
   background: var(--kr-surface);
   border-radius: var(--kr-radius);
@@ -397,6 +437,23 @@ html, body {
   color: var(--kr-ink-3);
   font-weight: var(--kr-w-semi);
   margin-bottom: 6px;
+}
+/* v1.0.4 — Plazo de uso + frecuencia del bono en el hero del detalle
+   (sustituye a .family / la categoría). */
+.kp-panel-hero-info .kp-hero-terms {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+.kp-panel-hero-info .kp-hero-terms .t {
+  font-size: var(--kr-fs-xs);
+  color: var(--kr-ink-2);
+  line-height: 1.35;
+}
+.kp-panel-hero-info .kp-hero-terms .t strong {
+  color: var(--kr-ink);
+  font-weight: var(--kr-w-semi);
 }
 .kp-panel-hero-info .stats {
   font-size: var(--kr-fs-xs);
@@ -755,7 +812,7 @@ html, body {
           <img id="custImg" src="" alt="">
         </div>
         <div class="kp-panel-hero-info">
-          <div class="family" id="custFamily"></div>
+          <div class="kp-hero-terms" id="custTerms"></div>
           <h3 id="custLabel"></h3>
           <div class="stats">
             <strong id="custUsos">—</strong> usos · <strong id="custDescuento">—</strong>% descuento
@@ -1010,6 +1067,23 @@ html, body {
       return dt.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
     } catch (e) { return '—'; }
   }
+  // v1.0.4 — Plazo de uso y frecuencia del bono (hero del detalle).
+  // Sustituye a la categoría. Lee lo que envía voucherPublicLogic v1.2.0:
+  //   · bonusValidityDays (días; 0 → plazo global en meses)
+  //   · bonusUseIntervalDays (días entre usos; 0 → USO LIBRE)
+  //   · globalValidityMonths (fallback en meses)
+  function fmtDias(n) { return n === 1 ? '1 día' : n + ' días'; }
+  function fmtMeses(n) { return n === 1 ? '1 mes' : n + ' meses'; }
+  function renderTerms(v) {
+    var validityDays = (typeof v.bonusValidityDays === 'number') ? v.bonusValidityDays : 0;
+    var globalMonths = (typeof v.globalValidityMonths === 'number' && v.globalValidityMonths > 0) ? v.globalValidityMonths : 12;
+    var intervalDays = (typeof v.bonusUseIntervalDays === 'number') ? v.bonusUseIntervalDays : 0;
+    var plazoTxt = (validityDays > 0) ? fmtDias(validityDays) : fmtMeses(globalMonths);
+    var frecTxt = (intervalDays > 0) ? ('cada ' + fmtDias(intervalDays)) : 'USO LIBRE';
+    return '<div class="t">Plazo de uso: <strong>' + esc(plazoTxt) + '</strong></div>'
+         + '<div class="t">Frecuencia: <strong>' + esc(frecTxt) + '</strong></div>';
+  }
+
   function emailValido(e) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
   }
@@ -1164,7 +1238,31 @@ html, body {
 
     var grid = $('cardsGrid');
     var html = '';
-    state.vouchers.forEach(function (v, idx) {
+
+    // v1.0.6 — Orden alfabético por group (categoría) para agrupar las
+    // cards en bloques. Se ordena una lista de ÍNDICES (no state.vouchers)
+    // para conservar el data-idx original que usa el click. Desempate por
+    // label dentro del mismo grupo.
+    var order = state.vouchers.map(function (_, i) { return i; });
+    order.sort(function (a, b) {
+      var ga = (state.vouchers[a].serviceGroup || '').toLowerCase();
+      var gb = (state.vouchers[b].serviceGroup || '').toLowerCase();
+      var c = ga.localeCompare(gb, 'es');
+      if (c !== 0) return c;
+      return (state.vouchers[a].serviceLabel || '').localeCompare(state.vouchers[b].serviceLabel || '', 'es');
+    });
+
+    var prevGroup = null;
+    order.forEach(function (idx) {
+      var v = state.vouchers[idx];
+
+      // v1.0.6 — Línea de separación entre bloques de categoría (group).
+      var gActual = v.serviceGroup || '';
+      if (prevGroup !== null && gActual !== prevGroup) {
+        html += '<div class="kp-group-sep" role="separator"></div>';
+      }
+      prevGroup = gActual;
+
       var img = v.imagePublicUrl || '';
       var ahorroPct = v.bonoDescuento > 0 ? Math.round(v.bonoDescuento) : 0;
       var hasVariants = !!v.hasVariants && Array.isArray(v.variantes) && v.variantes.length > 0;
@@ -1200,7 +1298,7 @@ html, body {
         + '</div>'
         + '<div class="kp-card-body">'
           + '<div class="kp-card-meta">'
-            + '<span class="kp-card-family">' + esc(v.serviceFamily || v.serviceGroup || '') + '</span>'
+            + '<span class="kp-card-family">' + esc(v.serviceGroup || '') + '</span>'
             + '<span class="kp-card-usos">' + v.bonoNumero + ' usos</span>'
           + '</div>'
           + '<div class="kp-card-label">' + esc(v.serviceLabel) + '</div>';
@@ -1273,7 +1371,7 @@ html, body {
 
     // Hero.
     $('custImg').src = v.imagePublicUrl || '';
-    $('custFamily').textContent = v.serviceFamily || v.serviceGroup || '';
+    $('custTerms').innerHTML = renderTerms(v);
     $('custLabel').textContent = v.serviceLabel || '';
     $('custUsos').textContent = v.bonoNumero;
     $('custDescuento').textContent = v.bonoDescuento;
