@@ -1,7 +1,243 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.76  ·  Popup ALMACÉN (papelera y sacar de almacén)
+ * VERSION: 1.1.87  ·  CAPA TÁCTIL — arrastrar con el dedo (tablet)
+ *
+ * v1.1.87 (5 ago 2026) — ARRASTRE CON EL DEDO. Los cuatro arrastres del
+ *   calendario estaban escritos exclusivamente contra mousedown /
+ *   mousemove / mouseup, y en un navegador táctil esa secuencia no
+ *   existe: un dedo que se desplaza produce touchmove y scroll, nunca
+ *   mousemove. En tablet quedaban muertos MOVER FASE, REDIMENSIONAR
+ *   FASE, EXTENDER CITA y CREAR BLOQUEO — este último de forma
+ *   silenciosa (un toque da mousedown+mouseup en el mismo punto, la
+ *   duración sale 0 y no se crea nada ni se avisa).
+ *
+ *   SOLUCIÓN — capa de traducción, no reescritura. La lógica de
+ *   arrastre NO se toca: se le entregan eventos de ratón sintéticos
+ *   construidos a partir del gesto del dedo. Cero cambios en el camino
+ *   de ratón; el mostrador de escritorio se comporta exactamente igual
+ *   que en v1.1.86.
+ *     · _fireSyntheticMouse(target, tipo, x, y) — el mousedown se
+ *       despacha sobre el elemento REAL tocado (para que los guardias
+ *       e.target.closest(...) sigan funcionando) y el mousemove/mouseup
+ *       sobre `document` con bubbles:true, que alcanza tanto a los
+ *       listeners de document (_bindFaseDrag) como a los de window
+ *       (_bindResizeExt, _bindBlockDrag), porque document propaga a
+ *       window.
+ *     · _bindTouchLongPressDrag(el, opts) — PULSACIÓN LARGA de 450ms
+ *       quieto y luego arrastrar. Se usa en los bloques de cita y en las
+ *       columnas libres. No es capricho: si el arrastre arrancase al
+ *       primer movimiento, el dedo apoyado sobre una cita o una columna
+ *       ya no podría hacer scroll vertical del calendario, y con la
+ *       agenda llena eso es casi toda la pantalla. Con pulsación larga
+ *       conviven los tres gestos: toque corto abre la cita, arrastre
+ *       directo hace scroll, mantener + arrastrar mueve.
+ *       Antes de armarse NO se llama a preventDefault, de modo que el
+ *       scroll y el click nativo siguen intactos. Al armar, clase
+ *       `is-touch-armed` (+ vibración breve donde exista) para que el
+ *       operador vea que el bloque ya está enganchado.
+ *     · _bindTouchImmediateDrag(el) — arrastre inmediato para las dos
+ *       asas de resize, que son objetivos deliberados y nunca superficie
+ *       de scroll.
+ *
+ *   CSS — primera media query del archivo, `@media (hover: none)`, que
+ *   por definición no aplica en escritorio con ratón:
+ *     · .ks-appt-timeadj (el 🕑 que ajusta la hora de la fase SIN
+ *       arrastrar) vivía con opacity:0 y solo se revelaba en :hover →
+ *       era invisible con el dedo. Ahora es permanente y de 20×20px.
+ *     · .ks-appt-resize conserva su aspecto (28×4px) pero gana zona de
+ *       impacto por pseudo-elemento (~56px de ancho) y touch-action:none.
+ *     · -webkit-touch-callout / user-select desactivados en cita y
+ *       columna, para que iOS no abra el menú de selección al mantener.
+ *
+ *   NO se toca: page code, backends, contrato de mensajes ('mover-fase',
+ *   'redimensionar-fase', 'extender-reserva', 'crearBloqueo'), ni ningún
+ *   flujo de negocio.
+ *
+ * v1.1.86  ·  TIENDA — CIF/DNI antes de cobrar
+ *
+ * v1.1.86 (4 ago 2026) — El CIF/DNI se pide en el paso de cliente, antes
+ *   de la venta, que es cuando el cliente está delante del mostrador. En
+ *   v1.1.85 solo aparecía después de cobrar, dentro del formulario de
+ *   factura. Ahora el paso de cliente se muestra siempre —también con un
+ *   cliente ya cargado en el aside, en cuyo caso los datos personales
+ *   salen rellenos y bloqueados y solo queda añadir los fiscales— y lo
+ *   capturado se arrastra al formulario de factura ya relleno.
+ *   Dejarlo vacío sigue permitiendo emitir ticket y convertirlo después.
+ *
+ * v1.1.85  ·  TIENDA con ticket / factura y CIF-DNI
+ *
+ * v1.1.85 (4 ago 2026) — La venta de TIENDA ya emite documento KAMISUITE.
+ *   Al registrar la venta el modal deja de cerrarse: muestra el resultado
+ *   y ofrece 🧾 Ticket (factura simplificada) o 📄 Factura completa. La
+ *   factura pide CIF/DNI y razón social, que se guardan en la ficha del
+ *   cliente para las próximas veces. Si ya se emitió ticket, aparece
+ *   "Convertir a factura" y el backend la emite como rectificativa, misma
+ *   mecánica que en el modal de cita.
+ *   El documento se ancla al cobro por `sourceKey` (el orderId de la
+ *   venta, que es el bookingId de su fila en PaymentReservations), no a
+ *   una reserva. Requiere facturacionSalonLogic v1.0.4, los campos
+ *   sourceType y sourceKey en Invoices, y page code v1.0.38.
+ *
+ * v1.1.84  ·  Botón TIENDA — venta de productos sin cita
+ *
+ * v1.1.84 (4 ago 2026) — TIENDA. Botón nuevo en la barra superior, junto a
+ *   FICHA TÉCNICA, para vender productos a quien entra sin cita. Abre el
+ *   MISMO modal de venta que ya existe dentro de la cita: buscador,
+ *   carrito, variantes, métodos de pago y el flujo MISSING_VARIANT. La
+ *   única diferencia es que no viaja packId, así que la venta queda
+ *   registrada contra el contacto y sin cita asociada.
+ *
+ *   Cliente: usa el que esté cargado en el aside. Si no hay ninguno, o el
+ *   que hay es provisional, pide nombre + teléfono o email y da de alta el
+ *   contacto por el circuito existente ('crearCliente'), encadenando
+ *   después la venta. NO hay venta anónima: venderProductosDesdeAgenda
+ *   aborta sin contactId porque genera un pedido real de tienda.
+ *
+ *   Gated con _puede('cobrar'), igual criterio que el resto de acciones
+ *   con dinero. Cero backend nuevo y cero cambios en el page code.
+ *
+ * v1.1.83  ·  Variantes al añadir complemento
+ *
+ * v1.1.83 (4 ago 2026) — El modal "⛓ Complemento" del modal de cita ya
+ *   permite elegir VARIANTE. Antes solo mandaba el setupUid y un
+ *   complemento con variantes (Peinado M/L/XL) entraba siempre a precio y
+ *   duración base. Mismo patrón que v1.1.81 hizo con "+ Servicio
+ *   adicional". El botón Añadir se rehabilita si el backend da error.
+ *   Requiere backend v1.0.44 y page code v1.0.37.
+ *
+ * v1.1.82  ·  Panel sin "Complementos de fases"
+ *
+ * v1.1.82 (4 ago 2026) — El grupo "Complementos de fases" deja de listarse
+ *   en la columna de servicios. Son piezas que el motor materializa dentro
+ *   de la cascada de otro servicio, y verlas sueltas entre los principales
+ *   confunde. Siguen accesibles en la pestaña "Complementos" del filtro de
+ *   rol. Solo cambia _buildGroups; el catálogo y el backend no se tocan.
+ *
+ * v1.1.81  ·  Armado múltiple, cantidad y variantes al añadir
+ *
+ * v1.1.81 (4 ago 2026) — ARMADO MÚLTIPLE + CANTIDAD + VARIANTES AL AÑADIR.
+ *   Tres cosas que ahorran pasos en el mostrador, sobre una única cita.
+ *
+ *   1) CANTIDAD en el popup de servicio. Caso real: una madre trae dos
+ *      niños al mismo corte. Antes había que repetir el proceso entero
+ *      (armar, clicar calendario, y otra vez). Ahora se elige cantidad 2
+ *      y los dos cortes se encadenan uno detrás del otro según duración.
+ *
+ *   2) VARIOS SERVICIOS armados antes de pintar. El popup, si ya hay algo
+ *      armado, cambia el botón a "＋ Añadir a la cita". La cabecera del
+ *      calendario muestra la lista completa y el orden de colocación.
+ *      Al encadenar líneas NO se ofrecen complementos opcionales ni
+ *      grupos exclusivos (premisa de diseño: elegirlos por línea haría el
+ *      popup inmanejable). Sí se mantienen las fases OBLIGATORIAS con
+ *      variantes (CASO B), porque sin esa elección el motor no puede
+ *      construir el servicio.
+ *
+ *   3) Selector "Mismo profesional" / "Elegir por servicio" en la
+ *      cabecera, visible solo cuando hay más de una línea. Con "mismo
+ *      profesional" un único clic coloca toda la cita. Con "elegir por
+ *      servicio" el operador clica una columna y hora por cada servicio.
+ *
+ *   ARQUITECTURA — es UNA SOLA CITA, no varias:
+ *     · Línea 1  → 'crearReserva'    (crearPackReserva) crea la fila.
+ *     · Líneas 2+ → 'agregar-servicio' (agregarServicioReserva) se suman a
+ *       ESA fila, exactamente igual que el botón "+ Servicio adicional"
+ *       del modal de cita, que es como se viene haciendo desde la V1.
+ *   Resultado: un total, un cobro unificado y UN SOLO WhatsApp/email al
+ *   cliente — la centralita de comunicaciones solo la dispara
+ *   crearPackReserva; agregarServicioReserva no notifica nada.
+ *   En modo "elegir por servicio", tras añadir la línea sus fases se
+ *   reubican en la columna elegida con el contrato existente 'mover-fase',
+ *   SIEMPRE de una en una: moverFase reescribe la fila entera y dos
+ *   movimientos en paralelo se pisarían.
+ *
+ *   4) "+ SERVICIO ADICIONAL" DEL MODAL DE CITA — ahora con elección de
+ *      VARIANTE. Antes solo viajaba el setupUid: un servicio con variantes
+ *      (Corte Mujer M/L/XL) se añadía siempre a precio y duración BASE, y
+ *      un servicio con fases obligatorias con variantes (Botox →
+ *      Planchado M/L/XL) fallaba con "Falta elegir variante de: …" sin
+ *      forma de añadirlo. Corregido en las tres capas.
+ *      Además, el botón "Añadir" vuelve a habilitarse si el backend
+ *      devuelve error (antes había que cerrar el modal para reintentar).
+ *
+ *   REQUIERE: backend recepcionProLogic v1.0.43 y page code v1.0.36.
+ *   Desplegar el backend y el page code ANTES que este widget: sin ellos,
+ *   varianteSel y complementosSetupUid se ignoran y las líneas con
+ *   variantes entrarían a precio base.
+ *
+ *   NO se toca: cobro, descuentos, canje de bonos, facturación, cierre,
+ *   arqueo, ALMACÉN, ESPECIALES, ficha técnica, bloqueos, drag&drop de
+ *   fases, login PIN, ni el flujo de una sola línea (idéntico a v1.1.80).
+ *
+ * v1.1.80  ·  Informe del día — detalle de ESPECIALES vendidos
+ *
+ * v1.1.80 (4 ago 2026) — CIERRE FINANCIERO: nueva sección "🎟️ Especiales
+ *   vendidos hoy" con el detalle de cada venta manual de Bono / Tarjeta
+ *   PRIME / Tarjeta promocional (concepto + cliente + método + importe y
+ *   línea de total). Hasta ahora esas ventas solo se veían agregadas como
+ *   "ESPECIALES · N cobros" en "Cobrado por staff", sin decir qué se había
+ *   vendido — un bono podía pasarse por alto leyendo el informe.
+ *   Se alimenta de cierre.especiales / cierre.especialesTotal que devuelve
+ *   el backend cierreLogicExtendido v1.1.5. Si el backend no está
+ *   desplegado, los campos llegan undefined y la sección simplemente no se
+ *   pinta (cero regresión).
+ *   También se añade el mismo bloque al texto del botón 📋 COPIAR del
+ *   cierre financiero (_cierreBloqueATexto('fin')).
+ *   NO se toca: rendimiento productivo, métodos de pago, IVA, cobrado por
+ *   staff, productos, externos, arqueo, ESPECIALES (venta), ALMACÉN, ficha
+ *   técnica, calendario, cobro, login PIN ni ningún otro flujo.
+ *
+ * v1.1.79  ·  FICHA TÉCNICA — fix del cliente precargado
+ *
+ * v1.1.79 (3 ago 2026) — FIX: el popup se reabría siempre con el cliente
+ *   de la última CITA abierta, ignorando el que el operador acabara de
+ *   seleccionar en el aside. Seleccionar cliente en el aside escribe en
+ *   this._cliente y no pasa por _openModal, así que _ftUltimoCliente no
+ *   se actualizaba y el popup quedaba clavado en el cliente anterior.
+ *
+ *   Orden de precarga ahora:
+ *     1) this._cliente  — el del aside. Es lo que el operador tiene
+ *        delante en el paso 1 del asistente; manda sobre lo demás.
+ *     2) this._ftUltimoCliente — última cita abierta en el calendario.
+ *     3) ninguno → el popup abre con el buscador vacío.
+ *
+ *   Solo cambia _openFichaTecnica(). Backend y page code sin tocar.
+ *
+ * v1.1.78  ·  Popup FICHA TÉCNICA — historial de color destacado
+ *
+ * v1.1.78 (3 ago 2026) — FICHA TÉCNICA: las fórmulas suben a su propio
+ *   bloque, delante del historial de visitas. En v1.1.77 iban dentro de
+ *   cada visita, y como solo el 15,7% de los tickets tiene fórmula
+ *   anotada, obligaba a rebuscar por el historial para encontrarlas.
+ *   Mismo criterio que el widget MEMORIA: Historial de color primero,
+ *   todas las visitas después. Se elimina el toggle 'Solo con fórmula',
+ *   que deja de tener sentido con los dos bloques separados.
+ *   Solo cambia _renderFt(). Backend y page code sin tocar.
+ *
+ * v1.1.77  ·  Popup FICHA TÉCNICA (histórico de color)
+ *
+ * v1.1.77 (3 ago 2026) — POPUP FICHA TÉCNICA en la barra superior, junto
+ *   a ALMACÉN y ESPECIALES. Consulta el histórico de color del sistema
+ *   anterior (2.019 tickets de 2026, 318 fórmulas técnicas) sin salir de
+ *   Recepción. Requiere page code v1.0.35 y memoriaLegacyLogic v1.0.3.
+ *
+ *   ⚠️ SIN DATOS ECONÓMICOS. Es la razón de existir de este popup: los
+ *   informes con dinero son de gerencia; la sala necesita la técnica.
+ *   El filtro está en el BACKEND (getFichaTecnicaCliente no envía
+ *   importes). Aquí no hay nada que ocultar porque nada llega.
+ *
+ *   Cliente precargado: _openModal guarda el último cliente cuya cita se
+ *   abrió (_ftUltimoCliente). Al pulsar el botón, si hay uno, se carga
+ *   directo; el buscador sigue disponible para cambiar. Se guarda al
+ *   abrir la cita, no al cerrarla, porque el modal tapa la barra y el
+ *   flujo real es: abrir cita → cerrar → consultar ficha.
+ *
+ *   Cambio ADITIVO y aislado: clases .ks-fichatec y .ft-*, mensajes
+ *   propios (ftBuscarCliente/getFichaTecnica → ftClientesEncontrados/
+ *   fichaTecnicaData). No se toca el calendario, el cobro, el arqueo,
+ *   el cierre, ESPECIALES ni el ALMACÉN.
+ *
+ * v1.1.76  ·  Popup ALMACÉN (papelera y sacar de almacén)
  * FECHA: 1 de agosto de 2026 (v1.1.75: 2 de agosto de 2026)
  * ---------------------------------------------------------------------
  * v1.1.76 (2 ago 2026) — POPUP ALMACÉN en la barra superior, junto a
@@ -1285,7 +1521,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.75]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.87]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1302,6 +1538,25 @@
 
   const CLASE_LABEL = { simple_unico: 'Simple', simple_variantes: 'Variantes', complejo_fases: 'Cascada', complejo_proceso: 'Cascada' };
   const ROLE_SHORT = { principal: 'P', complemento: 'C', ambos: 'P·C' };
+
+  // v1.1.81 — tope de repeticiones de una misma línea del armado. 10 es
+  // holgado para el caso real (familias) y evita que un dedo pegado al ＋
+  // genere una cadena interminable de llamadas al backend.
+  const CANT_MAX_LINEA = 10;
+
+  // v1.1.82 — Grupo del catálogo que NO se lista en la columna de servicios
+  // salvo que el filtro de rol sea explícitamente "Complementos". Son piezas
+  // que el motor materializa dentro de la cascada de otro servicio; verlas
+  // sueltas junto a los principales confunde al operador.
+  // Se compara normalizado (sin guiones, sin acentos, sin mayúsculas) para
+  // que dé igual cómo esté escrito el `group` en ServiceCatalog.
+  const GRUPO_OCULTO_PANEL = 'complementos de fases';
+  function normGrupo(g) {
+    return String(g || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[-_]+/g, ' ').replace(/\s+/g, ' ')
+      .trim().toLowerCase();
+  }
 
   // calendario
   const CAL_START = 9, CAL_END = 21, SLOT_MIN = 30;
@@ -1411,6 +1666,56 @@ button { font-family: inherit; cursor: pointer; }
   padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
 }
 .ks-especiales:hover { filter: brightness(1.06); }
+/* ── v1.1.77 · Botón y modal FICHA TÉCNICA ── */
+.ks-fichatec {
+  border: 1px solid #7d5bb5; background: #7d5bb5; color: #fff;
+  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  margin-right: 8px;
+}
+.ks-fichatec:hover { filter: brightness(1.08); }
+/* ── v1.1.84 · Botón TIENDA (venta de productos sin cita) ── */
+.ks-tienda {
+  border: 1px solid #0f766e; background: #0f766e; color: #fff;
+  padding: 7px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  margin-right: 8px;
+}
+.ks-tienda:hover { filter: brightness(1.08); }
+.ft-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.ft-modal { background: #fff; border-radius: 14px; width: min(760px,96vw); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.ft-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); }
+.ft-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
+.ft-sub { font-size: 12px; color: var(--ks-ink3); margin-top: 2px; }
+.ft-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
+.ft-search { padding: 13px 20px; border-bottom: 1px solid var(--ks-line); }
+.ft-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; }
+.ft-results { border: 1px solid var(--ks-line); border-radius: 8px; margin-top: 6px; max-height: 190px; overflow: auto; }
+.ft-cli { padding: 9px 12px; border-bottom: 1px solid var(--ks-line); cursor: pointer; }
+.ft-cli:last-child { border-bottom: none; }
+.ft-cli:hover { background: var(--ks-paper2); }
+.ft-cli-name { font-size: 13px; font-weight: 600; color: var(--ks-ink); }
+.ft-cli-tel { font-size: 12px; color: var(--ks-ink3); }
+.ft-body { padding: 15px 20px; overflow: auto; flex: 1; }
+.ft-kpis { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.ft-kpi { flex: 1; min-width: 96px; border: 1px solid var(--ks-line); border-radius: 8px; padding: 9px 11px; }
+.ft-kpi-l { font-size: 10.5px; font-weight: 600; color: var(--ks-ink3); text-transform: uppercase; letter-spacing: .3px; }
+.ft-kpi-v { font-size: 17px; font-weight: 800; color: var(--ks-ink); line-height: 1.2; }
+.ft-sec { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ks-ink3); margin: 16px 0 8px; }
+.ft-habit { display: flex; gap: 6px; flex-wrap: wrap; }
+.ft-tag { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--ks-line); border-radius: 999px; font-size: 12px; color: var(--ks-ink); }
+.ft-tag b { color: var(--ks-accent-ink); font-weight: 700; }
+.ft-visita { border: 1px solid var(--ks-line); border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
+.ft-vh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.ft-vfecha { font-size: 13px; font-weight: 700; color: var(--ks-ink); }
+.ft-vof { font-size: 11.5px; font-weight: 600; color: #fff; background: var(--ks-ink); padding: 2px 8px; border-radius: 999px; }
+.ft-vsrv { font-size: 12.5px; color: var(--ks-ink2); }
+.ft-formula { margin-top: 8px; background: #fbf7ec; border: 1px solid #e6d9b4; border-left: 3px solid var(--ks-accent); border-radius: 8px; padding: 9px 11px; font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
+.ft-empty { text-align: center; padding: 30px 16px; color: var(--ks-ink3); font-size: 13px; }
+.ft-color { border: 1px solid #e6d9b4; background: #fdfbf5; border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
+.ft-color-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.ft-color-srv { font-size: 12px; color: var(--ks-ink3); margin-top: 6px; }
+.ft-nocolor { border: 1px dashed var(--ks-line); border-radius: 10px; padding: 16px; text-align: center; color: var(--ks-ink3); font-size: 12.5px; }
+.ft-foot { padding: 11px 20px; border-top: 1px solid var(--ks-line); font-size: 11px; color: #9ca3af; }
+
 /* ── v1.1.76 · Botón y modal ALMACÉN ── */
 .ks-almacen {
   border: 1px solid #1c9c93; background: #1c9c93; color: #fff;
@@ -1562,6 +1867,19 @@ button { font-family: inherit; cursor: pointer; }
 .leg-paid::before { background: oklch(0.72 0.16 150); }
 .leg-pending::before { background: var(--ks-accent); }
 .leg-block::before { background: repeating-linear-gradient(135deg, oklch(0.62 0.13 350 / .5) 0 3px, transparent 3px 6px); border-radius: 2px; }
+/* v1.1.81 — stepper de cantidad del popup de detalle */
+.ks-qty-row { display: flex; align-items: center; gap: 10px; }
+.ks-qty-btn { width: 40px; min-width: 40px; justify-content: center; font-size: 16px; font-weight: 700; }
+.ks-qty-val { min-width: 30px; text-align: center; font-weight: 700; font-size: 15px; color: var(--ks-ink); }
+/* v1.1.81 — cabecera del armado múltiple */
+.ks-armed-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ks-armed-count { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 6px; color: #fff; background: var(--ks-accent); }
+.ks-armed-list { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.ks-armed-item { font-size: 10.5px; font-weight: 600; padding: 3px 8px; border-radius: 6px; color: var(--ks-ink2); background: var(--ks-paper2); border: 1px solid var(--ks-line2); }
+.ks-armed-item.is-now { color: var(--ks-ink); border-color: var(--ks-accent); }
+.ks-armed-mode { display: flex; align-items: center; gap: 0; border: 1px solid var(--ks-line2); border-radius: 7px; overflow: hidden; }
+.ks-armed-modebtn { font-family: inherit; font-size: 10.5px; font-weight: 600; padding: 4px 9px; border: 0; cursor: pointer; color: var(--ks-ink2); background: var(--ks-paper2); }
+.ks-armed-modebtn.active { color: #fff; background: var(--ks-ink); }
 
 /* ============================ PANEL ============================ */
 .ks-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
@@ -2209,6 +2527,28 @@ button { font-family: inherit; cursor: pointer; }
 .cierre-importe { font-weight:700; }
 .cierre-metodo-icon { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
 .cierre-banner { background:#fff5e6; border:1px solid #d48a1a; color:#d48a1a; padding:8px 12px; border-radius:6px; font-size:12px; font-weight:600; margin-bottom:10px; grid-column:1/-1; }
+
+/* ============================================================
+   v1.1.87 — CAPA TÁCTIL (tablet)
+   Estado "armado" tras pulsación larga. Se aplica también con
+   ratón si alguna vez se dispara, pero solo lo activa el gesto
+   táctil, así que en escritorio nunca aparece.
+   ============================================================ */
+.ks-appt.is-touch-armed { box-shadow: var(--ks-shadow-lg); outline: 2px solid #fff; outline-offset: -2px; transform: scale(1.03); z-index: 9; }
+.ks-col.is-touch-armed { background: rgba(201, 164, 74, .10); outline: 2px dashed #c9a44a; outline-offset: -2px; }
+
+@media (hover: none) {
+  /* El 🕑 ajusta la hora de la fase sin arrastrar. Vivía solo en
+     :hover → invisible con el dedo. Aquí permanente y más grande. */
+  .ks-appt-timeadj { opacity: 1; width: 20px; height: 20px; font-size: 12px; top: 3px; right: 21px; background: rgba(0,0,0,.42); }
+
+  /* Asa de resize: mismo aspecto, zona de impacto ampliada. */
+  .ks-appt-resize { touch-action: none; }
+  .ks-appt-resize::after { content: ''; position: absolute; left: -14px; right: -14px; top: -9px; bottom: -6px; }
+
+  /* iOS abre el callout de selección al mantener pulsado si no se corta. */
+  .ks-appt, .ks-col { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+}
 `;
 
   class RecepcionProCMS extends HTMLElement {
@@ -2233,6 +2573,40 @@ button { font-family: inherit; cursor: pointer; }
       this._staff = [];
       this._reservas = [];
       this._armed = null;              // servicio armado para colocar
+      // v1.1.81 — ARMADO MÚLTIPLE. `_armed` sigue siendo la línea que se
+      // está colocando ahora (todo el render existente lo lee tal cual).
+      // Las líneas siguientes esperan en `_armedQueue` y se añaden a la
+      // MISMA cita con `agregar-servicio`, que es lo que ya hace el botón
+      // "+ Servicio adicional" del modal: una fila, un total, un cobro,
+      // un solo WhatsApp (la centralita solo la dispara crearPackReserva).
+      this._armedQueue = [];           // líneas pendientes tras la actual
+      this._armedStaffMode = 'same';   // 'same' = todo al mismo profesional
+                                       // 'each' = elegir columna por servicio
+      this._packReservaId = null;      // id de la cita en curso (líneas 2..N)
+      this._packStaffId = null;        // columna donde se colocó la línea 1
+      this._chainActivo = false;       // distingue cadena de armado del
+                                       // "+ Servicio adicional" del modal
+      this._pendingMove = null;        // {staffId, mins} destino de la línea
+      this._moveQueue = [];            // movimientos de fase pendientes,
+                                       // SIEMPRE secuenciales: wixData.update
+                                       // reemplaza el documento entero y dos
+                                       // moverFase en paralelo se pisarían.
+      this._cantidad = 1;              // cantidad elegida en el popup
+      this._chainMoving = false;       // reubicando fases de la cadena
+      this._addSvcUid = '';            // "+ Servicio adicional": selección
+      this._addSvcVarIdx = 0;
+      this._addSvcComplSel = {};
+      this._addCmpUid = '';            // "⛓ Complemento": selección
+      this._addCmpVarIdx = 0;
+      this._tiendaEsperandoCliente = false;  // alta de cliente desde TIENDA
+      this._ventaTiendaActiva = false;       // el modal de venta viene de TIENDA
+      this._ventaTiendaKey = '';             // sourceKey (bookingId) de la venta
+      this._ventaTiendaTotal = 0;
+      this._ventaDoc = null;                 // documento emitido de la venta
+      this._ventaForm = false;               // form CIF/DNI abierto
+      this._ventaGenerando = false;
+      this._tiendaVatId = '';                // CIF/DNI capturado en TIENDA
+      this._tiendaLegalName = '';            // razón social capturada en TIENDA
       this._reservando = false;
       this._pagando = false;
       this._modalReserva = null;
@@ -2618,6 +2992,23 @@ button { font-family: inherit; cursor: pointer; }
         case 'reservaCreada':
           this._reservando = false;
           if (p.ok) {
+            // v1.1.81 — ¿quedan líneas del armado múltiple? Entonces esta
+            // reserva es la cita CONTENEDORA y el resto de servicios se
+            // añaden dentro de ella (un total, un cobro, un WhatsApp).
+            if (this._armedQueue.length && p.reservaId) {
+              this._packReservaId = p.reservaId;
+              this._chainActivo = true;
+              this._armed = this._armedQueue.shift();
+              this._renderArmedHint();
+              if (this._armedStaffMode === 'same') {
+                this._reservando = true;
+                this._enviarAgregarServicio(this._armed, null);
+              } else {
+                this._toast(`Cita creada · elige columna para ${this._armed.servicio.label}`);
+                this._sendToPage('getReservas', { fecha: this._fecha });
+              }
+              break;
+            }
             this._toast(`Reserva creada · ${p.precioTotal}€`);
             this._desarmar();
             this._sendToPage('getReservas', { fecha: this._fecha });
@@ -2746,6 +3137,16 @@ button { font-family: inherit; cursor: pointer; }
           else this._toast('Error: ' + (p.error || 'no se pudo reprogramar'));
           break;
         case 'fase-movida':
+          // v1.1.81 — si la cadena del armado está reubicando las fases del
+          // servicio recién añadido, encadenar el siguiente movimiento antes
+          // de nada. Van de uno en uno a propósito (ver _enviarSiguienteMovimiento).
+          if (this._chainActivo && this._chainMoving) {
+            if (!p.ok) this._toast('Aviso: no se pudo colocar una fase (' + (p.error || '') + ')');
+            if (this._moveQueue.length) { this._enviarSiguienteMovimiento(); break; }
+            this._chainMoving = false;
+            this._avanzarCadena();
+            break;
+          }
           // v1.1.29 — drag&drop por fase
           if (p.ok) { this._toast('Fase movida ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo mover la fase'));
@@ -2761,12 +3162,72 @@ button { font-family: inherit; cursor: pointer; }
           break;
         case 'complemento-agregado':
           if (p.ok) { this._toast(`Complemento añadido: ${p.label}`); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
-          else this._toast('Error: ' + (p.error || 'no se pudo añadir complemento'));
+          else {
+            this._toast('Error: ' + (p.error || 'no se pudo añadir complemento'));
+            // v1.1.83 — rehabilitar el botón para poder reintentar sin cerrar.
+            const bCmp = this.shadowRoot.getElementById('cmOk');
+            if (bCmp) bCmp.disabled = false;
+          }
           break;
         case 'servicio-agregado':
+          // v1.1.81 — dos orígenes posibles para esta respuesta:
+          //   · cadena del armado múltiple (_chainActivo) → seguir la cadena
+          //   · botón "+ Servicio adicional" del modal → comportamiento v1.1.30
+          if (this._chainActivo) {
+            this._reservando = false;
+            if (!p.ok) {
+              // La cita creada NO se toca: se corta la cadena y se avisa de
+              // qué servicio ha fallado, con el motivo del backend.
+              this._toast('Error añadiendo servicio: ' + (p.error || 'desconocido'));
+              this._desarmar();
+              this._sendToPage('getReservas', { fecha: this._fecha });
+              break;
+            }
+            {
+              const mv = this._pendingMove;
+              this._pendingMove = null;
+              if (mv) this._prepararMovimientos(p.fasesNuevas, mv);
+            }
+            if (this._moveQueue.length) { this._enviarSiguienteMovimiento(); break; }
+            this._avanzarCadena();
+            break;
+          }
           // v1.1.30 — + Servicio adicional
           if (p.ok) { this._toast(`Servicio añadido: ${p.label} (+${p.precio}€)`); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
-          else this._toast('Error: ' + (p.error || 'no se pudo añadir servicio'));
+          else {
+            this._toast('Error: ' + (p.error || 'no se pudo añadir servicio'));
+            // v1.1.81 — reactivar el botón: antes quedaba deshabilitado tras
+            // un error y había que cerrar el modal para reintentar.
+            const bAdd = this.shadowRoot.getElementById('svOk');
+            if (bAdd) bAdd.disabled = false;
+          }
+          break;
+        // v1.1.85 — documentos de la venta de TIENDA
+        case 'ticketVentaGenerado':
+        case 'facturaVentaGenerada': {
+          this._ventaGenerando = false;
+          if (p.ok) {
+            this._ventaDoc = {
+              modo: p.modo || (p.type === 'ticketVentaGenerado' ? 'ticket' : 'factura'),
+              invoiceNumber: p.invoiceNumber || '',
+              pdfUrl: p.pdfUrl || ''
+            };
+            this._toast(p.duplicado ? 'Esta venta ya tenía documento' : `Documento emitido · ${p.invoiceNumber || ''}`);
+          } else {
+            this._toast('Error: ' + (p.error?.message || p.error || 'no se pudo emitir'));
+          }
+          this._renderVentaDocPanel();
+          break;
+        }
+        case 'documentoVenta':
+          if (p.ok && p.existe && p.documento) {
+            this._ventaDoc = {
+              modo: p.documento.modo,
+              invoiceNumber: p.documento.invoiceNumber || '',
+              pdfUrl: p.documento.pdfUrl || ''
+            };
+            this._renderVentaDocPanel();
+          }
           break;
         case 'producto-agregado':
           // v1.1.16 legacy — ya no se usa, mantenemos por compatibilidad
@@ -2774,6 +3235,20 @@ button { font-family: inherit; cursor: pointer; }
         case 'productos-venta-result':
           if (p.ok) {
             this._toast('Venta de productos registrada ✓');
+            // v1.1.85 — venta desde TIENDA: el modal se queda abierto para
+            // emitir ticket o factura. La clave del documento es el orderId,
+            // que es el bookingId con el que el cobro entra en
+            // PaymentReservations.
+            if (this._ventaTiendaActiva) {
+              const pl = p.payload || {};
+              this._ventaTiendaKey = String(pl.orderId || '');
+              this._ventaTiendaTotal = Number(pl.total) || 0;
+              this._ventaDoc = null;
+              this._ventaForm = false;
+              this._ventaGenerando = false;
+              this._renderVentaDocPanel();
+              break;
+            }
             this._closeProductoModal();
             this._closeModal();
             this._sendToPage('getReservas', { fecha: this._fecha });
@@ -2808,6 +3283,8 @@ button { font-family: inherit; cursor: pointer; }
         case 'clientesEncontrados': this._renderCliResults(p.clientes || []); break;
         // v1.1.69 — ESPECIALES (venta manual)
         case 'espClientesEncontrados': this._renderEspCli(p.clientes || []); break;
+        case 'ftClientesEncontrados': this._renderFtCli(p.clientes || []); break;
+        case 'fichaTecnicaData':      this._onFichaTecnica(p); break;
         case 'espClienteCreado': this._onEspClienteCreado(p.data); break;
         // v1.1.76 — ALMACÉN
         case 'almacenData':     this._onAlmData(p); break;
@@ -2818,8 +3295,23 @@ button { font-family: inherit; cursor: pointer; }
         case 'tarjetaEmitido': this._onEspEmitido('tarjeta', p.data); break;
         case 'clienteCreado': {
           const r = p.data || {};
-          if (r.ok && r.cliente) { this._closeBlankForm(); this._seleccionarCliente(r.cliente); this._toast('Cliente creado'); }
-          else { this._toast('Error: ' + (r.error?.message || 'no se pudo crear')); }
+          if (r.ok && r.cliente) {
+            this._closeBlankForm();
+            this._seleccionarCliente(r.cliente);
+            this._toast('Cliente creado');
+            // v1.1.84 — si el alta venía del botón TIENDA, encadenar la venta.
+            if (this._tiendaEsperandoCliente) {
+              this._tiendaEsperandoCliente = false;
+              this._abrirVentaTienda();
+            }
+          } else {
+            this._toast('Error: ' + (r.error?.message || 'no se pudo crear'));
+            if (this._tiendaEsperandoCliente) {
+              this._tiendaEsperandoCliente = false;
+              const bTd = this.shadowRoot.getElementById('tdOk');
+              if (bTd) bTd.disabled = false;
+            }
+          }
           break;
         }
         // v1.1.33 — Respuesta al editar contacto.
@@ -3128,6 +3620,8 @@ button { font-family: inherit; cursor: pointer; }
             </div>
             <div class="ks-brandhint">Recepción PRO · agenda operativa · CMS-first</div>
             <div class="ks-brandactions">
+              <button class="ks-tienda" id="tiendaBtn">🛍 TIENDA</button>
+              <button class="ks-fichatec" id="ftBtn">🎨 FICHA TÉCNICA</button>
               <button class="ks-almacen" id="almBtn">🗄️ ALMACÉN</button>
               <button class="ks-especiales" id="espBtn">✦ ESPECIALES</button>
               <button class="ks-automodel">Modelo automático</button>
@@ -3251,6 +3745,13 @@ button { font-family: inherit; cursor: pointer; }
       // v1.1.76 — ALMACÉN: papelera y sacar de almacén
       const almBtnEl = root.getElementById('almBtn');
       if (almBtnEl) almBtnEl.addEventListener('click', () => this._openAlmacen());
+
+      // v1.1.77 — FICHA TÉCNICA
+      const ftBtnEl = root.getElementById('ftBtn');
+      if (ftBtnEl) ftBtnEl.addEventListener('click', () => this._openFichaTecnica());
+      // v1.1.84 — TIENDA: venta de productos a alguien que entra sin cita.
+      const tiendaBtnEl = root.getElementById('tiendaBtn');
+      if (tiendaBtnEl) tiendaBtnEl.addEventListener('click', () => this._openTiendaModal());
 
       // ── Datepicker (V1) ──
       const openDp = (e) => { e.stopPropagation(); this._openDatePicker(); };
@@ -3654,6 +4155,9 @@ button { font-family: inherit; cursor: pointer; }
     _buildGroups() {
       const q = (this._query || '').trim().toLowerCase();
       const visible = this._servicios.filter(s => {
+        // v1.1.82 — "Complementos de fases" fuera del listado, salvo que el
+        // operador pida expresamente la pestaña Complementos.
+        if (this._role !== 'complemento' && normGrupo(s.group) === GRUPO_OCULTO_PANEL) return false;
         if (this._role === 'principal' && s.tipo === 'complemento') return false;
         if (this._role === 'complemento' && s.tipo === 'principal') return false;
         if (q && !(s.label || '').toLowerCase().includes(q)) return false;
@@ -3748,7 +4252,7 @@ button { font-family: inherit; cursor: pointer; }
     }
     _tryParse(s) { try { return JSON.parse(s); } catch (e) { return []; } }
 
-    _openDetail(svc, x, y) { this._detail = svc; this._variantIdx = 0; this._complSel = {}; this._exclusivosSel = {}; this._renderDetail(x, y); }
+    _openDetail(svc, x, y) { this._detail = svc; this._variantIdx = 0; this._complSel = {}; this._exclusivosSel = {}; this._cantidad = 1; this._renderDetail(x, y); }
     _closeDetail() { this._detail = null; const r = this.shadowRoot; r.getElementById('detailScrim')?.remove(); r.getElementById('detailPop')?.remove(); }
 
     _renderDetail(x, y) {
@@ -3780,7 +4284,19 @@ button { font-family: inherit; cursor: pointer; }
           <div class="ks-cascade-legend"><span class="ks-cascade-legitem"><span class="ks-leg-sw work"></span>Ocupado</span><span class="ks-cascade-legitem"><span class="ks-leg-sw proceso"></span>PROCESO libre</span><span class="ks-cascade-total">${total} min</span></div>
           <p class="ks-detail-note">Durante el <strong>PROCESO</strong> la columna no se ocupa: el profesional queda libre para otra cita.</p></div>` : '';
 
-      const comps = Array.isArray(s.complementos) ? s.complementos : [];
+      // v1.1.81 — ¿Estamos AÑADIENDO una línea a un armado ya iniciado?
+      // Si _armed existe, este popup no arma una cita nueva: encola otro
+      // servicio dentro de la misma cita.
+      const enCola = !!this._armed;
+
+      const compsAll = Array.isArray(s.complementos) ? s.complementos : [];
+      // v1.1.81 — En modo "añadir a la cita" los complementos OPCIONALES no
+      // se ofrecen: elegirlos línea a línea haría el popup inmanejable
+      // (premisa de diseño). Los OBLIGATORIOS con variantes (CASO B, tipo
+      // Planchado M/L/XL dentro del Botox) SÍ se mantienen: sin esa
+      // elección el motor no puede construir las fases del servicio y la
+      // línea fallaría con "Falta elegir variante de: …".
+      const comps = enCola ? compsAll.filter(c => c && c.required) : compsAll;
       // v1.1.44 — Complementos. Dos casos:
       //   · Sin variantes → botón toggle (sí/no), como siempre.
       //   · Con variantes → una fila por variante (chips). Si el complemento
@@ -3788,7 +4304,7 @@ button { font-family: inherit; cursor: pointer; }
       //     variante para poder armar (no hay "no añadir"). Si es opcional,
       //     elegir una variante lo añade; volver a pulsarla lo quita.
       const complHTML = comps.length ? `
-        <div class="ks-detail-block"><div class="ks-detail-blocklbl">Complementos</div>
+        <div class="ks-detail-block"><div class="ks-detail-blocklbl">Complementos${enCola ? ' <span class="ks-detail-blocklbl-hint">solo obligatorios al encadenar</span>' : ''}</div>
           ${comps.map(c => {
             const cvars = Array.isArray(c.variantes) ? c.variantes : [];
             if (c.hasVariants && cvars.length) {
@@ -3825,7 +4341,9 @@ button { font-family: inherit; cursor: pointer; }
             .map((f, idx) => ({ f, idx }))
             .filter(x => x.f && x.f.tipo === 'exclusivo' && Array.isArray(x.f.refs) && x.f.refs.length > 0)
         : [];
-      const exclHTML = exclusivos.length ? `
+      // v1.1.81 — los grupos exclusivos son elección opcional: se ocultan
+      // al encadenar líneas, por la misma premisa que los complementos.
+      const exclHTML = (exclusivos.length && !enCola) ? `
         <div class="ks-detail-block"><div class="ks-detail-blocklbl">Grupos exclusivos <span class="ks-detail-blocklbl-hint">elige uno o ninguno</span></div>
           ${exclusivos.map(({ f, idx }) => {
             const groupKey = 'exc:' + idx;
@@ -3849,6 +4367,19 @@ button { font-family: inherit; cursor: pointer; }
             </div>`;
           }).join('')}</div>` : '';
 
+      // v1.1.81 — CANTIDAD. Caso real: una madre trae dos niños al mismo
+      // corte. Cantidad 2 = el servicio se encadena dos veces detrás de sí
+      // mismo según su duración, dentro de la MISMA cita: un total, un
+      // cobro, un solo aviso al cliente.
+      const cantidadHTML = `
+        <div class="ks-detail-block"><div class="ks-detail-blocklbl">Cantidad</div>
+          <div class="ks-qty-row">
+            <button class="ks-variant ks-qty-btn" id="dQtyMinus" aria-label="Quitar uno">−</button>
+            <span class="ks-qty-val" id="dQtyVal">${this._cantidad}</span>
+            <button class="ks-variant ks-qty-btn" id="dQtyPlus" aria-label="Añadir uno">＋</button>
+            <span class="ks-dur" id="dQtyHint">${this._cantidad > 1 ? this._cantidad + ' pases encadenados' : 'un solo pase'}</span>
+          </div></div>`;
+
       const scrim = document.createElement('div'); scrim.className = 'ks-detail-scrim'; scrim.id = 'detailScrim';
       scrim.addEventListener('click', () => this._closeDetail());
       const pop = document.createElement('div'); pop.className = 'ks-detail'; pop.id = 'detailPop'; pop.style.setProperty('--fam', fam);
@@ -3862,11 +4393,13 @@ button { font-family: inherit; cursor: pointer; }
           <div class="ks-detail-tags"><span class="ks-clasetag ${cascade ? 'is-cascade' : (s.claseServicio === 'simple_variantes' ? 'is-variants' : '')}">${cascade ? '⛓ ' : ''}${CLASE_LABEL[s.claseServicio] || 'Simple'}</span><span class="ks-detail-dur">${s.duration || 0} min</span>${s.price ? `<span class="ks-detail-price">${s.price}€</span>` : ''}</div>
         </div>
         <div class="ks-detail-body">
-          ${variantHTML}${complHTML}${exclHTML}
-          <p class="ks-detail-note ks-detail-note-simple">Pulsa <strong>Armar servicio</strong> y haz clic en la columna del empleado y la hora en el calendario.</p>
+          ${variantHTML}${complHTML}${exclHTML}${cantidadHTML}
+          <p class="ks-detail-note ks-detail-note-simple">${enCola
+            ? 'Se añadirá a la cita que estás montando, detrás del servicio anterior según su duración.'
+            : 'Pulsa <strong>Armar servicio</strong> y haz clic en la columna del empleado y la hora en el calendario.'}</p>
           <div class="ks-detail-uid">setupUid · <code>${esc(s.setupUid)}</code></div>
         </div>
-        <div class="ks-detail-foot"><button class="ks-detail-cancel" id="dCancel">Cancelar</button><button class="ks-detail-add" id="dAdd">Armar servicio</button></div>`;
+        <div class="ks-detail-foot"><button class="ks-detail-cancel" id="dCancel">Cancelar</button><button class="ks-detail-add" id="dAdd">${enCola ? '＋ Añadir a la cita' : 'Armar servicio'}</button></div>`;
       root.appendChild(scrim); root.appendChild(pop);
       // v1.1.18 — Reposicionar verticalmente si la altura real desborda
       // la ventana (caso típico con muchos complementos asignados).
@@ -3922,12 +4455,37 @@ button { font-family: inherit; cursor: pointer; }
           b.classList.toggle('active', b === btn);
         });
       }));
+      // v1.1.81 — stepper de cantidad. No re-renderiza el popup entero
+      // (perdería el scroll y las variantes marcadas): solo repinta el
+      // número y la coletilla.
+      {
+        const val = pop.querySelector('#dQtyVal');
+        const hint = pop.querySelector('#dQtyHint');
+        const pinta = () => {
+          if (val) val.textContent = String(this._cantidad);
+          if (hint) hint.textContent = this._cantidad > 1 ? `${this._cantidad} pases encadenados` : 'un solo pase';
+        };
+        pop.querySelector('#dQtyMinus')?.addEventListener('click', () => {
+          this._cantidad = Math.max(1, (Number(this._cantidad) || 1) - 1); pinta();
+        });
+        pop.querySelector('#dQtyPlus')?.addEventListener('click', () => {
+          this._cantidad = Math.min(CANT_MAX_LINEA, (Number(this._cantidad) || 1) + 1); pinta();
+        });
+      }
       pop.querySelector('#dAdd').addEventListener('click', () => this._armarServicio());
     }
 
     _armarServicio() {
       if (!this._detail) return;
       if (!this._cliente || !this._cliente.nombre) { this._toast('Selecciona o crea un cliente primero'); return; }
+      // v1.1.81 — El servicio A MEDIDA va por otro circuito
+      // ('servicio-medida' → crearReservaMedida) y no participa en la
+      // cadena de agregar-servicio. No se encadena nada sobre él: si se
+      // permitiera, las líneas encoladas quedarían huérfanas.
+      if (this._armed && this._armed.medida) {
+        this._toast('Coloca primero el servicio a medida · luego añade el resto');
+        return;
+      }
 
       // v1.1.44 — Construir la lista de complementos elegidos. Cada entrada de
       // _complSel puede ser:
@@ -3991,21 +4549,123 @@ button { font-family: inherit; cursor: pointer; }
         });
       }
 
-      this._armed = { servicio: this._detail, variantIdx: this._variantIdx, complementosSetupUid };
+      // v1.1.81 — ARMADO MÚLTIPLE + CANTIDAD.
+      // La línea armada se repite `cantidad` veces. La PRIMERA de todas
+      // ocupa this._armed (crea la cita con crearPackReserva, con sus
+      // variantes y complementos). Las demás esperan en _armedQueue y se
+      // añaden a esa misma cita con `agregar-servicio`.
+      const cantidad = Math.max(1, Math.min(CANT_MAX_LINEA, Number(this._cantidad) || 1));
+      const linea = {
+        servicio: this._detail,
+        variantIdx: this._variantIdx,
+        complementosSetupUid
+      };
+
+      let nuevas = 0;
+      for (let i = 0; i < cantidad; i++) {
+        // Copia superficial por línea: cada una viaja al backend por
+        // separado y no deben compartir el array de complementos.
+        const copia = {
+          servicio: linea.servicio,
+          variantIdx: linea.variantIdx,
+          complementosSetupUid: complementosSetupUid.slice()
+        };
+        if (!this._armed) this._armed = copia;
+        else this._armedQueue.push(copia);
+        nuevas++;
+      }
+
       this._closeDetail();
       this._renderArmedHint();
       this._renderCalendar();
       this._updateSteps();
-      this._toast('Servicio armado · clic en el calendario para colocar');
+
+      const totalLineas = 1 + this._armedQueue.length;
+      if (totalLineas > 1) {
+        // _toast usa textContent: nada que escapar, y esc() metería entidades.
+        this._toast(`${linea.servicio.label} ×${nuevas} · ${totalLineas} servicios en la cita`);
+      } else {
+        this._toast('Servicio armado · clic en el calendario para colocar');
+      }
     }
-    _desarmar() { this._armed = null; this._renderArmedHint(); this._renderCalendar(); this._updateSteps(); }
+
+    // v1.1.81 — Limpia TODO el armado (línea actual + cola + estado de la
+    // cadena en curso). Se llama al cancelar y al terminar de colocar.
+    _desarmar() {
+      this._armed = null;
+      this._armedQueue = [];
+      this._packReservaId = null;
+      this._packStaffId = null;
+      this._chainActivo = false;
+      this._chainMoving = false;
+      this._pendingMove = null;
+      this._moveQueue = [];
+      this._reservando = false;
+      this._renderArmedHint();
+      this._renderCalendar();
+      this._updateSteps();
+    }
+
     _renderArmedHint() {
       const el = this.shadowRoot.getElementById('armedHint');
       if (!el) return;
-      el.innerHTML = this._armed
-        ? `<span class="ks-legchip leg-pending" style="padding-left:9px">Colocando: ${esc(this._armed.servicio.label)}</span><button class="ks-tool" id="armedCancel" title="Cancelar">✕</button>`
-        : '';
-      const c = this.shadowRoot.getElementById('armedCancel'); if (c) c.addEventListener('click', () => this._desarmar());
+      if (!this._armed) { el.innerHTML = ''; return; }
+
+      const pendientes = this._armedQueue.length;
+      const total = 1 + pendientes;
+
+      if (total === 1) {
+        // Caso clásico de una sola línea: hint idéntico al de siempre.
+        el.innerHTML = `<span class="ks-legchip leg-pending" style="padding-left:9px">Colocando: ${esc(this._armed.servicio.label)}</span><button class="ks-tool" id="armedCancel" title="Cancelar">✕</button>`;
+      } else {
+        // v1.1.81 — varias líneas: número de orden, lista completa y
+        // selector de profesional. El chip resaltado es el que se coloca
+        // con el siguiente clic en el calendario.
+        const colocadas = this._packReservaId ? (total - pendientes - 1) : 0;
+        const items = [this._armed].concat(this._armedQueue)
+          .map((l, i) => `<span class="ks-armed-item ${i === 0 ? 'is-now' : ''}">${esc(l.servicio.label)}</span>`)
+          .join('');
+        el.innerHTML = `
+          <div class="ks-armed-wrap">
+            <span class="ks-armed-count">${colocadas + 1} / ${colocadas + total}</span>
+            <div class="ks-armed-list">${items}</div>
+            <div class="ks-armed-mode" title="¿Todos los servicios con el mismo profesional?">
+              <button class="ks-armed-modebtn ${this._armedStaffMode === 'same' ? 'active' : ''}" id="armedModeSame">Mismo profesional</button>
+              <button class="ks-armed-modebtn ${this._armedStaffMode === 'each' ? 'active' : ''}" id="armedModeEach">Elegir por servicio</button>
+            </div>
+            <button class="ks-tool" id="armedCancel" title="Cancelar armado">✕</button>
+          </div>`;
+      }
+
+      const c = this.shadowRoot.getElementById('armedCancel');
+      if (c) c.addEventListener('click', () => this._cancelarArmado());
+      const bSame = this.shadowRoot.getElementById('armedModeSame');
+      const bEach = this.shadowRoot.getElementById('armedModeEach');
+      // El modo se puede cambiar mientras no haya empezado la cadena: una
+      // vez creada la cita, cambiar de criterio a media colocación solo
+      // genera confusión.
+      if (bSame) bSame.addEventListener('click', () => {
+        if (this._packReservaId) { this._toast('La cita ya está empezada · termina de colocarla'); return; }
+        this._armedStaffMode = 'same'; this._renderArmedHint();
+      });
+      if (bEach) bEach.addEventListener('click', () => {
+        if (this._packReservaId) { this._toast('La cita ya está empezada · termina de colocarla'); return; }
+        this._armedStaffMode = 'each'; this._renderArmedHint();
+      });
+    }
+
+    // v1.1.81 — Cancelar desde la cabecera. Si la cita YA se creó y quedan
+    // líneas por colocar, el ✕ no borra nada del calendario: la cita creada
+    // se queda como está y solo se descarta lo que faltaba por añadir. Se
+    // avisa para que el operador no crea que ha cancelado la cita entera.
+    _cancelarArmado() {
+      const habiaCita = !!this._packReservaId;
+      const pendientes = this._armedQueue.length + (this._armed ? 1 : 0);
+      this._desarmar();
+      if (habiaCita && pendientes > 0) {
+        this._toast(`Cita creada · se descartan ${pendientes} servicio(s) sin colocar`);
+        this._sendToPage('getReservas', { fecha: this._fecha });
+      }
     }
 
     // ═══════════════════════════════════════════════════
@@ -4213,6 +4873,133 @@ button { font-family: inherit; cursor: pointer; }
       }));
     }
 
+    // ── v1.1.87 · CAPA TÁCTIL ─────────────────────────────────
+    // Traduce el gesto del dedo a eventos de ratón sintéticos. La lógica
+    // de arrastre (ghost, snap a 5 min, preview, commit al page code) no
+    // se toca: recibe exactamente los mismos eventos que recibiría de un
+    // ratón real.
+    //
+    //   · mousedown → sobre el elemento REAL tocado, para que los
+    //     guardias e.target.closest('.ks-appt-resize' / '.ks-appt-timeadj')
+    //     de los handlers existentes sigan funcionando igual.
+    //   · mousemove / mouseup → sobre `document` con bubbles:true. Alcanza
+    //     a los listeners de document (_bindFaseDrag) y a los de window
+    //     (_bindResizeExt, _bindBlockDrag), porque document propaga hacia
+    //     window.
+    _fireSyntheticMouse(target, type, x, y) {
+      if (!target) return;
+      try {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true, cancelable: true, composed: true, view: window,
+          button: 0, buttons: (type === 'mouseup' ? 0 : 1),
+          clientX: x, clientY: y
+        }));
+      } catch (_) { /* navegador sin constructor MouseEvent: se ignora */ }
+    }
+
+    // PULSACIÓN LARGA (450ms quieto) + arrastrar. Para elementos que
+    // además son superficie de scroll: bloques de cita y columnas libres.
+    // Mientras no está armado NO se llama a preventDefault → el scroll
+    // vertical del calendario y el click nativo (abrir cita) siguen
+    // funcionando exactamente igual.
+    // opts: { skipSelector, armedClass }
+    _bindTouchLongPressDrag(el, opts) {
+      const o = opts || {};
+      const HOLD_MS = 450;
+      const SLOP = 10;
+      let timer = null, armed = false, downTarget = null;
+      let x0 = 0, y0 = 0, lastX = 0, lastY = 0;
+
+      const limpiar = () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (armed && o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+      };
+
+      el.addEventListener('touchstart', e => {
+        if (!e.touches || e.touches.length !== 1) { limpiar(); return; }
+        const tgt = e.target;
+        // Mismos guardias que el camino de ratón.
+        if (o.skipSelector && tgt && tgt.closest && tgt.closest(o.skipSelector)) return;
+        const t = e.touches[0];
+        downTarget = tgt;
+        x0 = lastX = t.clientX; y0 = lastY = t.clientY;
+        armed = false;
+        timer = setTimeout(() => {
+          timer = null; armed = true;
+          if (o.armedClass) el.classList.add(o.armedClass);
+          try { if (navigator.vibrate) navigator.vibrate(15); } catch (_) {}
+          this._fireSyntheticMouse(downTarget, 'mousedown', lastX, lastY);
+        }, HOLD_MS);
+      }, { passive: false });
+
+      el.addEventListener('touchmove', e => {
+        const t = e.touches && e.touches[0]; if (!t) return;
+        lastX = t.clientX; lastY = t.clientY;
+        if (!armed) {
+          // Aún en la ventana de espera: si el dedo se mueve es un scroll,
+          // no un arrastre. Se cancela y se deja pasar el gesto al navegador.
+          if (Math.abs(lastX - x0) > SLOP || Math.abs(lastY - y0) > SLOP) limpiar();
+          return;
+        }
+        e.preventDefault();          // el gesto es nuestro: no hay scroll
+        this._fireSyntheticMouse(document, 'mousemove', lastX, lastY);
+      }, { passive: false });
+
+      el.addEventListener('touchend', e => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!armed) { downTarget = null; return; }
+        const t = (e.changedTouches && e.changedTouches[0]) || null;
+        const fx = t ? t.clientX : lastX, fy = t ? t.clientY : lastY;
+        if (o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+        e.preventDefault();          // evita el click fantasma al soltar
+        this._fireSyntheticMouse(document, 'mouseup', fx, fy);
+      }, { passive: false });
+
+      el.addEventListener('touchcancel', () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!armed) { downTarget = null; return; }
+        if (o.armedClass) el.classList.remove(o.armedClass);
+        armed = false; downTarget = null;
+        this._fireSyntheticMouse(document, 'mouseup', lastX, lastY);
+      }, { passive: false });
+    }
+
+    // ARRASTRE INMEDIATO. Para las dos asas de resize: objetivos
+    // deliberados y diminutos, nunca superficie de scroll. preventDefault
+    // en touchstart impide que la rejilla se desplace y suprime el click.
+    _bindTouchImmediateDrag(el) {
+      let lastX = 0, lastY = 0, activo = false;
+
+      el.addEventListener('touchstart', e => {
+        if (!e.touches || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        lastX = t.clientX; lastY = t.clientY; activo = true;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(el, 'mousedown', lastX, lastY);
+      }, { passive: false });
+
+      el.addEventListener('touchmove', e => {
+        if (!activo) return;
+        const t = e.touches && e.touches[0]; if (!t) return;
+        lastX = t.clientX; lastY = t.clientY;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(document, 'mousemove', lastX, lastY);
+      }, { passive: false });
+
+      const fin = e => {
+        if (!activo) return;
+        activo = false;
+        const t = (e.changedTouches && e.changedTouches[0]) || null;
+        const fx = t ? t.clientX : lastX, fy = t ? t.clientY : lastY;
+        e.preventDefault(); e.stopPropagation();
+        this._fireSyntheticMouse(document, 'mouseup', fx, fy);
+      };
+      el.addEventListener('touchend', fin, { passive: false });
+      el.addEventListener('touchcancel', fin, { passive: false });
+    }
+
     // v1.1.29 — DRAG&DROP DE FASE
     //   Mantén pulsado un bloque ocupante y arrástralo: aparece un ghost que
     //   sigue el cursor. Al soltar sobre otra celda → moverFase con la nueva
@@ -4324,6 +5111,14 @@ button { font-family: inherit; cursor: pointer; }
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
       });
+
+      // v1.1.87 — mismo arrastre con el dedo: pulsación larga de 450ms y
+      // luego mover. El toque corto sigue abriendo el modal de la cita y el
+      // arrastre directo sigue haciendo scroll del calendario.
+      this._bindTouchLongPressDrag(btn, {
+        skipSelector: '.ks-appt-resize, .ks-appt-timeadj, .ks-appt-ext-rm',
+        armedClass: 'is-touch-armed'
+      });
     }
 
     // v1.1.14 — drag del resize handle para crear/modificar extensión.
@@ -4375,6 +5170,8 @@ button { font-family: inherit; cursor: pointer; }
           window.addEventListener('mousemove', onMove);
           window.addEventListener('mouseup', onUp);
         });
+        // v1.1.87 — misma asa con el dedo, arrastre inmediato.
+        this._bindTouchImmediateDrag(handle);
         return;
       }
 
@@ -4419,6 +5216,8 @@ button { font-family: inherit; cursor: pointer; }
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
       });
+      // v1.1.87 — misma asa con el dedo, arrastre inmediato.
+      this._bindTouchImmediateDrag(handle);
     }
 
     _madridNowMin() {
@@ -4811,6 +5610,14 @@ button { font-family: inherit; cursor: pointer; }
         };
         window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
       });
+
+      // v1.1.87 — crear bloqueo con el dedo: pulsación larga de 450ms
+      // sobre la columna libre y luego arrastrar verticalmente. Hasta que
+      // no se arma, el dedo sigue haciendo scroll del calendario.
+      this._bindTouchLongPressDrag(col, {
+        skipSelector: '.ks-appt, .ks-customblock',
+        armedClass: 'is-touch-armed'
+      });
     }
 
     _colocarReserva(staffId, horaHHmm) {
@@ -4823,6 +5630,16 @@ button { font-family: inherit; cursor: pointer; }
       const parts = (cli.nombre || '').split(' ');
       const firstName = parts.shift() || ''; const lastName = parts.join(' ');
       const esProvisional = !!cli.esProvisional;
+
+      // v1.1.81 — Si la cita YA está creada, esta línea del armado no crea
+      // una cita nueva: se añade a la que está en curso (modo "elegir por
+      // servicio", donde el operador clica una columna por cada servicio).
+      // El aviso de teléfono/email no se repite: ya se dio al crearla.
+      if (this._packReservaId) {
+        this._reservando = true;
+        this._enviarAgregarServicio(this._armed, { staffId, horaHHmm });
+        return;
+      }
 
       // v1.1.33 — Warning falta teléfono y/o email.
       // No bloquea pero pide confirmación explícita: ese cliente no
@@ -4862,21 +5679,12 @@ button { font-family: inherit; cursor: pointer; }
       // v1.1.43 — incluir la variante elegida del principal (si el servicio
       // tiene variantes). El backend (crearPackReserva v1.0.25) usa su
       // precio/duración en vez del base. Sin variante → null (precio base).
-      let varianteSel = null;
-      {
-        const sv = a.servicio || {};
-        const vars = Array.isArray(sv.variantes) ? sv.variantes : [];
-        const vi = Number(a.variantIdx) || 0;
-        if (sv.hasVariants && vars.length && vars[vi]) {
-          const v = vars[vi];
-          varianteSel = {
-            idx: vi,
-            label: (v && (v.label || v.nombre)) ? String(v.label || v.nombre) : '',
-            price: Number(v && v.precio != null ? v.precio : (v && v.price)) || 0,
-            duration: Number(v && v.duracion != null ? v.duracion : (v && v.duration)) || 0
-          };
-        }
-      }
+      // v1.1.81 — extracción a _varianteSelDeLinea (misma lógica, ahora
+      // compartida con las líneas que se añaden vía agregar-servicio).
+      const varianteSel = this._varianteSelDeLinea(a);
+      // v1.1.81 — columna donde queda la línea 1: es la de la cita, y la
+      // que heredan las fases añadidas si el modo es "mismo profesional".
+      this._packStaffId = staffId;
       this._sendToPage('crearReserva', { payload: {
         fecha: this._fecha, horaHHmm,
         principalSetupUid: a.servicio.setupUid,
@@ -4888,6 +5696,105 @@ button { font-family: inherit; cursor: pointer; }
         notas: '',
         esProvisional
       }});
+    }
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.81 — CADENA DEL ARMADO MÚLTIPLE
+    //
+    // Línea 1  → crearReserva  (crearPackReserva: crea la cita, dispara la
+    //            única notificación al cliente).
+    // Líneas 2+ → agregar-servicio (agregarServicioReserva: encadena detrás
+    //            de la última fase que ocupa, dentro de la MISMA fila).
+    // Resultado: una cita, un total, un cobro, un WhatsApp.
+    //
+    // En modo 'each' cada línea se coloca donde el operador clique; tras
+    // añadirla se reubican sus fases con `mover-fase` (contrato existente).
+    // ═══════════════════════════════════════════════════
+
+    // Variante elegida de una línea armada, o null si el servicio no tiene
+    // variantes. Misma forma que consume el backend desde v1.0.25.
+    _varianteSelDeLinea(linea) {
+      const sv = (linea && linea.servicio) || {};
+      const vars = Array.isArray(sv.variantes) ? sv.variantes : [];
+      const vi = Number(linea && linea.variantIdx) || 0;
+      if (!sv.hasVariants || !vars.length || !vars[vi]) return null;
+      const v = vars[vi];
+      return {
+        idx: vi,
+        label: (v && (v.label || v.nombre)) ? String(v.label || v.nombre) : '',
+        price: Number(v && v.precio != null ? v.precio : (v && v.price)) || 0,
+        duration: Number(v && v.duracion != null ? v.duracion : (v && v.duration)) || 0
+      };
+    }
+
+    // Envía una línea a la cita en curso. `dest` solo llega en modo 'each'
+    // (columna y hora que ha elegido el operador para ESE servicio).
+    _enviarAgregarServicio(linea, dest) {
+      if (!linea || !this._packReservaId) return;
+      this._pendingMove = (this._armedStaffMode === 'each' && dest) ? { ...dest } : null;
+      this._toast(`Añadiendo ${linea.servicio.label}…`);
+      this._sendToPage('agregar-servicio', {
+        reservaId: this._packReservaId,
+        setupUid: linea.servicio.setupUid,
+        varianteSel: this._varianteSelDeLinea(linea),
+        complementosSetupUid: linea.complementosSetupUid || []
+      });
+    }
+
+    // Prepara la cola de reubicación de las fases recién añadidas,
+    // conservando los desfases internos de la cascada respecto a la hora
+    // elegida. Backend agregarServicioReserva v1.0.43 devuelve `fasesNuevas`
+    // con su índice real dentro del array de fases de la reserva.
+    _prepararMovimientos(fasesNuevas, dest) {
+      const ocup = (Array.isArray(fasesNuevas) ? fasesNuevas : []).filter(f => f && f.ocupa && f.start);
+      if (!ocup.length || !dest) return;
+      const baseMs = Math.min.apply(null, ocup.map(f => new Date(f.start).getTime()));
+      if (!isFinite(baseMs)) return;
+      const [yyyy, mm, dd] = String(this._fecha).split('-').map(Number);
+      const [hh, mi] = String(dest.horaHHmm || '00:00').split(':').map(Number);
+      // Mismo patrón de construcción de ISO que el drag de fase y el
+      // selector de hora (navegador del salón en Madrid).
+      const destinoMs = new Date(yyyy, mm - 1, dd, hh || 0, mi || 0, 0, 0).getTime();
+      this._moveQueue = ocup.map(f => ({
+        faseIndex: f.index,
+        nuevoStartISO: new Date(destinoMs + (new Date(f.start).getTime() - baseMs)).toISOString(),
+        staffId: dest.staffId
+      }));
+      this._chainMoving = this._moveQueue.length > 0;
+    }
+
+    // Los movimientos van de UNO EN UNO. moverFase hace read-merge-update de
+    // la fila completa: dos en paralelo se pisarían y se perdería una fase.
+    _enviarSiguienteMovimiento() {
+      const mv = this._moveQueue.shift();
+      if (!mv) { this._chainMoving = false; this._avanzarCadena(); return; }
+      this._sendToPage('mover-fase', {
+        reservaId: this._packReservaId,
+        faseIndex: mv.faseIndex,
+        nuevoStartISO: mv.nuevoStartISO,
+        nuevoStaffId: mv.staffId
+      });
+    }
+
+    // Pasa a la siguiente línea pendiente, o cierra la cadena.
+    _avanzarCadena() {
+      this._chainMoving = false;
+      if (this._armedQueue.length) {
+        this._armed = this._armedQueue.shift();
+        this._renderArmedHint();
+        if (this._armedStaffMode === 'same') {
+          this._reservando = true;
+          this._enviarAgregarServicio(this._armed, null);
+        } else {
+          this._reservando = false;
+          this._toast(`Elige columna y hora para ${this._armed.servicio.label}`);
+          this._sendToPage('getReservas', { fecha: this._fecha });
+        }
+        return;
+      }
+      this._toast('Cita completa ✓');
+      this._desarmar();
+      this._sendToPage('getReservas', { fecha: this._fecha });
     }
 
     // ═══════════════════════════════════════════════════
@@ -4982,6 +5889,12 @@ button { font-family: inherit; cursor: pointer; }
     // ═══════════════════════════════════════════════════
     _openModal(r) {
       this._modalReserva = r;
+      // v1.1.77 — cliente para precargar la FICHA TÉCNICA. Se guarda al
+      // ABRIR la cita: el modal tapa la barra, así que el flujo real es
+      // abrir cita → cerrar → pulsar Ficha Técnica.
+      if (r && r.clientName && r.family !== 'BLOQUEO') {
+        this._ftUltimoCliente = { nombre: r.clientName, telefono: r.clientPhone || '' };
+      }
       this._disc = 0;
       this._discMode = 'pct';
       this._canjeActivo = null;
@@ -5715,6 +6628,10 @@ button { font-family: inherit; cursor: pointer; }
       });
     }
     // v1.1.16 — COMPLEMENTO (servicio del catálogo con tipo complemento/ambos)
+    // ⛓ AÑADIR COMPLEMENTO (desde el modal de la cita)
+    // v1.1.83 — con ELECCIÓN DE VARIANTE. Antes solo viajaba el setupUid:
+    //   un complemento con variantes (Peinado M/L/XL) se añadía siempre a
+    //   precio y duración BASE. Requiere backend v1.0.44 y page code v1.0.37.
     _openAddComplementoModal(r) {
       const catalogo = Array.isArray(this._servicios) ? this._servicios : [];
       // Filtrar: tipo complemento o ambos, activo, con setupUid
@@ -5723,9 +6640,14 @@ button { font-family: inherit; cursor: pointer; }
         .sort((a, b) => String(a.label || '').localeCompare(String(b.label || '')));
       let opts = '<option value="">— Elegir complemento —</option>';
       candidatos.forEach(s => {
-        opts += `<option value="${esc(s.setupUid)}">${esc(s.label)} · ${Number(s.duration) || 0}min · ${Number(s.price) || 0}€</option>`;
+        const varTag = s.hasVariants ? ' · variantes' : '';
+        opts += `<option value="${esc(s.setupUid)}">${esc(s.label)} · ${Number(s.duration) || 0}min · ${Number(s.price) || 0}€${varTag}</option>`;
       });
       const vacio = candidatos.length === 0;
+
+      this._addCmpUid = '';
+      this._addCmpVarIdx = 0;
+
       const box = this._openSubModal(`
         <div class="ks-modal-head"><span class="ks-modal-staff">⛓ AÑADIR COMPLEMENTO</span><button class="ks-modal-x" id="cmX">✕</button></div>
         <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">Se añadirá al final del pack y sumará tiempo + precio.</div>
@@ -5734,23 +6656,75 @@ button { font-family: inherit; cursor: pointer; }
           <select id="cmSel" style="width:100%;margin-top:6px;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">${opts}</select>
           ${vacio ? '<div style="margin-top:10px;color:#a55b00;font-size:12px;font-style:italic;">No hay servicios marcados como Complemento/Ambos en el catálogo.</div>' : ''}
         </div>
+        <div id="cmOpts" style="margin-top:6px;"></div>
         <div class="ks-modal-foot" style="margin-top:18px;">
           <button class="ks-modal-close" id="cmCancel">Cancelar</button>
           <button class="ks-pay" id="cmOk" style="background:var(--ks-ink);color:#fff;" ${vacio ? 'disabled' : ''}>Añadir</button>
         </div>`);
       box.querySelector('#cmX').addEventListener('click', () => this._closeSubModal());
       box.querySelector('#cmCancel').addEventListener('click', () => this._closeSubModal());
+
+      const sel = box.querySelector('#cmSel');
+      sel.addEventListener('change', () => {
+        this._addCmpUid = sel.value || '';
+        this._addCmpVarIdx = 0;
+        this._renderAddComplementoOpts(box);
+      });
+
       box.querySelector('#cmOk').addEventListener('click', () => {
-        const setupUid = box.querySelector('#cmSel').value;
+        const setupUid = this._addCmpUid || sel.value;
         if (!setupUid) { this._toast('Elige un complemento'); return; }
+        const svc = this._porSetupUid[setupUid];
+        const varianteSel = svc
+          ? this._varianteSelDeLinea({ servicio: svc, variantIdx: this._addCmpVarIdx })
+          : null;
         box.querySelector('#cmOk').disabled = true;
-        this._sendToPage('agregar-complemento', { reservaId: r._id, setupUid });
+        this._sendToPage('agregar-complemento', { reservaId: r._id, setupUid, varianteSel });
       });
     }
+
+    // v1.1.83 — Variantes del complemento elegido. Solo variantes: los
+    // complementos no arrastran cascada propia en este circuito.
+    _renderAddComplementoOpts(box) {
+      const cont = box.querySelector('#cmOpts');
+      if (!cont) return;
+      const svc = this._addCmpUid ? this._porSetupUid[this._addCmpUid] : null;
+      const vars = (svc && Array.isArray(svc.variantes)) ? svc.variantes : [];
+      if (!svc || !svc.hasVariants || !vars.length) { cont.innerHTML = ''; return; }
+
+      cont.innerHTML = `<div style="margin-top:12px"><label style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--ks-ink2);">VARIANTE</label>
+        <div class="ks-variant-list" style="margin-top:6px">${vars.map((v, i) => {
+          const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
+          const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) : NaN;
+          const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) : NaN;
+          const meta = [];
+          if (!isNaN(vPrice)) meta.push(vPrice > 0 ? `${vPrice}€` : 'incluido');
+          if (!isNaN(vDur) && vDur > 0) meta.push(`${vDur}′`);
+          const metaHTML = meta.length ? `<span class="ks-dur">${meta.join(' · ')}</span>` : '';
+          return `<button class="ks-variant ${i === this._addCmpVarIdx ? 'active' : ''}" data-cmvi="${i}" style="display:flex;justify-content:space-between;align-items:center"><span>${esc(vLabel)}</span>${metaHTML}</button>`;
+        }).join('')}</div></div>`;
+
+      cont.querySelectorAll('[data-cmvi]').forEach(b => b.addEventListener('click', () => {
+        this._addCmpVarIdx = parseInt(b.getAttribute('data-cmvi'), 10) || 0;
+        this._renderAddComplementoOpts(box);
+      }));
+    }
+
     // v1.1.30 — SERVICIO ADICIONAL: añade un servicio principal NUEVO al
     // final de la cita existente. La cascada del nuevo servicio (si es
     // complejo) se construye en el backend reutilizando construirFasesPack.
     // Regla pedida por Jal: se encadena después de la última fase ocupante.
+    // ═══════════════════════════════════════════════════
+    // + SERVICIO ADICIONAL (desde el modal de la cita)
+    // v1.1.81 — Ahora con ELECCIÓN DE VARIANTE. Antes solo se mandaba el
+    //   setupUid: un servicio con variantes (Corte Mujer M/L/XL) se añadía
+    //   siempre a precio y duración BASE, y un servicio con fases
+    //   obligatorias con variantes (CASO B: Botox → Planchado M/L/XL)
+    //   fallaba con "Falta elegir variante de: …" y no había manera de
+    //   añadirlo. Requiere backend v1.0.43 y page code v1.0.36.
+    //   Los complementos OPCIONALES no se ofrecen aquí: para eso está el
+    //   botón "⛓ Complemento" del propio modal de la cita.
+    // ═══════════════════════════════════════════════════
     _openAddServicioModal(r) {
       const catalogo = Array.isArray(this._servicios) ? this._servicios : [];
       // Filtrar: tipo principal o ambos, activo, con setupUid
@@ -5762,9 +6736,16 @@ button { font-family: inherit; cursor: pointer; }
         const dur = Number(s.duration) || 0;
         const px = Number(s.price) || 0;
         const claseTag = s.claseServicio === 'complejo_fases' || s.claseServicio === 'complejo_proceso' ? ' · cascada' : '';
-        opts += `<option value="${esc(s.setupUid)}" data-precio="${px}">${esc(s.label)} · ${dur}min · ${px}€${claseTag}</option>`;
+        const varTag = s.hasVariants ? ' · variantes' : '';
+        opts += `<option value="${esc(s.setupUid)}" data-precio="${px}">${esc(s.label)} · ${dur}min · ${px}€${claseTag}${varTag}</option>`;
       });
       const vacio = candidatos.length === 0;
+
+      // Estado de la selección (se reinicia cada vez que se abre)
+      this._addSvcUid = '';
+      this._addSvcVarIdx = 0;
+      this._addSvcComplSel = {};
+
       const box = this._openSubModal(`
         <div class="ks-modal-head"><span class="ks-modal-staff">+ AÑADIR SERVICIO</span><button class="ks-modal-x" id="svX">✕</button></div>
         <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">Se añadirá al final de la cita actual y sumará tiempo + precio.</div>
@@ -5773,37 +6754,346 @@ button { font-family: inherit; cursor: pointer; }
           <select id="svSel" style="width:100%;margin-top:6px;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">${opts}</select>
           ${vacio ? '<div style="margin-top:10px;color:#a55b00;font-size:12px;font-style:italic;">No hay servicios principales en el catálogo.</div>' : ''}
         </div>
+        <div id="svOpts" style="margin-top:6px;"></div>
         <div class="ks-modal-foot" style="margin-top:18px;">
           <button class="ks-modal-close" id="svCancel">Cancelar</button>
           <button class="ks-pay" id="svOk" style="background:var(--ks-ink);color:#fff;" ${vacio ? 'disabled' : ''}>Añadir</button>
         </div>`);
       box.querySelector('#svX').addEventListener('click', () => this._closeSubModal());
       box.querySelector('#svCancel').addEventListener('click', () => this._closeSubModal());
+
+      const sel = box.querySelector('#svSel');
+      sel.addEventListener('change', () => {
+        this._addSvcUid = sel.value || '';
+        this._addSvcVarIdx = 0;
+        this._addSvcComplSel = {};
+        this._renderAddServicioOpts(box);
+      });
+
       box.querySelector('#svOk').addEventListener('click', () => {
-        const sel = box.querySelector('#svSel');
-        const setupUid = sel.value;
+        const setupUid = this._addSvcUid || sel.value;
         if (!setupUid) { this._toast('Elige un servicio'); return; }
+        const svc = this._porSetupUid[setupUid];
+        if (!svc) { this._toast('Servicio no encontrado en el catálogo'); return; }
+
+        // Variante del propio servicio
+        const varianteSel = this._varianteSelDeLinea({ servicio: svc, variantIdx: this._addSvcVarIdx });
+
+        // Fases obligatorias con variantes (CASO B): sin elección el motor
+        // no puede construir las fases y el backend rechaza la operación.
+        // Se valida aquí para dar el aviso antes de la ida y vuelta.
+        const comps = Array.isArray(svc.complementos) ? svc.complementos : [];
+        const complementosSetupUid = [];
+        for (const c of comps) {
+          if (!c || !c.required) continue;
+          const cvars = Array.isArray(c.variantes) ? c.variantes : [];
+          if (c.hasVariants && cvars.length) {
+            const elegida = this._addSvcComplSel[c.setupUid];
+            if (!elegida || typeof elegida !== 'object') {
+              this._toast(`Elige una opción de "${c.label}" (obligatorio)`);
+              return;
+            }
+            const v = cvars[elegida.varianteIdx];
+            if (!v) { this._toast(`Opción no válida en "${c.label}"`); return; }
+            complementosSetupUid.push({
+              uid: c.setupUid,
+              varianteId: (typeof v === 'object' && v.tamano_estilo) ? v.tamano_estilo : String(elegida.varianteIdx),
+              varianteLabel: (typeof v === 'object') ? (v.label || v.nombre || '') : String(v),
+              price: (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) || 0 : 0,
+              duration: (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) || 0 : 0
+            });
+          } else {
+            // Obligatorio sin variantes que aun así llega al widget: se
+            // manda tal cual para que el motor lo materialice.
+            complementosSetupUid.push(c.setupUid);
+          }
+        }
+
         box.querySelector('#svOk').disabled = true;
-        this._sendToPage('agregar-servicio', { reservaId: r._id, setupUid });
+        this._sendToPage('agregar-servicio', {
+          reservaId: r._id,
+          setupUid,
+          varianteSel,
+          complementosSetupUid
+        });
       });
     }
+
+    // v1.1.81 — Bloque de opciones del servicio elegido en "+ Servicio
+    // adicional": variantes del propio servicio y fases obligatorias con
+    // variantes. Se repinta entero en cada cambio (bloque pequeño y aislado).
+    _renderAddServicioOpts(box) {
+      const cont = box.querySelector('#svOpts');
+      if (!cont) return;
+      const svc = this._addSvcUid ? this._porSetupUid[this._addSvcUid] : null;
+      if (!svc) { cont.innerHTML = ''; return; }
+
+      const chip = (label, price, dur, active, attrs) => {
+        const meta = [];
+        if (!isNaN(price)) meta.push(price > 0 ? `${price}€` : 'incluido');
+        if (!isNaN(dur) && dur > 0) meta.push(`${dur}′`);
+        const metaHTML = meta.length ? `<span class="ks-dur">${meta.join(' · ')}</span>` : '';
+        return `<button class="ks-variant ${active ? 'active' : ''}" ${attrs} style="display:flex;justify-content:space-between;align-items:center"><span>${esc(label)}</span>${metaHTML}</button>`;
+      };
+
+      let html = '';
+
+      const vars = Array.isArray(svc.variantes) ? svc.variantes : [];
+      if (svc.hasVariants && vars.length) {
+        html += `<div style="margin-top:12px"><label style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--ks-ink2);">VARIANTE</label>
+          <div class="ks-variant-list" style="margin-top:6px">${vars.map((v, i) => {
+            const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
+            const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) : NaN;
+            const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) : NaN;
+            return chip(vLabel, vPrice, vDur, i === this._addSvcVarIdx, `data-svvi="${i}"`);
+          }).join('')}</div></div>`;
+      }
+
+      const comps = (Array.isArray(svc.complementos) ? svc.complementos : [])
+        .filter(c => c && c.required && c.hasVariants && Array.isArray(c.variantes) && c.variantes.length);
+      for (const c of comps) {
+        const sel = this._addSvcComplSel[c.setupUid];
+        const selIdx = (sel && typeof sel === 'object') ? sel.varianteIdx : -1;
+        html += `<div style="margin-top:12px"><label style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--ks-ink2);">⛓ ${esc(c.label)} · OBLIGATORIO</label>
+          <div class="ks-variant-list" style="margin-top:6px">${c.variantes.map((v, vi) => {
+            const vLabel = (typeof v === 'string') ? v : (v.label || v.nombre || '');
+            const vPrice = (typeof v === 'object') ? Number(v.precio != null ? v.precio : v.price) : NaN;
+            const vDur = (typeof v === 'object') ? Number(v.duracion != null ? v.duracion : v.duration) : NaN;
+            return chip(vLabel, vPrice, vDur, vi === selIdx, `data-svcuid="${esc(c.setupUid)}" data-svcvi="${vi}"`);
+          }).join('')}</div></div>`;
+      }
+
+      cont.innerHTML = html;
+
+      cont.querySelectorAll('[data-svvi]').forEach(b => b.addEventListener('click', () => {
+        this._addSvcVarIdx = parseInt(b.getAttribute('data-svvi'), 10) || 0;
+        this._renderAddServicioOpts(box);
+      }));
+      cont.querySelectorAll('[data-svcuid]').forEach(b => b.addEventListener('click', () => {
+        const uid = b.getAttribute('data-svcuid');
+        const vi = parseInt(b.getAttribute('data-svcvi'), 10) || 0;
+        this._addSvcComplSel[uid] = { varianteIdx: vi };
+        this._renderAddServicioOpts(box);
+      }));
+    }
+
     // v1.1.17 — PRODUCTO (modal completo estilo V1: buscador + lista
     // + carrito + métodos de pago + REGISTRAR VENTA). Venta independiente
     // vinculada al packId (reservaId), no se mete en precioTotal.
-    _openAddProductoModal(r) {
-      // Cliente provisional: no se pueden vender productos sin contactId
+    // ═══════════════════════════════════════════════════
+    // v1.1.84 — TIENDA · venta de productos SIN CITA
+    //
+    // Reutiliza íntegro el modal de venta desde cita (buscador, carrito,
+    // variantes, métodos de pago, MISSING_VARIANT). La única diferencia es
+    // que no viaja `packId`: la venta queda registrada contra el contacto,
+    // sin cita asociada.
+    //
+    // Cliente: se toma el que esté cargado en el aside. Si no hay ninguno,
+    // o el que hay es provisional, se pide nombre + teléfono o email y se
+    // crea el contacto al vuelo (mismo circuito que "+ Cliente nuevo").
+    // No hay venta anónima: venderProductosDesdeAgenda exige contactId
+    // porque genera un pedido real de tienda.
+    // ═══════════════════════════════════════════════════
+    // v1.1.85 — Tras registrar una venta de TIENDA, el modal no se cierra:
+    // muestra el resultado y ofrece TICKET (factura simplificada) o FACTURA
+    // completa con CIF/DNI, con la misma mecánica que el modal de cita.
+    // El documento se ancla al cobro por `sourceKey` (bookingId de la venta),
+    // no a una reserva — backend facturacionSalonLogic v1.0.4.
+    _renderVentaDocPanel() {
+      const body = this.shadowRoot.querySelector('#pdBody');
+      if (!body) return;
+      const cli = this._cliente || {};
+      const total = Number(this._ventaTiendaTotal) || 0;
+
+      let slot = '';
+      if (this._ventaGenerando) {
+        slot = `<div style="display:flex;align-items:center;gap:7px;color:var(--ks-ink2);font-size:12.5px;font-weight:600">
+          <span style="display:inline-block;width:12px;height:12px;border:2px solid var(--ks-line);border-top-color:var(--ks-accent);border-radius:50%;animation:ksSpin .7s linear infinite;"></span>
+          Generando documento…</div>`;
+      } else if (this._ventaDoc && this._ventaDoc.invoiceNumber) {
+        const d = this._ventaDoc;
+        const esTicket = d.modo === 'ticket';
+        slot = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="display:inline-flex;align-items:center;gap:7px;background:${esTicket ? 'var(--ks-paper2)' : 'var(--ks-accent-soft)'};border:1px solid ${esTicket ? 'var(--ks-line)' : 'var(--ks-accent)'};border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;color:${esTicket ? 'var(--ks-ink)' : 'var(--ks-accent-ink)'}">
+              <span>${esTicket ? '🧾' : '📄'}</span><span>${esc(d.invoiceNumber)}</span>
+              <a href="#" id="vtPdf" title="Abrir PDF" style="text-decoration:none;color:inherit;font-size:14px;margin-left:2px">🔗</a>
+            </span>
+            ${esTicket ? '<button id="vtUpgrade" style="background:#15803d;color:#fff;border:0;border-radius:8px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">📄 Convertir a factura</button>' : ''}
+          </div>`;
+      } else if (this._ventaForm) {
+        slot = `<div style="display:flex;flex-direction:column;gap:7px">
+            <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase">Datos para factura completa</div>
+            <input id="vtVat" placeholder="CIF / DNI *" value="${esc(this._tiendaVatId || '')}" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
+            <input id="vtLegal" placeholder="Razón social o nombre fiscal" value="${esc(this._tiendaLegalName || '')}" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--ks-line);border-radius:8px;font-size:13px;font-family:inherit">
+            <div style="display:flex;gap:7px">
+              <button id="vtEmitir" style="flex:1;background:var(--ks-ink);color:#fff;border:0;border-radius:8px;padding:9px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">Emitir factura</button>
+              <button id="vtFormCancel" style="background:var(--ks-paper2);color:var(--ks-ink2);border:1px solid var(--ks-line);border-radius:8px;padding:9px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">Cancelar</button>
+            </div>
+            <div style="font-size:11px;color:var(--ks-ink3)">El CIF/DNI se guarda en la ficha del cliente para las próximas veces.</div>
+          </div>`;
+      } else {
+        const conCif = !!(this._tiendaVatId || '').trim();
+        slot = `<div style="display:flex;gap:8px">
+            <button id="vtTicket" style="flex:1;background:var(--ks-paper2);color:var(--ks-ink);border:1px solid var(--ks-line);border-radius:8px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">🧾 Ticket</button>
+            <button id="vtFactura" style="flex:1;background:var(--ks-ink);color:#fff;border:0;border-radius:8px;padding:10px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit">📄 Factura</button>
+          </div>${conCif ? `<div style="margin-top:7px;font-size:11px;color:var(--ks-ink3)">CIF/DNI recogido: <strong>${esc(this._tiendaVatId)}</strong></div>` : ''}`;
+      }
+
+      body.innerHTML = `
+        <div style="text-align:center;padding:6px 0 12px">
+          <div style="font-size:26px">✓</div>
+          <div style="font-size:14px;font-weight:700;color:var(--ks-ink);margin-top:4px">Venta registrada</div>
+          <div style="font-size:12.5px;color:var(--ks-ink2);margin-top:2px">${esc(cli.nombre || '')} · ${total}€</div>
+        </div>
+        <div style="border-top:1px solid var(--ks-line2);padding-top:12px">
+          <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Documento</div>
+          ${slot}
+        </div>
+        <div class="ks-modal-foot" style="margin-top:16px">
+          <button class="ks-modal-close" id="vtCerrar">Cerrar</button>
+        </div>`;
+
+      body.querySelector('#vtCerrar')?.addEventListener('click', () => {
+        this._closeProductoModal();
+        this._sendToPage('getReservas', { fecha: this._fecha });
+      });
+      body.querySelector('#vtTicket')?.addEventListener('click', () => {
+        if (!this._ventaTiendaKey) { this._toast('No se puede identificar la venta'); return; }
+        this._ventaGenerando = true; this._renderVentaDocPanel();
+        this._sendToPage('generarTicketVenta', { sourceKey: this._ventaTiendaKey });
+      });
+      body.querySelector('#vtFactura')?.addEventListener('click', () => {
+        this._ventaForm = true; this._renderVentaDocPanel();
+      });
+      body.querySelector('#vtUpgrade')?.addEventListener('click', () => {
+        this._ventaForm = true; this._ventaDoc = null; this._renderVentaDocPanel();
+      });
+      body.querySelector('#vtFormCancel')?.addEventListener('click', () => {
+        this._ventaForm = false; this._renderVentaDocPanel();
+      });
+      body.querySelector('#vtEmitir')?.addEventListener('click', () => {
+        const vatId = body.querySelector('#vtVat').value.trim();
+        const legalName = body.querySelector('#vtLegal').value.trim();
+        if (!vatId) { this._toast('El CIF/DNI es obligatorio para la factura completa'); return; }
+        if (!this._ventaTiendaKey) { this._toast('No se puede identificar la venta'); return; }
+        this._ventaForm = false;
+        this._ventaGenerando = true;
+        this._renderVentaDocPanel();
+        this._sendToPage('generarFacturaVenta', { sourceKey: this._ventaTiendaKey, vatId, legalName });
+      });
+      body.querySelector('#vtPdf')?.addEventListener('click', e => {
+        e.preventDefault();
+        const url = this._ventaDoc && this._ventaDoc.pdfUrl;
+        if (url) window.open(url, '_blank', 'noopener');
+        else this._toast('El documento no tiene PDF asociado');
+      });
+    }
+
+    _openTiendaModal() {
+      if (!this._puede('cobrar')) { this._toast('No tienes permiso para esta acción'); return; }
+      // v1.1.86 — El paso de cliente se muestra SIEMPRE, también cuando ya
+      // hay uno cargado en el aside: es donde se captura el CIF/DNI, que
+      // hay que pedir con el cliente delante y no después de cobrar. Si el
+      // cliente ya existe, el formulario viene relleno y basta con
+      // continuar.
+      this._tiendaVatId = '';
+      this._tiendaLegalName = '';
+      this._openTiendaClienteForm();
+    }
+
+    // Mini-formulario de identificación. Se prerrellena con lo que haya
+    // en el aside (caso típico: cliente provisional con solo el nombre).
+    _openTiendaClienteForm() {
+      const cli = this._cliente || {};
+      const yaIdentificado = !!(cli.contactId && !cli.esProvisional);
+      const partes = String(cli.nombre || '').trim().split(' ');
+      const nomPrev = partes.shift() || '';
+      const apePrev = partes.join(' ');
+      const box = this._openSubModal(`
+        <div class="ks-modal-head"><span class="ks-modal-staff">🛍 TIENDA · CLIENTE</span><button class="ks-modal-x" id="tdX">✕</button></div>
+        <div style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">${yaIdentificado
+          ? 'Cliente cargado. Añade el CIF/DNI si va a querer factura completa.'
+          : 'La venta se registra a nombre de un cliente. Indica sus datos para darlo de alta.'}</div>
+        <div style="margin-top:14px;display:grid;gap:8px">
+          <input id="tdNombre" placeholder="Nombre *" value="${esc(nomPrev)}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
+          <input id="tdApellido" placeholder="Apellidos" value="${esc(apePrev)}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
+          <input id="tdTelefono" placeholder="Teléfono" value="${esc(cli.telefono || '')}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
+          <input id="tdEmail" placeholder="Email" value="${esc(cli.email || '')}" ${yaIdentificado ? 'disabled' : ''} style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;${yaIdentificado ? 'background:var(--ks-paper2);color:var(--ks-ink2);' : ''}">
+        </div>
+        <div style="margin-top:14px;border-top:1px solid var(--ks-line2);padding-top:12px;">
+          <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Datos fiscales · solo si quiere factura</div>
+          <div style="display:grid;gap:8px">
+            <input id="tdVatId" placeholder="CIF / DNI" value="${esc(this._tiendaVatId || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+            <input id="tdLegal" placeholder="Razón social o nombre fiscal" value="${esc(this._tiendaLegalName || '')}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--ks-line);border-radius:8px;font-size:14px;font-family:inherit;">
+          </div>
+          <div style="margin-top:7px;font-size:11px;color:var(--ks-ink3);">Si lo dejas vacío podrás emitir ticket, y añadir el CIF más tarde para convertirlo en factura.</div>
+        </div>
+        <div style="margin-top:10px;font-size:11.5px;color:var(--ks-ink3);">${yaIdentificado ? '' : 'Nombre y, al menos, teléfono o email.'}</div>
+        <div class="ks-modal-foot" style="margin-top:16px;">
+          <button class="ks-modal-close" id="tdCancel">Cancelar</button>
+          <button class="ks-pay" id="tdOk" style="background:var(--ks-ink);color:#fff;">Continuar</button>
+        </div>`);
+      box.querySelector('#tdX').addEventListener('click', () => this._closeSubModal());
+      box.querySelector('#tdCancel').addEventListener('click', () => this._closeSubModal());
+      box.querySelector('#tdOk').addEventListener('click', () => {
+        // Los datos fiscales se guardan siempre: viajan al paso de factura
+        // y se persisten en la ficha del cliente al emitirla.
+        this._tiendaVatId = box.querySelector('#tdVatId').value.trim();
+        this._tiendaLegalName = box.querySelector('#tdLegal').value.trim();
+
+        if (yaIdentificado) { this._abrirVentaTienda(); return; }
+
+        const nombre = box.querySelector('#tdNombre').value.trim();
+        const apellido = box.querySelector('#tdApellido').value.trim();
+        const telefono = box.querySelector('#tdTelefono').value.trim();
+        const email = box.querySelector('#tdEmail').value.trim();
+        if (!nombre) { this._toast('El nombre es obligatorio'); return; }
+        if (!telefono && !email) { this._toast('Indica teléfono o email'); return; }
+        box.querySelector('#tdOk').disabled = true;
+        // Bandera: al llegar 'clienteCreado' se abre la venta directamente.
+        this._tiendaEsperandoCliente = true;
+        this._sendToPage('crearCliente', { nombre, apellido, telefono, email });
+      });
+    }
+
+    // Abre el modal de venta con el cliente cargado y SIN cita asociada.
+    _abrirVentaTienda() {
+      const cli = this._cliente;
+      if (!cli || !cli.contactId) { this._toast('Falta identificar al cliente'); return; }
+      this._closeSubModal();
+      this._ventaTiendaActiva = true;
+      this._ventaTiendaKey = '';
+      this._ventaTiendaTotal = 0;
+      this._ventaDoc = null;
+      this._ventaForm = false;
+      this._ventaGenerando = false;
+      this._openAddProductoModal({
+        _id: '',                       // sin cita → el page code manda packId vacío
+        contactId: cli.contactId,
+        clientName: cli.nombre || '',
+        clientEmail: cli.email || '',
+        clientPhone: cli.telefono || ''
+      }, { titulo: `🛍 TIENDA · ${esc(cli.nombre || '')}` });
+    }
+
+    // v1.1.84 — `opts.titulo` permite reutilizar este mismo modal desde el
+    // botón TIENDA (venta sin cita). Sin opts, comportamiento de siempre.
+    _openAddProductoModal(r, opts) {
+      // Sin contactId no hay venta: venderProductosDesdeAgenda crea un
+      // pedido real de tienda contra un contacto y aborta sin él.
       const esProvisional = !r.contactId;
       if (esProvisional) {
         this._toast('Cliente provisional · convierte el cliente primero para vender productos');
         return;
       }
+      const tituloModal = (opts && opts.titulo) ? opts.titulo : `🛍 AÑADIR PRODUCTO · ${esc(r.clientName || '')}`;
       this._pendingProdReserva = r;
       this._productoCart = [];
       this._productoSearchQ = '';
       this._productoMetodoPago = 'Efectivo';
       this._productosCache = this._productosCache || null;
       const box = this._openSubModal(`
-        <div class="ks-modal-head"><span class="ks-modal-staff">🛍 AÑADIR PRODUCTO · ${esc(r.clientName || '')}</span><button class="ks-modal-x" id="pdX">✕</button></div>
+        <div class="ks-modal-head"><span class="ks-modal-staff">${tituloModal}</span><button class="ks-modal-x" id="pdX">✕</button></div>
         <div id="pdBody" style="margin-top:14px;font-size:13px;color:var(--ks-ink2);">Cargando catálogo…</div>
       `);
       box.id = 'subModalProducto';
@@ -5818,6 +7108,13 @@ button { font-family: inherit; cursor: pointer; }
     }
     _closeProductoModal() {
       this._pendingProdReserva = null;
+      // v1.1.85 — limpiar el estado de la venta de TIENDA
+      this._ventaTiendaActiva = false;
+      this._ventaTiendaKey = '';
+      this._ventaTiendaTotal = 0;
+      this._ventaDoc = null;
+      this._ventaForm = false;
+      this._ventaGenerando = false;
       this._productoCart = [];
       this._productoSearchQ = '';
       this._closeSubModal();
@@ -6679,6 +7976,20 @@ button { font-family: inherit; cursor: pointer; }
         h += `</div>`;
       }
 
+      // v1.1.80 — Especiales vendidos hoy (Bono 🎟️ / PRIME ⭐ / Tarjeta 🎁).
+      // Requiere backend cierreLogicExtendido v1.1.5+. Si no está desplegado,
+      // cierre.especiales llega undefined y la sección no se pinta.
+      if (cierre.especiales?.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🎟️ Especiales vendidos hoy</div>`;
+        for (const e of cierre.especiales) {
+          const quien = e.cliente ? ` · <b>${esc(e.cliente)}</b>` : '';
+          const met = e.metodo ? ` <span style="color:#9ca3af;font-size:10px;">${esc(e.metodo)}</span>` : '';
+          h += `<div class="cierre-row"><span class="cierre-nombre">${esc(e.concepto)}${quien}${met}</span><span class="cierre-importe">${eur(e.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total especiales</span><span class="cierre-importe" style="font-weight:700;">${eur(cierre.especialesTotal || 0)}</span></div>`;
+        h += `</div>`;
+      }
+
       // Comisiones externos
       if (cierre.externos?.length) {
         h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🔗 Comisiones externos</div>`;
@@ -7135,6 +8446,17 @@ button { font-family: inherit; cursor: pointer; }
             L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
           }
         }
+        // v1.1.80 — Especiales vendidos hoy
+        if (c.especiales && c.especiales.length) {
+          L.push('');
+          L.push('🎟️ Especiales vendidos hoy');
+          for (const e of c.especiales) {
+            const quien = e.cliente ? ` · ${e.cliente}` : '';
+            const met = e.metodo ? ` (${e.metodo})` : '';
+            L.push(`- ${e.concepto}${quien}${met}: ${eur(e.importe)}`);
+          }
+          L.push(`Total especiales: ${eur(c.especialesTotal || 0)}`);
+        }
         if (c.externos && c.externos.length) {
           L.push('');
           L.push('🔗 Comisiones externos');
@@ -7361,6 +8683,182 @@ button { font-family: inherit; cursor: pointer; }
         if (it.total <= 0) this._almProductos.splice(i, 1);
       }
       this._renderAlmacen();
+    }
+
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.77 — FICHA TÉCNICA (histórico de color)
+    // ═══════════════════════════════════════════════════
+    // Consulta del histórico del sistema anterior para la sala.
+    // NO muestra dinero porque el backend NO lo envía: ver
+    // getFichaTecnicaCliente en memoriaLegacyLogic v1.0.3.
+
+    _openFichaTecnica() {
+      this._ftCliente = null;
+      this._ftData = null;
+      this._ftCargando = false;
+      const root = this.shadowRoot;
+      root.getElementById('ftScrim')?.remove();
+      const scrim = document.createElement('div');
+      scrim.className = 'ft-scrim';
+      scrim.id = 'ftScrim';
+      root.appendChild(scrim);
+      this._renderFt();
+
+      // v1.1.79 — Precarga por orden de proximidad al operador:
+      // 1º el cliente del aside (lo que tiene delante ahora mismo),
+      // 2º el de la última cita abierta en el calendario.
+      // Sin este orden el popup se quedaba pegado al cliente anterior.
+      let pre = null;
+      const cliAside = this._cliente;
+      if (cliAside && cliAside.nombre) {
+        pre = { nombre: cliAside.nombre, telefono: cliAside.telefono || '' };
+      } else {
+        const u = this._ftUltimoCliente;
+        if (u && (u.telefono || u.nombre)) pre = u;
+      }
+      if (pre) this._ftCargar(pre.nombre, pre.telefono);
+    }
+
+    _closeFichaTecnica() {
+      this.shadowRoot.getElementById('ftScrim')?.remove();
+    }
+
+    _ftCargar(nombre, telefono) {
+      this._ftCliente = { nombre: nombre || '', telefono: telefono || '' };
+      this._ftData = null;
+      this._ftCargando = true;
+      this._renderFt();
+      this._sendToPage('getFichaTecnica', {
+        telefono: telefono || '',
+        clientName: nombre || ''
+      });
+    }
+
+    _onFichaTecnica(p) {
+      this._ftCargando = false;
+      this._ftData = (p && p.data) ? p.data : { ok: false };
+      this._renderFt();
+    }
+
+    _renderFtCli(clientes) {
+      const box = this.shadowRoot.getElementById('ftResults');
+      if (!box) return;
+      if (!clientes.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      box.innerHTML = clientes.map(c => `
+        <div class="ft-cli" data-tel="${esc(c.telefono || '')}" data-nom="${esc(c.nombreCompleto || '')}">
+          <div class="ft-cli-name">${esc(c.nombreCompleto || '—')}</div>
+          <div class="ft-cli-tel">${esc(c.telefono || 'Sin teléfono')}</div>
+        </div>`).join('');
+      box.querySelectorAll('.ft-cli').forEach(el => {
+        el.addEventListener('click', () => {
+          const q = this.shadowRoot.getElementById('ftQuery');
+          if (q) q.value = '';
+          box.innerHTML = ''; box.style.display = 'none';
+          this._ftCargar(el.getAttribute('data-nom'), el.getAttribute('data-tel'));
+        });
+      });
+    }
+
+    _ftFecha(ymd) {
+      if (!ymd || ymd.length < 10) return '—';
+      const M = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      return Number(ymd.slice(8,10)) + ' ' + (M[Number(ymd.slice(5,7)) - 1] || '') + ' ' + ymd.slice(0,4);
+    }
+
+    _renderFt() {
+      const scrim = this.shadowRoot.getElementById('ftScrim');
+      if (!scrim) return;
+      const cli = this._ftCliente;
+      const d = this._ftData;
+
+      let cuerpo = '';
+      if (this._ftCargando) {
+        cuerpo = `<div class="ft-empty">Buscando el historial…</div>`;
+      } else if (!cli) {
+        cuerpo = `<div class="ft-empty">Busca una clienta para ver su historial de color.</div>`;
+      } else if (!d || !d.ok) {
+        cuerpo = `<div class="ft-empty">No se ha podido consultar el historial.</div>`;
+      } else if (!d.encontrado) {
+        cuerpo = `<div class="ft-empty">Sin historial anterior para <b>${esc(cli.nombre)}</b>.<br>Es clienta nueva o entró ya con el sistema actual.</div>`;
+      } else {
+        const c = d.cliente || {};
+        const habituales = d.habituales || [];
+        const visitas = d.visitas || [];
+
+        // v1.1.78 — las fórmulas van PRIMERO y en bloque propio. Es el
+        // dato por el que se abre este popup; enterrarlo dentro del
+        // historial obliga a rebuscar (solo ~16% de visitas lo tienen).
+        const conFormula = visitas.filter(v => v.formula);
+
+        cuerpo = `
+          <div class="ft-kpis">
+            <div class="ft-kpi"><div class="ft-kpi-l">Visitas</div><div class="ft-kpi-v">${c.visitas || 0}</div></div>
+            <div class="ft-kpi"><div class="ft-kpi-l">Fórmulas</div><div class="ft-kpi-v">${c.formulas || 0}</div></div>
+            <div class="ft-kpi"><div class="ft-kpi-l">Primera</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.primeraVisita))}</div></div>
+            <div class="ft-kpi"><div class="ft-kpi-l">Última</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.ultimaVisita))}</div></div>
+          </div>
+
+          <div class="ft-sec">Historial de color (${conFormula.length})</div>
+          ${conFormula.length ? conFormula.map(v => `
+            <div class="ft-color">
+              <div class="ft-color-h">
+                <span class="ft-vfecha">${esc(this._ftFecha(v.fecha))}</span>
+                ${v.profesional ? `<span class="ft-vof">${esc(v.profesional)}</span>` : ''}
+              </div>
+              <div class="ft-formula">${esc(v.formula)}</div>
+              <div class="ft-color-srv">${esc((v.servicios || []).map(x => x.servicio || x.codigo).join(' + ') || '')}</div>
+            </div>`).join('')
+            : `<div class="ft-nocolor">Sin fórmulas anotadas en el sistema anterior.</div>`}
+
+          ${habituales.length ? `<div class="ft-sec">Lo que se le hace</div><div class="ft-habit">${
+            habituales.map(h => `<span class="ft-tag">${esc(h.servicio || h.codigo)} <b>×${h.veces}</b></span>`).join('')
+          }</div>` : ''}
+
+          <div class="ft-sec">Todas sus visitas (${visitas.length})</div>
+          ${visitas.length ? visitas.map(v => `
+            <div class="ft-visita">
+              <div class="ft-vh">
+                <span class="ft-vfecha">${esc(this._ftFecha(v.fecha))}</span>
+                ${v.hora ? `<span class="ft-cli-tel">${esc(v.hora)}</span>` : ''}
+                ${v.profesional ? `<span class="ft-vof">${esc(v.profesional)}</span>` : ''}
+              </div>
+              <div class="ft-vsrv">${esc((v.servicios || []).map(x => x.servicio || x.codigo).join(' + ') || '—')}</div>
+            </div>`).join('') : `<div class="ft-empty">Sin visitas registradas.</div>`}
+        `;
+      }
+
+      scrim.innerHTML = `
+        <div class="ft-modal">
+          <div class="ft-head">
+            <div>
+              <div class="ft-title">🎨 Ficha técnica${cli && cli.nombre ? ' · ' + esc(cli.nombre) : ''}</div>
+              <div class="ft-sub">Historial de color del sistema anterior</div>
+            </div>
+            <button class="ft-x" id="ftClose">✕</button>
+          </div>
+          <div class="ft-search">
+            <input class="ft-input" id="ftQuery" type="search" placeholder="Buscar clienta por nombre o teléfono…" autocomplete="off">
+            <div class="ft-results" id="ftResults" style="display:none"></div>
+          </div>
+          <div class="ft-body">${cuerpo}</div>
+          <div class="ft-foot">Solo consulta técnica. Los datos económicos están en Histórico de Facturación.</div>
+        </div>`;
+
+      scrim.querySelector('#ftClose')?.addEventListener('click', () => this._closeFichaTecnica());
+      scrim.addEventListener('click', (e) => { if (e.target === scrim) this._closeFichaTecnica(); });
+
+      const q = scrim.querySelector('#ftQuery');
+      if (q) {
+        q.addEventListener('input', () => {
+          const val = q.value.trim();
+          clearTimeout(this._ftBuscarTimer);
+          if (val.length < 2) { this._renderFtCli([]); return; }
+          this._ftBuscarTimer = setTimeout(() => this._sendToPage('ftBuscarCliente', { query: val }), 250);
+        });
+      }
+
     }
 
     // ═══════════════════════════════════════════════════
