@@ -1,9 +1,28 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.43
-// FECHA: 5 de agosto de 2026
+// VERSION: 1.0.44
+// FECHA: 10 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
+//
+// v1.0.44: 📋 FICHA DEL CLIENTE en el modal de la cita (widget v1.1.97).
+//          Tres puentes nuevos hacia el backend NUEVO
+//          `clientRecordsLogic.web` v1.0.0, que sustituye a los campos
+//          personalizados de Wix Contacts como fuente de las notas de
+//          COLOR, TRATAMIENTO y generales (decisión Jal 10-ago-2026):
+//            'getFichaClienteRecords' → 'fichaClienteRecords'
+//            'guardarFichaCliente'    → 'fichaClienteGuardada'
+//            'quitarFichaCliente'     → 'fichaClienteQuitada'
+//          La anotación se firma con el empleado logueado
+//          (`_empleadoActivo.staffName`), igual que `soldBy` en el cobro
+//          desde v1.0.42. Sin capa de acceso activa va vacío.
+//          NO se añade entrada a LOG_EVENT_MAP: la autoría ya queda
+//          grabada en la propia fila del CMS (campo `author`), y
+//          `ficha_cliente` no está en VALID_EVENTS de
+//          recepcionAccessLogic — mapearla generaría un log rechazado.
+//          Cambio ADITIVO: ningún handler, import ni contrato existente
+//          se toca. El popup FICHA TÉCNICA de la barra superior y su
+//          backend memoriaLegacyLogic quedan exactamente igual.
 //
 // v1.0.43: 📅 Observatorio semanal + confirmación de datáfono/Bizum.
 //          · `cierre-dia` llama además a obtenerObservatorioSemanal
@@ -561,7 +580,17 @@ import {
 // Nombre comprobado contra el resto de imports de este archivo: no colisiona.
 import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.43]';
+// v1.0.44 — FICHA DEL CLIENTE (CMS-first, KamisuiteClientRecords).
+// Backend NUEVO y aditivo: no toca recepcionProLogic (motor compartido),
+// ni fichaClienteLogic, ni clienteAreaLogic. Los tres nombres se han
+// comprobado contra el resto de imports de este archivo: no colisionan.
+import {
+  getFichaClienteRecords,
+  guardarFichaClienteRecord,
+  desactivarFichaClienteRecord
+} from 'backend/clientRecordsLogic.web';
+
+const TAG = '[RecepcionProCMS v1.0.44]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -758,6 +787,76 @@ async function handleFichaTecnica(msg) {
       data: { ok: false, error: { message: e?.message || 'Error' } },
       clientName: msg.clientName || '',
       telefono: msg.telefono || ''
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// v1.0.44 — FICHA DEL CLIENTE (popup del modal de la cita)
+// ═══════════════════════════════════════════════════════════
+// Fuente CMS-first: KamisuiteClientRecords, vía clientRecordsLogic
+// v1.0.0. Sustituye a los campos personalizados de Wix Contacts.
+//
+// Canal propio (getFichaClienteRecords / guardarFichaCliente /
+// quitarFichaCliente) para no pisar el del popup FICHA TÉCNICA de la
+// barra superior, que sigue leyendo el histórico legacy y no se toca.
+//
+// ⚠️ SIN DATOS ECONÓMICOS en las últimas visitas: el filtro vive en el
+// backend, que descarta el precio de cada línea de serviciosDetail
+// antes de responder. Aquí no hay nada que ocultar porque nada llega.
+
+async function handleGetFichaCliente(msg) {
+  try {
+    const data = await getFichaClienteRecords({
+      contactId:        msg.contactId || '',
+      clientName:       msg.clientName || '',
+      clientPhone:      msg.clientPhone || '',
+      excluirReservaId: msg.reservaId || ''
+    });
+    sendResponse('fichaClienteRecords', { data, contactId: msg.contactId || '' });
+  } catch (e) {
+    console.error(`${TAG} ❌ getFichaClienteRecords:`, e);
+    sendResponse('fichaClienteRecords', {
+      data: { ok: false, error: { message: e?.message || 'Error' }, anotaciones: [], visitas: [], mensajeCliente: [] },
+      contactId: msg.contactId || ''
+    });
+  }
+}
+
+async function handleGuardarFichaCliente(msg) {
+  try {
+    const data = await guardarFichaClienteRecord({
+      contactId:   msg.contactId || '',
+      clientName:  msg.clientName || '',
+      clientPhone: msg.clientPhone || '',
+      recordType:  msg.recordType || 'GENERAL',
+      recordText:  msg.recordText || '',
+      bookingId:   msg.reservaId || '',
+      source:      'RECEPCION',
+      // Firma con el empleado logueado, igual que `soldBy` en el cobro
+      // (v1.0.42). Sin capa de acceso activa va vacío y el CMS lo guarda
+      // sin autor, que es la verdad: no había nadie identificado.
+      author: (_empleadoActivo && _empleadoActivo.staffName) || ''
+    });
+    sendResponse('fichaClienteGuardada', { data, recordType: msg.recordType || 'GENERAL' });
+  } catch (e) {
+    console.error(`${TAG} ❌ guardarFichaCliente:`, e);
+    sendResponse('fichaClienteGuardada', {
+      data: { ok: false, error: { message: e?.message || 'Error' } },
+      recordType: msg.recordType || 'GENERAL'
+    });
+  }
+}
+
+async function handleQuitarFichaCliente(msg) {
+  try {
+    const data = await desactivarFichaClienteRecord({ recordId: msg.recordId || '' });
+    sendResponse('fichaClienteQuitada', { data, recordId: msg.recordId || '' });
+  } catch (e) {
+    console.error(`${TAG} ❌ quitarFichaCliente:`, e);
+    sendResponse('fichaClienteQuitada', {
+      data: { ok: false, error: { message: e?.message || 'Error' } },
+      recordId: msg.recordId || ''
     });
   }
 }
@@ -1945,6 +2044,10 @@ $w.onReady(function () {
         // v1.0.34 — popup ALMACÉN
         case 'ftBuscarCliente':      handleFtBuscarCliente(msg); break;
         case 'getFichaTecnica':      handleFichaTecnica(msg); break;
+        // v1.0.44 — FICHA DEL CLIENTE (popup del modal de la cita)
+        case 'getFichaClienteRecords': handleGetFichaCliente(msg); break;
+        case 'guardarFichaCliente':    handleGuardarFichaCliente(msg); break;
+        case 'quitarFichaCliente':     handleQuitarFichaCliente(msg); break;
         case 'getAlmacenConsumibles': handleAlmacenConsumibles(); break;
         case 'almacenPapelera':       handleAlmacenPapelera(msg); break;
         case 'almacenSacar':          handleAlmacenSacar(msg); break;
