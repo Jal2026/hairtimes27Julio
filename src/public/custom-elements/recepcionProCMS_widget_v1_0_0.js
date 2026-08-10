@@ -1,7 +1,28 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.97  ·  FICHA DEL CLIENTE en el modal de la cita
+ * VERSION: 1.1.98  ·  La ficha del cliente, también sin cita
+ *
+ * v1.1.98 (10 ago 2026) — La FICHA DEL CLIENTE se consulta y se escribe
+ *   desde los DOS sitios: el modal de la cita (v1.1.97) y el botón
+ *   FICHA TÉCNICA de la barra superior, que no necesita cita alguna.
+ *
+ *   El popup de FICHA TÉCNICA lleva ahora, en su cabecera, el botón
+ *   '📋 Ficha del cliente', activo en cuanto hay una clienta elegida —
+ *   venga del buscador, del panel izquierdo o de la última cita abierta.
+ *   Se muestra INCLUSO si el histórico legacy falla o no existe en ese
+ *   salón: son dos fuentes independientes y una no debe tapar a la otra.
+ *
+ *   Para hacerlo posible, el circuito de FICHA TÉCNICA propaga ahora el
+ *   `contactId` de la clienta, que antes se perdía: el buscador solo
+ *   llevaba nombre y teléfono. Sin contactId no se puede leer ni
+ *   escribir en KamisuiteClientRecords.
+ *
+ *   `_openFichaCliente` deja de exigir una reserva y acepta cualquier
+ *   contexto con cliente. Cuando se abre sin cita, la anotación se
+ *   guarda sin `bookingId`: es del cliente, no de una visita concreta.
+ *
+ *   El histórico legacy (memoriaLegacyLogic) NO se toca.
  *
  * v1.1.97 (10 ago 2026) — Botón FICHA DEL CLIENTE en el modal de la cita,
  *   con popup propio para escribir COLOR, TRATAMIENTO y notas generales.
@@ -1721,7 +1742,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.97]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.98]';
 
   // ─── helpers ───
   function esc(s) {
@@ -6376,7 +6397,7 @@ button { font-family: inherit; cursor: pointer; }
       // ABRIR la cita: el modal tapa la barra, así que el flujo real es
       // abrir cita → cerrar → pulsar Ficha Técnica.
       if (r && r.clientName && r.family !== 'BLOQUEO') {
-        this._ftUltimoCliente = { nombre: r.clientName, telefono: r.clientPhone || '' };
+        this._ftUltimoCliente = { nombre: r.clientName, telefono: r.clientPhone || '', contactId: r.contactId || '' };
       }
       this._disc = 0;
       this._discMode = 'pct';
@@ -9505,9 +9526,21 @@ button { font-family: inherit; cursor: pointer; }
     // El mensaje del Área de Cliente es SOLO LECTURA: es la voz del
     // cliente y no se edita desde recepción.
 
-    _openFichaCliente(r) {
-      if (!r || !r.contactId) return;
-      this._fcReserva = r;
+    // v1.1.98 — Acepta CUALQUIER contexto con cliente, no solo una reserva:
+    //   · desde el modal de la cita  → objeto reserva (contactId/clientName/
+    //     clientPhone/_id), y la anotación queda ligada a esa visita.
+    //   · desde el popup FICHA TÉCNICA → { contactId, nombre, telefono },
+    //     sin cita: la anotación se guarda sin bookingId, que es la verdad
+    //     — es del cliente, no de una visita concreta.
+    _openFichaCliente(src) {
+      const ctx = {
+        contactId:   (src && src.contactId) || '',
+        clientName:  (src && (src.clientName || src.nombre)) || '',
+        clientPhone: (src && (src.clientPhone || src.telefono)) || '',
+        reservaId:   (src && (src._id || src.reservaId)) || ''
+      };
+      if (!ctx.contactId) return;
+      this._fcCtx = ctx;
       this._fcData = null;
       this._fcCargando = true;
       this._fcTab = 'COLOR';
@@ -9523,23 +9556,23 @@ button { font-family: inherit; cursor: pointer; }
       this._renderFichaCliente();
 
       this._sendToPage('getFichaClienteRecords', {
-        contactId:   r.contactId,
-        clientName:  r.clientName || '',
-        clientPhone: r.clientPhone || '',
-        reservaId:   r._id
+        contactId:   ctx.contactId,
+        clientName:  ctx.clientName,
+        clientPhone: ctx.clientPhone,
+        reservaId:   ctx.reservaId
       });
     }
 
     _closeFichaCliente() {
       this.shadowRoot.getElementById('fcScrim')?.remove();
-      this._fcReserva = null;
+      this._fcCtx = null;
       this._fcData = null;
     }
 
     _renderFichaCliente() {
       const scrim = this.shadowRoot.getElementById('fcScrim');
       if (!scrim) return;
-      const r = this._fcReserva || {};
+      const r = this._fcCtx || {};
       const d = this._fcData || {};
       const tab = this._fcTab || 'COLOR';
 
@@ -9638,7 +9671,7 @@ button { font-family: inherit; cursor: pointer; }
 
     _guardarFichaCliente() {
       const scrim = this.shadowRoot.getElementById('fcScrim');
-      const r = this._fcReserva;
+      const r = this._fcCtx;
       if (!scrim || !r) return;
       const ta = scrim.querySelector('#fcTa');
       const texto = ta ? String(ta.value || '').trim() : '';
@@ -9654,7 +9687,8 @@ button { font-family: inherit; cursor: pointer; }
         clientPhone: r.clientPhone || '',
         recordType:  this._fcTab,
         recordText:  texto,
-        reservaId:   r._id
+        // v1.1.98 — vacío cuando se abre sin cita (desde FICHA TÉCNICA).
+        reservaId:   r.reservaId || ''
       });
     }
 
@@ -9743,20 +9777,24 @@ button { font-family: inherit; cursor: pointer; }
       let pre = null;
       const cliAside = this._cliente;
       if (cliAside && cliAside.nombre) {
-        pre = { nombre: cliAside.nombre, telefono: cliAside.telefono || '' };
+        // v1.1.98 — el contactId viaja también, para la ficha CMS.
+        pre = { nombre: cliAside.nombre, telefono: cliAside.telefono || '', contactId: cliAside.contactId || '' };
       } else {
         const u = this._ftUltimoCliente;
         if (u && (u.telefono || u.nombre)) pre = u;
       }
-      if (pre) this._ftCargar(pre.nombre, pre.telefono);
+      if (pre) this._ftCargar(pre.nombre, pre.telefono, pre.contactId);
     }
 
     _closeFichaTecnica() {
       this.shadowRoot.getElementById('ftScrim')?.remove();
     }
 
-    _ftCargar(nombre, telefono) {
-      this._ftCliente = { nombre: nombre || '', telefono: telefono || '' };
+    // v1.1.98 — tercer argumento `contactId`. Antes se perdía: el buscador
+    // solo arrastraba nombre y teléfono, y sin contactId no se puede leer
+    // ni escribir en KamisuiteClientRecords.
+    _ftCargar(nombre, telefono, contactId) {
+      this._ftCliente = { nombre: nombre || '', telefono: telefono || '', contactId: contactId || '' };
       this._ftData = null;
       this._ftCargando = true;
       this._renderFt();
@@ -9778,7 +9816,7 @@ button { font-family: inherit; cursor: pointer; }
       if (!clientes.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
       box.style.display = 'block';
       box.innerHTML = clientes.map(c => `
-        <div class="ft-cli" data-tel="${esc(c.telefono || '')}" data-nom="${esc(c.nombreCompleto || '')}">
+        <div class="ft-cli" data-tel="${esc(c.telefono || '')}" data-nom="${esc(c.nombreCompleto || '')}" data-cid="${esc(c.contactId || '')}">
           <div class="ft-cli-name">${esc(c.nombreCompleto || '—')}</div>
           <div class="ft-cli-tel">${esc(c.telefono || 'Sin teléfono')}</div>
         </div>`).join('');
@@ -9787,7 +9825,7 @@ button { font-family: inherit; cursor: pointer; }
           const q = this.shadowRoot.getElementById('ftQuery');
           if (q) q.value = '';
           box.innerHTML = ''; box.style.display = 'none';
-          this._ftCargar(el.getAttribute('data-nom'), el.getAttribute('data-tel'));
+          this._ftCargar(el.getAttribute('data-nom'), el.getAttribute('data-tel'), el.getAttribute('data-cid'));
         });
       });
     }
@@ -9867,7 +9905,10 @@ button { font-family: inherit; cursor: pointer; }
               <div class="ft-title">🎨 Ficha técnica${cli && cli.nombre ? ' · ' + esc(cli.nombre) : ''}</div>
               <div class="ft-sub">Historial de color del sistema anterior</div>
             </div>
-            <button class="ft-x" id="ftClose">✕</button>
+            <div style="display:flex;align-items:center;gap:10px">
+              ${cli && cli.contactId ? `<button class="ks-fichacli" id="ftFichaCli" style="width:auto;padding:8px 14px">📋 Ficha del cliente</button>` : ''}
+              <button class="ft-x" id="ftClose">✕</button>
+            </div>
           </div>
           <div class="ft-search">
             <input class="ft-input" id="ftQuery" type="search" placeholder="Buscar clienta por nombre o teléfono…" autocomplete="off">
@@ -9878,6 +9919,14 @@ button { font-family: inherit; cursor: pointer; }
         </div>`;
 
       scrim.querySelector('#ftClose')?.addEventListener('click', () => this._closeFichaTecnica());
+      // v1.1.98 — La ficha CMS se abre ENCIMA del popup legacy (fc-scrim va
+      // en z-index 210, ft-scrim en 200). Al cerrarla se vuelve aquí, con
+      // la clienta todavía cargada. Las dos fuentes son independientes:
+      // este botón aparece aunque el histórico legacy no haya podido leerse.
+      scrim.querySelector('#ftFichaCli')?.addEventListener('click', () => {
+        const c = this._ftCliente;
+        if (c && c.contactId) this._openFichaCliente(c);
+      });
       scrim.addEventListener('click', (e) => { if (e.target === scrim) this._closeFichaTecnica(); });
 
       const q = scrim.querySelector('#ftQuery');
