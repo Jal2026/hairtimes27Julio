@@ -1,7 +1,37 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.96  ·  Chips de cliente en el panel de Recepción
+ * VERSION: 1.1.97  ·  FICHA DEL CLIENTE en el modal de la cita
+ *
+ * v1.1.97 (10 ago 2026) — Botón FICHA DEL CLIENTE en el modal de la cita,
+ *   con popup propio para escribir COLOR, TRATAMIENTO y notas generales.
+ *   Requiere page code v1.0.44 y el backend NUEVO clientRecordsLogic
+ *   v1.0.0 sobre la colección KamisuiteClientRecords.
+ *
+ *   POR QUÉ. Hasta hoy esas notas solo se podían escribir desde el CRM,
+ *   que las guarda en campos personalizados de Wix Contacts. La clave de
+ *   esos campos la genera Wix por sitio, Wix fusiona contactos por email,
+ *   y un campo de texto por categoría no tiene histórico. Decisión Jal
+ *   (10-ago-2026): fuente CMS-first, una FILA POR ANOTACIÓN.
+ *
+ *   QUÉ PINTA EL POPUP, de arriba abajo:
+ *     · Las TRES ÚLTIMAS VISITAS del cliente — fecha, hora, profesional
+ *       y servicios. SIN importes: el backend no los envía.
+ *     · El MENSAJE PERMANENTE que el cliente deja desde su Área de
+ *       Cliente, si lo hay. Solo lectura: es su voz, no se edita aquí.
+ *     · Tres pestañas de escritura, COLOR / TRATAMIENTO / GENERAL, cada
+ *       una con su caja de texto y su histórico debajo. Cada anotación
+ *       muestra el DÍA en que se escribió y quién la firmó.
+ *
+ *   El botón queda visible también con la cita ya PAGADA: la fórmula se
+ *   anota al terminar el servicio, no antes de cobrar. Si la cita no
+ *   tiene contactId real (provisional) el botón sale deshabilitado.
+ *
+ *   Cambio ADITIVO y aislado: clases .ks-fichacli y .fc-*, mensajes
+ *   propios (getFichaClienteRecords / guardarFichaCliente /
+ *   quitarFichaCliente → fichaClienteRecords / fichaClienteGuardada /
+ *   fichaClienteQuitada). No se toca el calendario, el cobro, el arqueo,
+ *   el cierre, ESPECIALES, ALMACÉN ni el popup FICHA TÉCNICA.
  *
  * v1.1.96 (5 ago 2026) — Al cargar un cliente en el panel izquierdo se
  *   pintan chips con lo que ya tiene contratado: ⭐ PRIME, 🎟️ cada BONO
@@ -1691,7 +1721,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.96]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.97]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1885,6 +1915,51 @@ button { font-family: inherit; cursor: pointer; }
 .ft-color-srv { font-size: 12px; color: var(--ks-ink3); margin-top: 6px; }
 .ft-nocolor { border: 1px dashed var(--ks-line); border-radius: 10px; padding: 16px; text-align: center; color: var(--ks-ink3); font-size: 12.5px; }
 .ft-foot { padding: 11px 20px; border-top: 1px solid var(--ks-line); font-size: 11px; color: #9ca3af; }
+
+/* ── v1.1.97 · Botón y popup FICHA DEL CLIENTE (modal de la cita) ── */
+.ks-modal-ficha { margin-top: 11px; }
+.ks-fichacli {
+  width: 100%; box-sizing: border-box;
+  border: 1px solid #7d5bb5; background: #f6f2fb; color: #5b3f8a;
+  border-radius: 9px; padding: 10px; font-size: 12px; font-weight: 700;
+  text-align: center; cursor: pointer;
+}
+.ks-fichacli:hover:not(:disabled) { background: #7d5bb5; color: #fff; }
+.ks-fichacli:disabled { opacity: .45; cursor: not-allowed; }
+.fc-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 210; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.fc-modal { background: #fff; border-radius: 14px; width: min(720px,96vw); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.fc-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); }
+.fc-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
+.fc-sub { font-size: 12px; color: var(--ks-ink3); margin-top: 2px; }
+.fc-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
+.fc-body { padding: 15px 20px; overflow: auto; flex: 1; }
+.fc-sec { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ks-ink3); margin: 0 0 8px; }
+.fc-sec.mt { margin-top: 18px; }
+.fc-visita { border: 1px solid var(--ks-line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.fc-vh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.fc-vfecha { font-size: 13px; font-weight: 700; color: var(--ks-ink); }
+.fc-vhora { font-size: 12px; color: var(--ks-ink3); }
+.fc-vof { font-size: 11.5px; font-weight: 600; color: #fff; background: var(--ks-ink); padding: 2px 8px; border-radius: 999px; }
+.fc-vsrv { font-size: 12.5px; color: var(--ks-ink2); }
+.fc-msg { border: 1px solid #cfe3f5; background: #f4f9fd; border-left: 3px solid #4a90c2; border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; }
+.fc-msg-f { font-size: 11px; color: var(--ks-ink3); margin-bottom: 3px; }
+.fc-msg-t { font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
+.fc-tabs { display: flex; gap: 6px; margin: 0 0 10px; }
+.fc-tab { flex: 1; border: 1px solid var(--ks-line); background: #fff; border-radius: 9px; padding: 9px; font-size: 12px; font-weight: 700; color: var(--ks-ink2); text-align: center; cursor: pointer; }
+.fc-tab.on { border-color: #7d5bb5; background: #f6f2fb; color: #5b3f8a; }
+.fc-ta { width: 100%; box-sizing: border-box; min-height: 84px; padding: 10px 11px; border: 1px solid var(--ks-line); border-radius: 9px; font-size: 13px; font-family: inherit; line-height: 1.5; resize: vertical; }
+.fc-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.fc-save { border: 1px solid #7d5bb5; background: #7d5bb5; color: #fff; border-radius: 9px; padding: 9px 18px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.fc-save:hover:not(:disabled) { filter: brightness(1.08); }
+.fc-save:disabled { opacity: .5; cursor: not-allowed; }
+.fc-nota { border: 1px solid var(--ks-line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.fc-nota-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.fc-nota-meta { font-size: 11px; color: var(--ks-ink3); }
+.fc-nota-t { font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
+.fc-nota-rm { border: none; background: transparent; color: #c2483f; font-size: 13px; cursor: pointer; line-height: 1; }
+.fc-empty { text-align: center; padding: 22px 16px; color: var(--ks-ink3); font-size: 12.5px; }
+.fc-nodata { border: 1px dashed var(--ks-line); border-radius: 10px; padding: 14px; text-align: center; color: var(--ks-ink3); font-size: 12.5px; }
+.fc-foot { padding: 11px 20px; border-top: 1px solid var(--ks-line); font-size: 11px; color: #9ca3af; }
 
 /* ── v1.1.76 · Botón y modal ALMACÉN ── */
 .ks-almacen {
@@ -3561,6 +3636,10 @@ button { font-family: inherit; cursor: pointer; }
         case 'espClientesEncontrados': this._renderEspCli(p.clientes || []); break;
         case 'ftClientesEncontrados': this._renderFtCli(p.clientes || []); break;
         case 'fichaTecnicaData':      this._onFichaTecnica(p); break;
+        // v1.1.97 — FICHA DEL CLIENTE (popup del modal de la cita)
+        case 'fichaClienteRecords':   this._onFichaClienteRecords(p); break;
+        case 'fichaClienteGuardada':  this._onFichaClienteGuardada(p); break;
+        case 'fichaClienteQuitada':   this._onFichaClienteQuitada(p); break;
         case 'espClienteCreado': this._onEspClienteCreado(p.data); break;
         // v1.1.76 — ALMACÉN
         case 'almacenData':     this._onAlmData(p); break;
@@ -6516,6 +6595,9 @@ button { font-family: inherit; cursor: pointer; }
           <button class="ks-add add-extra" id="addExtra">✎ Extra</button>
         </div>`}
         ${paid ? `<div id="metodoCobroLine" class="ks-modal-metodo" style="margin-top:8px;font-size:12.5px;color:var(--ks-ink2);font-weight:600;display:flex;align-items:center;gap:6px;"></div>` : ''}
+        ${r.family === 'BLOQUEO' ? '' : `<div class="ks-modal-ficha">
+          <button class="ks-fichacli" id="mFichaCli"${r.contactId ? '' : ' disabled title="Esta cita no tiene cliente identificado"'}>📋 Ficha del cliente</button>
+        </div>`}
         <div class="ks-modal-foot">${paid ? `<div id="facturaSlot" style="flex:1;display:flex;gap:7px;align-items:center;min-height:36px;"></div>` : `<button class="ks-changedate" id="mChangeDate">🗓 Cambiar fecha</button>`}<button class="ks-modal-close" id="mClose">Cerrar</button></div>`;
       scrim.appendChild(modal); root.appendChild(scrim);
 
@@ -6529,6 +6611,9 @@ button { font-family: inherit; cursor: pointer; }
         this._sendToPage('quitar-item', { reservaId: r._id, itemIndex: i });
       }));
       modal.querySelector('#mClose').addEventListener('click', () => this._closeModal());
+      // v1.1.97 — FICHA DEL CLIENTE. Disponible también con la cita pagada:
+      // la fórmula se anota al terminar el servicio, no antes de cobrar.
+      modal.querySelector('#mFichaCli')?.addEventListener('click', () => this._openFichaCliente(r));
       if (!paid && this._puede('editarCita')) {
         this._renderDiscBox();
         this._renderCanjeBox();  // v1.1.50 — F4/F5 bloque bono/tarjeta
@@ -9408,6 +9493,229 @@ button { font-family: inherit; cursor: pointer; }
       this._renderAlmacen();
     }
 
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.97 — FICHA DEL CLIENTE (CMS-first)
+    // ═══════════════════════════════════════════════════
+    // Popup del modal de la cita. Escribe en KamisuiteClientRecords a
+    // través de clientRecordsLogic v1.0.0 — una FILA POR ANOTACIÓN,
+    // nunca se sobrescribe nada.
+    //
+    // Las últimas visitas llegan SIN importes: el backend las filtra.
+    // El mensaje del Área de Cliente es SOLO LECTURA: es la voz del
+    // cliente y no se edita desde recepción.
+
+    _openFichaCliente(r) {
+      if (!r || !r.contactId) return;
+      this._fcReserva = r;
+      this._fcData = null;
+      this._fcCargando = true;
+      this._fcTab = 'COLOR';
+      this._fcGuardando = false;
+      this._fcBorrador = { COLOR: '', TRATAMIENTO: '', GENERAL: '' };
+
+      const root = this.shadowRoot;
+      root.getElementById('fcScrim')?.remove();
+      const scrim = document.createElement('div');
+      scrim.className = 'fc-scrim';
+      scrim.id = 'fcScrim';
+      root.appendChild(scrim);
+      this._renderFichaCliente();
+
+      this._sendToPage('getFichaClienteRecords', {
+        contactId:   r.contactId,
+        clientName:  r.clientName || '',
+        clientPhone: r.clientPhone || '',
+        reservaId:   r._id
+      });
+    }
+
+    _closeFichaCliente() {
+      this.shadowRoot.getElementById('fcScrim')?.remove();
+      this._fcReserva = null;
+      this._fcData = null;
+    }
+
+    _renderFichaCliente() {
+      const scrim = this.shadowRoot.getElementById('fcScrim');
+      if (!scrim) return;
+      const r = this._fcReserva || {};
+      const d = this._fcData || {};
+      const tab = this._fcTab || 'COLOR';
+
+      // ── Últimas visitas ──
+      const visitas = Array.isArray(d.visitas) ? d.visitas : [];
+      const visitasHtml = visitas.length
+        ? visitas.map(v => `
+            <div class="fc-visita">
+              <div class="fc-vh">
+                <span class="fc-vfecha">${esc(v.fecha || '')}</span>
+                <span class="fc-vhora">${esc(v.hora || '')}</span>
+                ${v.profesional ? `<span class="fc-vof">${esc(v.profesional)}</span>` : ''}
+              </div>
+              <div class="fc-vsrv">${esc((v.servicios || []).join(' · ')) || '—'}</div>
+            </div>`).join('')
+        : `<div class="fc-nodata">Sin visitas anteriores registradas.</div>`;
+
+      // ── Mensaje permanente del Área de Cliente (solo lectura) ──
+      const mensajes = Array.isArray(d.mensajeCliente) ? d.mensajeCliente : [];
+      const mensajesHtml = mensajes.length
+        ? `<div class="fc-sec mt">Mensaje del cliente desde su área</div>` +
+          mensajes.map(m => `
+            <div class="fc-msg">
+              ${m.fecha ? `<div class="fc-msg-f">${esc(m.fecha)}</div>` : ''}
+              <div class="fc-msg-t">${esc(m.texto || '')}</div>
+            </div>`).join('')
+        : '';
+
+      // ── Histórico de la pestaña activa ──
+      const porTipo = d.porTipo || {};
+      const notas = Array.isArray(porTipo[tab]) ? porTipo[tab] : [];
+      const notasHtml = notas.length
+        ? notas.map(n => `
+            <div class="fc-nota">
+              <div class="fc-nota-h">
+                <span class="fc-nota-meta">${esc(n.fecha || '')}${n.autor ? ' · ' + esc(n.autor) : ''}</span>
+                <button class="fc-nota-rm" data-id="${esc(n.id)}" title="Retirar esta anotación">✕</button>
+              </div>
+              <div class="fc-nota-t">${esc(n.texto || '')}</div>
+            </div>`).join('')
+        : `<div class="fc-nodata">Todavía no hay anotaciones de ${tab.toLowerCase()}.</div>`;
+
+      const cuerpo = this._fcCargando
+        ? `<div class="fc-empty">Cargando ficha…</div>`
+        : `
+          <div class="fc-sec">Últimas visitas</div>
+          ${visitasHtml}
+          ${mensajesHtml}
+          <div class="fc-sec mt">Anotar</div>
+          <div class="fc-tabs">
+            <button class="fc-tab${tab === 'COLOR' ? ' on' : ''}" data-t="COLOR">🎨 Color</button>
+            <button class="fc-tab${tab === 'TRATAMIENTO' ? ' on' : ''}" data-t="TRATAMIENTO">💧 Tratamiento</button>
+            <button class="fc-tab${tab === 'GENERAL' ? ' on' : ''}" data-t="GENERAL">📝 General</button>
+          </div>
+          <textarea class="fc-ta" id="fcTa" placeholder="Escribe aquí la anotación de ${esc(tab.toLowerCase())}…">${esc(this._fcBorrador[tab] || '')}</textarea>
+          <div class="fc-actions">
+            <button class="fc-save" id="fcSave"${this._fcGuardando ? ' disabled' : ''}>${this._fcGuardando ? 'Guardando…' : 'Guardar anotación'}</button>
+          </div>
+          <div class="fc-sec mt">Histórico de ${esc(tab.toLowerCase())}</div>
+          ${notasHtml}`;
+
+      scrim.innerHTML = `
+        <div class="fc-modal">
+          <div class="fc-head">
+            <div>
+              <div class="fc-title">📋 Ficha de ${esc(r.clientName || 'cliente')}</div>
+              <div class="fc-sub">Cada anotación queda con su fecha y quién la escribió</div>
+            </div>
+            <button class="fc-x" id="fcX">✕</button>
+          </div>
+          <div class="fc-body">${cuerpo}</div>
+          <div class="fc-foot">Las anotaciones no se sobrescriben: se añaden.</div>
+        </div>`;
+
+      scrim.querySelector('#fcX')?.addEventListener('click', () => this._closeFichaCliente());
+      scrim.addEventListener('click', e => { if (e.target === scrim) this._closeFichaCliente(); });
+
+      scrim.querySelectorAll('.fc-tab').forEach(b => b.addEventListener('click', () => {
+        // Se conserva lo tecleado en la pestaña que se abandona.
+        const ta = scrim.querySelector('#fcTa');
+        if (ta) this._fcBorrador[this._fcTab] = ta.value;
+        this._fcTab = b.getAttribute('data-t') || 'COLOR';
+        this._renderFichaCliente();
+      }));
+
+      scrim.querySelector('#fcSave')?.addEventListener('click', () => this._guardarFichaCliente());
+
+      scrim.querySelectorAll('.fc-nota-rm').forEach(b => b.addEventListener('click', () => {
+        const id = b.getAttribute('data-id');
+        if (!id) return;
+        if (!confirm('¿Retirar esta anotación de la ficha?')) return;
+        b.disabled = true;
+        this._sendToPage('quitarFichaCliente', { recordId: id });
+      }));
+    }
+
+    _guardarFichaCliente() {
+      const scrim = this.shadowRoot.getElementById('fcScrim');
+      const r = this._fcReserva;
+      if (!scrim || !r) return;
+      const ta = scrim.querySelector('#fcTa');
+      const texto = ta ? String(ta.value || '').trim() : '';
+      if (!texto) { this._toast('Escribe algo antes de guardar'); return; }
+
+      this._fcBorrador[this._fcTab] = texto;
+      this._fcGuardando = true;
+      this._renderFichaCliente();
+
+      this._sendToPage('guardarFichaCliente', {
+        contactId:   r.contactId,
+        clientName:  r.clientName || '',
+        clientPhone: r.clientPhone || '',
+        recordType:  this._fcTab,
+        recordText:  texto,
+        reservaId:   r._id
+      });
+    }
+
+    _onFichaClienteRecords(p) {
+      this._fcCargando = false;
+      const d = (p && p.data) ? p.data : { ok: false };
+      this._fcData = d;
+      if (!d.ok) this._toast(`No se pudo cargar la ficha${d.error?.message ? ': ' + d.error.message : ''}`);
+      this._renderFichaCliente();
+    }
+
+    _onFichaClienteGuardada(p) {
+      this._fcGuardando = false;
+      const d = (p && p.data) ? p.data : { ok: false };
+
+      if (!d.ok) {
+        this._toast(`No se pudo guardar${d.error?.message ? ': ' + d.error.message : ''}`);
+        this._renderFichaCliente();
+        return;
+      }
+
+      // Estado local al día sin recargar: la anotación entra la primera
+      // de su tipo, que es como llega del backend (más reciente arriba).
+      const tipo = d.anotacion?.tipo || this._fcTab;
+      if (!this._fcData) this._fcData = { ok: true, anotaciones: [], porTipo: {}, visitas: [], mensajeCliente: [] };
+      if (!this._fcData.porTipo) this._fcData.porTipo = {};
+      if (!Array.isArray(this._fcData.porTipo[tipo])) this._fcData.porTipo[tipo] = [];
+      this._fcData.porTipo[tipo].unshift(d.anotacion);
+      if (!Array.isArray(this._fcData.anotaciones)) this._fcData.anotaciones = [];
+      this._fcData.anotaciones.unshift(d.anotacion);
+
+      this._fcBorrador[tipo] = '';
+      this._toast('Anotación guardada ✓');
+      this._renderFichaCliente();
+    }
+
+    _onFichaClienteQuitada(p) {
+      const d = (p && p.data) ? p.data : { ok: false };
+      const id = (p && p.recordId) || '';
+
+      if (!d.ok) {
+        this._toast(`No se pudo retirar${d.error?.message ? ': ' + d.error.message : ''}`);
+        this._renderFichaCliente();
+        return;
+      }
+
+      // Se retira de TODAS las listas derivadas, no solo de la visible.
+      if (this._fcData) {
+        if (Array.isArray(this._fcData.anotaciones)) {
+          this._fcData.anotaciones = this._fcData.anotaciones.filter(a => a.id !== id);
+        }
+        const pt = this._fcData.porTipo || {};
+        Object.keys(pt).forEach(k => {
+          if (Array.isArray(pt[k])) pt[k] = pt[k].filter(a => a.id !== id);
+        });
+        this._fcData.porTipo = pt;
+      }
+
+      this._toast('Anotación retirada');
+      this._renderFichaCliente();
+    }
 
     // ═══════════════════════════════════════════════════
     // v1.1.77 — FICHA TÉCNICA (histórico de color)
