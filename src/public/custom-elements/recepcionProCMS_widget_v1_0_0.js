@@ -1,58 +1,57 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.98  ·  La ficha del cliente, también sin cita
+ * VERSION: 1.1.100  ·  El mensaje del cliente, visible en el calendario
  *
- * v1.1.98 (10 ago 2026) — La FICHA DEL CLIENTE se consulta y se escribe
- *   desde los DOS sitios: el modal de la cita (v1.1.97) y el botón
- *   FICHA TÉCNICA de la barra superior, que no necesita cita alguna.
+ * v1.1.100 (10 ago 2026) — MENSAJE QUE EL CLIENTE DEJA AL RESERVAR ONLINE.
+ *   Vive en KamisuiteReservations.notes desde que el widget público lo
+ *   escribe, y hasta hoy no se leía en ninguna pantalla de Recepción: se
+ *   quedaba en el CMS sin que nadie lo viera.
+ *     · La cita que lleva mensaje se marca con BANDA ROJA en su lateral
+ *       izquierdo (.ks-appt.has-nota), y el tooltip lo avisa. El resto
+ *       del bloque de cita no cambia.
+ *     · El texto se lee en FICHA TÉCNICA, que es su sitio: arriba del
+ *       todo si es el mensaje de la cita desde la que se abre la ficha,
+ *       y dentro de su visita en el histórico.
+ *     · Se descarta 'RECURSO INTERNO': es una marca técnica del motor de
+ *       disponibilidad sobre ese mismo campo, no un mensaje de nadie.
+ *   Requiere clientRecordsLogic v1.0.1. Sin él, la banda roja funciona
+ *   igual (el dato ya viaja en getReservasPorFecha) y la ficha
+ *   simplemente no pinta los mensajes.
  *
- *   El popup de FICHA TÉCNICA lleva ahora, en su cabecera, el botón
- *   '📋 Ficha del cliente', activo en cuanto hay una clienta elegida —
- *   venga del buscador, del panel izquierdo o de la última cita abierta.
- *   Se muestra INCLUSO si el histórico legacy falla o no existe en ese
- *   salón: son dos fuentes independientes y una no debe tapar a la otra.
+ * v1.1.99 (10 ago 2026) — LA FICHA TÉCNICA PASA A SER ÚNICA Y ESTÁNDAR.
  *
- *   Para hacerlo posible, el circuito de FICHA TÉCNICA propaga ahora el
- *   `contactId` de la clienta, que antes se perdía: el buscador solo
- *   llevaba nombre y teléfono. Sin contactId no se puede leer ni
- *   escribir en KamisuiteClientRecords.
+ *   QUÉ SE VA. El popup que leía el histórico importado del software
+ *   anterior queda ELIMINADO del widget: su scrim, su render, sus
+ *   handlers y todo su CSS. Era una fuente de un solo salón, nacida de
+ *   una migración concreta, y no puede ser la ficha del producto.
+ *   Se retiran el mensaje `getFichaTecnica`, la respuesta
+ *   `fichaTecnicaData` y el estado `_ftCliente` / `_ftData`.
  *
- *   `_openFichaCliente` deja de exigir una reserva y acepta cualquier
- *   contexto con cliente. Cuando se abre sin cita, la anotación se
- *   guarda sin `bookingId`: es del cliente, no de una visita concreta.
+ *   QUÉ QUEDA. Un único modal de FICHA TÉCNICA sobre
+ *   KamisuiteClientRecords, igual en todos los salones, que se abre
+ *   desde los dos sitios y con el mismo nombre en los dos:
+ *     · Botón 🎨 FICHA TÉCNICA de la barra superior. Sin cita.
+ *       HEREDA el cliente: primero el del panel izquierdo, que es lo
+ *       que el operador tiene delante; si no, el de la última cita
+ *       abierta. Si no hay ninguno, abre en modo búsqueda. El buscador
+ *       queda disponible para cambiar de cliente.
+ *     · Botón 🎨 FICHA TÉCNICA del modal de la cita. El cliente es el
+ *       de la cita y no se cambia: ahí no se pinta buscador.
  *
- *   El histórico legacy (memoriaLegacyLogic) NO se toca.
+ *   QUÉ CONTIENE. Servicios y datos técnicos, nada de datos de
+ *   contacto: últimas visitas (fecha, hora, profesional y servicios,
+ *   sin importes), el mensaje permanente del cliente desde su Área, y
+ *   tres pestañas de anotación — Color, Tratamiento y General — con su
+ *   histórico fechado y firmado por quien lo escribió.
  *
- * v1.1.97 (10 ago 2026) — Botón FICHA DEL CLIENTE en el modal de la cita,
- *   con popup propio para escribir COLOR, TRATAMIENTO y notas generales.
- *   Requiere page code v1.0.44 y el backend NUEVO clientRecordsLogic
- *   v1.0.0 sobre la colección KamisuiteClientRecords.
+ *   El buscador reutiliza el canal `ftBuscarCliente` /
+ *   `ftClientesEncontrados`, que filtra sobre el cache de contactos ya
+ *   cargado: no tiene ninguna relación con el histórico importado.
+ *   Por eso el page code no necesita cambios por este lado.
  *
- *   POR QUÉ. Hasta hoy esas notas solo se podían escribir desde el CRM,
- *   que las guarda en campos personalizados de Wix Contacts. La clave de
- *   esos campos la genera Wix por sitio, Wix fusiona contactos por email,
- *   y un campo de texto por categoría no tiene histórico. Decisión Jal
- *   (10-ago-2026): fuente CMS-first, una FILA POR ANOTACIÓN.
- *
- *   QUÉ PINTA EL POPUP, de arriba abajo:
- *     · Las TRES ÚLTIMAS VISITAS del cliente — fecha, hora, profesional
- *       y servicios. SIN importes: el backend no los envía.
- *     · El MENSAJE PERMANENTE que el cliente deja desde su Área de
- *       Cliente, si lo hay. Solo lectura: es su voz, no se edita aquí.
- *     · Tres pestañas de escritura, COLOR / TRATAMIENTO / GENERAL, cada
- *       una con su caja de texto y su histórico debajo. Cada anotación
- *       muestra el DÍA en que se escribió y quién la firmó.
- *
- *   El botón queda visible también con la cita ya PAGADA: la fórmula se
- *   anota al terminar el servicio, no antes de cobrar. Si la cita no
- *   tiene contactId real (provisional) el botón sale deshabilitado.
- *
- *   Cambio ADITIVO y aislado: clases .ks-fichacli y .fc-*, mensajes
- *   propios (getFichaClienteRecords / guardarFichaCliente /
- *   quitarFichaCliente → fichaClienteRecords / fichaClienteGuardada /
- *   fichaClienteQuitada). No se toca el calendario, el cobro, el arqueo,
- *   el cierre, ESPECIALES, ALMACÉN ni el popup FICHA TÉCNICA.
+ * v1.1.98 (10 ago 2026) — Superada por v1.1.99.
+ * v1.1.97 (10 ago 2026) — Superada por v1.1.99.
  *
  * v1.1.96 (5 ago 2026) — Al cargar un cliente en el panel izquierdo se
  *   pintan chips con lo que ya tiene contratado: ⭐ PRIME, 🎟️ cada BONO
@@ -1742,7 +1741,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.98]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.100]';
 
   // ─── helpers ───
   function esc(s) {
@@ -1901,41 +1900,6 @@ button { font-family: inherit; cursor: pointer; }
   margin-right: 8px;
 }
 .ks-tienda:hover { filter: brightness(1.08); }
-.ft-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; }
-.ft-modal { background: #fff; border-radius: 14px; width: min(760px,96vw); max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
-.ft-head { display: flex; align-items: center; justify-content: space-between; padding: 15px 20px; border-bottom: 1px solid var(--ks-line); }
-.ft-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
-.ft-sub { font-size: 12px; color: var(--ks-ink3); margin-top: 2px; }
-.ft-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
-.ft-search { padding: 13px 20px; border-bottom: 1px solid var(--ks-line); }
-.ft-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; }
-.ft-results { border: 1px solid var(--ks-line); border-radius: 8px; margin-top: 6px; max-height: 190px; overflow: auto; }
-.ft-cli { padding: 9px 12px; border-bottom: 1px solid var(--ks-line); cursor: pointer; }
-.ft-cli:last-child { border-bottom: none; }
-.ft-cli:hover { background: var(--ks-paper2); }
-.ft-cli-name { font-size: 13px; font-weight: 600; color: var(--ks-ink); }
-.ft-cli-tel { font-size: 12px; color: var(--ks-ink3); }
-.ft-body { padding: 15px 20px; overflow: auto; flex: 1; }
-.ft-kpis { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-.ft-kpi { flex: 1; min-width: 96px; border: 1px solid var(--ks-line); border-radius: 8px; padding: 9px 11px; }
-.ft-kpi-l { font-size: 10.5px; font-weight: 600; color: var(--ks-ink3); text-transform: uppercase; letter-spacing: .3px; }
-.ft-kpi-v { font-size: 17px; font-weight: 800; color: var(--ks-ink); line-height: 1.2; }
-.ft-sec { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ks-ink3); margin: 16px 0 8px; }
-.ft-habit { display: flex; gap: 6px; flex-wrap: wrap; }
-.ft-tag { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--ks-line); border-radius: 999px; font-size: 12px; color: var(--ks-ink); }
-.ft-tag b { color: var(--ks-accent-ink); font-weight: 700; }
-.ft-visita { border: 1px solid var(--ks-line); border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
-.ft-vh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
-.ft-vfecha { font-size: 13px; font-weight: 700; color: var(--ks-ink); }
-.ft-vof { font-size: 11.5px; font-weight: 600; color: #fff; background: var(--ks-ink); padding: 2px 8px; border-radius: 999px; }
-.ft-vsrv { font-size: 12.5px; color: var(--ks-ink2); }
-.ft-formula { margin-top: 8px; background: #fbf7ec; border: 1px solid #e6d9b4; border-left: 3px solid var(--ks-accent); border-radius: 8px; padding: 9px 11px; font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
-.ft-empty { text-align: center; padding: 30px 16px; color: var(--ks-ink3); font-size: 13px; }
-.ft-color { border: 1px solid #e6d9b4; background: #fdfbf5; border-radius: 10px; padding: 11px 13px; margin-bottom: 9px; }
-.ft-color-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
-.ft-color-srv { font-size: 12px; color: var(--ks-ink3); margin-top: 6px; }
-.ft-nocolor { border: 1px dashed var(--ks-line); border-radius: 10px; padding: 16px; text-align: center; color: var(--ks-ink3); font-size: 12.5px; }
-.ft-foot { padding: 11px 20px; border-top: 1px solid var(--ks-line); font-size: 11px; color: #9ca3af; }
 
 /* ── v1.1.97 · Botón y popup FICHA DEL CLIENTE (modal de la cita) ── */
 .ks-modal-ficha { margin-top: 11px; }
@@ -1953,6 +1917,13 @@ button { font-family: inherit; cursor: pointer; }
 .fc-title { font-size: 15px; font-weight: 700; color: var(--ks-ink); }
 .fc-sub { font-size: 12px; color: var(--ks-ink3); margin-top: 2px; }
 .fc-x { border: none; background: transparent; font-size: 19px; cursor: pointer; color: #9ca3af; line-height: 1; }
+.fc-search { padding: 13px 20px; border-bottom: 1px solid var(--ks-line); }
+.fc-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--ks-line); border-radius: 8px; font-size: 13px; font-family: inherit; }
+.fc-results { border: 1px solid var(--ks-line); border-radius: 8px; margin-top: 6px; max-height: 190px; overflow: auto; }
+.fc-cli { padding: 9px 12px; border-bottom: 1px solid var(--ks-line); cursor: pointer; }
+.fc-cli:last-child { border-bottom: none; }
+.fc-cli:hover { background: var(--ks-paper2); }
+.fc-cli-name { font-size: 13px; font-weight: 600; color: var(--ks-ink); }
 .fc-body { padding: 15px 20px; overflow: auto; flex: 1; }
 .fc-sec { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--ks-ink3); margin: 0 0 8px; }
 .fc-sec.mt { margin-top: 18px; }
@@ -1962,6 +1933,9 @@ button { font-family: inherit; cursor: pointer; }
 .fc-vhora { font-size: 12px; color: var(--ks-ink3); }
 .fc-vof { font-size: 11.5px; font-weight: 600; color: #fff; background: var(--ks-ink); padding: 2px 8px; border-radius: 999px; }
 .fc-vsrv { font-size: 12.5px; color: var(--ks-ink2); }
+.fc-notared { border: 1px solid #f2c3bf; background: #fdf5f4; border-left: 4px solid #d92d20; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.fc-notared-h { font-size: 11px; font-weight: 700; color: #a4271d; text-transform: uppercase; letter-spacing: .3px; margin-bottom: 4px; }
+.fc-notared-t { font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
 .fc-msg { border: 1px solid #cfe3f5; background: #f4f9fd; border-left: 3px solid #4a90c2; border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; }
 .fc-msg-f { font-size: 11px; color: var(--ks-ink3); margin-bottom: 3px; }
 .fc-msg-t { font-size: 13px; line-height: 1.5; color: var(--ks-ink); white-space: pre-wrap; word-break: break-word; }
@@ -2314,6 +2288,10 @@ button { font-family: inherit; cursor: pointer; }
 .ks-comodin-note { position: absolute; top: 10px; left: 10px; right: 10px; font-size: 10.5px; line-height: 1.4; color: #2f6fd9; background: oklch(0.97 0.02 255 / .9); border: 1px dashed color-mix(in oklab, #2f6fd9 40%, var(--ks-line)); border-radius: 8px; padding: 7px 9px; z-index: 3; }
 
 /* ---- appt block ---- */
+/* v1.1.100 — Cita con mensaje del cliente: banda roja a la izquierda.
+   El mensaje se escribe en el widget público de reservas y viaja en
+   KamisuiteReservations.notes. El texto se lee en FICHA TÉCNICA. */
+.ks-appt.has-nota { border-left-color: #d92d20 !important; border-left-width: 6px; }
 .ks-appt {
   position: absolute; left: 5px; right: 5px; z-index: 5;
   border: 0; border-left: 4px solid rgba(0,0,0,.2); border-radius: 6px;
@@ -3655,8 +3633,7 @@ button { font-family: inherit; cursor: pointer; }
         case 'clientesEncontrados': this._renderCliResults(p.clientes || []); break;
         // v1.1.69 — ESPECIALES (venta manual)
         case 'espClientesEncontrados': this._renderEspCli(p.clientes || []); break;
-        case 'ftClientesEncontrados': this._renderFtCli(p.clientes || []); break;
-        case 'fichaTecnicaData':      this._onFichaTecnica(p); break;
+        case 'ftClientesEncontrados': this._fcRenderCli(p.clientes || []); break;
         // v1.1.97 — FICHA DEL CLIENTE (popup del modal de la cita)
         case 'fichaClienteRecords':   this._onFichaClienteRecords(p); break;
         case 'fichaClienteGuardada':  this._onFichaClienteGuardada(p); break;
@@ -4134,7 +4111,7 @@ button { font-family: inherit; cursor: pointer; }
 
       // v1.1.77 — FICHA TÉCNICA
       const ftBtnEl = root.getElementById('ftBtn');
-      if (ftBtnEl) ftBtnEl.addEventListener('click', () => this._openFichaTecnica());
+      if (ftBtnEl) ftBtnEl.addEventListener('click', () => this._openFichaTecnica());   // v1.1.99 — ficha única
       // v1.1.84 — TIENDA: venta de productos a alguien que entra sin cita.
       const tiendaBtnEl = root.getElementById('tiendaBtn');
       if (tiendaBtnEl) tiendaBtnEl.addEventListener('click', () => this._openTiendaModal());
@@ -6030,7 +6007,12 @@ button { font-family: inherit; cursor: pointer; }
         // 3px de gap visual entre lanes.
         lanePos = `left:calc(${left}% + 3px);width:calc(${w}% - 6px);right:auto;`;
       }
-      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" title="${esc(labelFase)} · ${hhmm}–${endHHMM}${cliente ? ' · ' + esc(cliente) : ''}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
+      // v1.1.100 — Mensaje que el cliente dejó al reservar online. Se
+      // descarta 'RECURSO INTERNO', que es una marca técnica del motor de
+      // disponibilidad y no un mensaje de nadie.
+      const notaCliente = String(r.notes || '').trim();
+      const tieneNota = !!notaCliente && !notaCliente.includes('RECURSO INTERNO');
+      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}${tieneNota ? ' has-nota' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" title="${esc(labelFase)} · ${hhmm}–${endHHMM}${cliente ? ' · ' + esc(cliente) : ''}${tieneNota ? ' · ✉ Mensaje del cliente (ver Ficha técnica)' : ''}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
         <span class="ks-appt-statusdot">${paid ? '✓' : '€'}</span>
         ${draggable ? `<span class="ks-appt-timeadj" title="Ajustar hora de inicio">🕑</span>` : ''}
         <span class="ks-appt-inner">
@@ -6397,7 +6379,7 @@ button { font-family: inherit; cursor: pointer; }
       // ABRIR la cita: el modal tapa la barra, así que el flujo real es
       // abrir cita → cerrar → pulsar Ficha Técnica.
       if (r && r.clientName && r.family !== 'BLOQUEO') {
-        this._ftUltimoCliente = { nombre: r.clientName, telefono: r.clientPhone || '', contactId: r.contactId || '' };
+        this._fcUltimoCliente = { nombre: r.clientName, telefono: r.clientPhone || '', contactId: r.contactId || '' };
       }
       this._disc = 0;
       this._discMode = 'pct';
@@ -6617,7 +6599,7 @@ button { font-family: inherit; cursor: pointer; }
         </div>`}
         ${paid ? `<div id="metodoCobroLine" class="ks-modal-metodo" style="margin-top:8px;font-size:12.5px;color:var(--ks-ink2);font-weight:600;display:flex;align-items:center;gap:6px;"></div>` : ''}
         ${r.family === 'BLOQUEO' ? '' : `<div class="ks-modal-ficha">
-          <button class="ks-fichacli" id="mFichaCli"${r.contactId ? '' : ' disabled title="Esta cita no tiene cliente identificado"'}>📋 Ficha del cliente</button>
+          <button class="ks-fichacli" id="mFichaCli"${r.contactId ? '' : ' disabled title="Esta cita no tiene cliente identificado"'}>🎨 FICHA TÉCNICA</button>
         </div>`}
         <div class="ks-modal-foot">${paid ? `<div id="facturaSlot" style="flex:1;display:flex;gap:7px;align-items:center;min-height:36px;"></div>` : `<button class="ks-changedate" id="mChangeDate">🗓 Cambiar fecha</button>`}<button class="ks-modal-close" id="mClose">Cerrar</button></div>`;
       scrim.appendChild(modal); root.appendChild(scrim);
@@ -6634,7 +6616,7 @@ button { font-family: inherit; cursor: pointer; }
       modal.querySelector('#mClose').addEventListener('click', () => this._closeModal());
       // v1.1.97 — FICHA DEL CLIENTE. Disponible también con la cita pagada:
       // la fórmula se anota al terminar el servicio, no antes de cobrar.
-      modal.querySelector('#mFichaCli')?.addEventListener('click', () => this._openFichaCliente(r));
+      modal.querySelector('#mFichaCli')?.addEventListener('click', () => this._openFichaTecnica(r));
       if (!paid && this._puede('editarCita')) {
         this._renderDiscBox();
         this._renderCanjeBox();  // v1.1.50 — F4/F5 bloque bono/tarjeta
@@ -9516,7 +9498,7 @@ button { font-family: inherit; cursor: pointer; }
 
 
     // ═══════════════════════════════════════════════════
-    // v1.1.97 — FICHA DEL CLIENTE (CMS-first)
+    // v1.1.99 — FICHA TÉCNICA (CMS-first, ficha ÚNICA)
     // ═══════════════════════════════════════════════════
     // Popup del modal de la cita. Escribe en KamisuiteClientRecords a
     // través de clientRecordsLogic v1.0.0 — una FILA POR ANOTACIÓN,
@@ -9532,17 +9514,40 @@ button { font-family: inherit; cursor: pointer; }
     //   · desde el popup FICHA TÉCNICA → { contactId, nombre, telefono },
     //     sin cita: la anotación se guarda sin bookingId, que es la verdad
     //     — es del cliente, no de una visita concreta.
-    _openFichaCliente(src) {
+    _openFichaTecnica(src) {
       const ctx = {
         contactId:   (src && src.contactId) || '',
         clientName:  (src && (src.clientName || src.nombre)) || '',
         clientPhone: (src && (src.clientPhone || src.telefono)) || '',
         reservaId:   (src && (src._id || src.reservaId)) || ''
       };
-      if (!ctx.contactId) return;
+
+      // Sin cliente en el contexto (botón de la barra), se HEREDA: primero
+      // el del panel izquierdo, que es lo que el operador tiene delante
+      // ahora mismo, y si no, el de la última cita abierta. Si no hay
+      // ninguno, el modal abre en modo búsqueda.
+      if (!ctx.contactId) {
+        const aside = this._cliente;
+        if (aside && aside.contactId) {
+          ctx.contactId = aside.contactId;
+          ctx.clientName = aside.nombre || '';
+          ctx.clientPhone = aside.telefono || '';
+        } else {
+          const u = this._fcUltimoCliente;
+          if (u && u.contactId) {
+            ctx.contactId = u.contactId;
+            ctx.clientName = u.nombre || '';
+            ctx.clientPhone = u.telefono || '';
+          }
+        }
+      }
+
+      // El buscador solo aparece cuando se entra por la barra superior.
+      // Desde la cita, el cliente es el de la cita y no se cambia.
+      this._fcBuscador = !(src && src._id);
       this._fcCtx = ctx;
       this._fcData = null;
-      this._fcCargando = true;
+      this._fcCargando = !!ctx.contactId;
       this._fcTab = 'COLOR';
       this._fcGuardando = false;
       this._fcBorrador = { COLOR: '', TRATAMIENTO: '', GENERAL: '' };
@@ -9553,71 +9558,126 @@ button { font-family: inherit; cursor: pointer; }
       scrim.className = 'fc-scrim';
       scrim.id = 'fcScrim';
       root.appendChild(scrim);
-      this._renderFichaCliente();
+      this._renderFichaTecnica();
 
+      if (ctx.contactId) this._fcPedirDatos();
+    }
+
+    _fcPedirDatos() {
+      const c = this._fcCtx || {};
+      if (!c.contactId) return;
       this._sendToPage('getFichaClienteRecords', {
-        contactId:   ctx.contactId,
-        clientName:  ctx.clientName,
-        clientPhone: ctx.clientPhone,
-        reservaId:   ctx.reservaId
+        contactId:   c.contactId,
+        clientName:  c.clientName,
+        clientPhone: c.clientPhone,
+        reservaId:   c.reservaId
       });
     }
 
-    _closeFichaCliente() {
+    _closeFichaTecnica() {
       this.shadowRoot.getElementById('fcScrim')?.remove();
       this._fcCtx = null;
       this._fcData = null;
     }
 
-    _renderFichaCliente() {
+    // Resultados del buscador. Canal ftBuscarCliente/ftClientesEncontrados,
+    // que filtra sobre el cache de contactos ya cargado — nada que ver con
+    // ningún histórico importado.
+    _fcRenderCli(clientes) {
+      const box = this.shadowRoot.getElementById('fcResults');
+      if (!box) return;
+      if (!clientes.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+      box.style.display = 'block';
+      box.innerHTML = clientes.map(c => `
+        <div class="fc-cli" data-cid="${esc(c.contactId || '')}" data-nom="${esc(c.nombreCompleto || '')}" data-tel="${esc(c.telefono || '')}">
+          <div class="fc-cli-name">${esc(c.nombreCompleto || '—')}</div>
+        </div>`).join('');
+      box.querySelectorAll('.fc-cli').forEach(el => {
+        el.addEventListener('click', () => {
+          const cid = el.getAttribute('data-cid');
+          if (!cid) { this._toast('Ese cliente no tiene ficha asociada'); return; }
+          this._fcCtx = {
+            contactId:   cid,
+            clientName:  el.getAttribute('data-nom') || '',
+            clientPhone: el.getAttribute('data-tel') || '',
+            reservaId:   ''
+          };
+          this._fcData = null;
+          this._fcCargando = true;
+          this._fcTab = 'COLOR';
+          this._fcBorrador = { COLOR: '', TRATAMIENTO: '', GENERAL: '' };
+          this._renderFichaTecnica();
+          this._fcPedirDatos();
+        });
+      });
+    }
+
+    _renderFichaTecnica() {
       const scrim = this.shadowRoot.getElementById('fcScrim');
       if (!scrim) return;
-      const r = this._fcCtx || {};
+      const c = this._fcCtx || {};
       const d = this._fcData || {};
       const tab = this._fcTab || 'COLOR';
 
-      // ── Últimas visitas ──
-      const visitas = Array.isArray(d.visitas) ? d.visitas : [];
-      const visitasHtml = visitas.length
-        ? visitas.map(v => `
-            <div class="fc-visita">
-              <div class="fc-vh">
-                <span class="fc-vfecha">${esc(v.fecha || '')}</span>
-                <span class="fc-vhora">${esc(v.hora || '')}</span>
-                ${v.profesional ? `<span class="fc-vof">${esc(v.profesional)}</span>` : ''}
-              </div>
-              <div class="fc-vsrv">${esc((v.servicios || []).join(' · ')) || '—'}</div>
-            </div>`).join('')
-        : `<div class="fc-nodata">Sin visitas anteriores registradas.</div>`;
+      let cuerpo = '';
 
-      // ── Mensaje permanente del Área de Cliente (solo lectura) ──
-      const mensajes = Array.isArray(d.mensajeCliente) ? d.mensajeCliente : [];
-      const mensajesHtml = mensajes.length
-        ? `<div class="fc-sec mt">Mensaje del cliente desde su área</div>` +
-          mensajes.map(m => `
-            <div class="fc-msg">
-              ${m.fecha ? `<div class="fc-msg-f">${esc(m.fecha)}</div>` : ''}
-              <div class="fc-msg-t">${esc(m.texto || '')}</div>
-            </div>`).join('')
-        : '';
+      if (!c.contactId) {
+        cuerpo = `<div class="fc-empty">Busca un cliente para ver y anotar su ficha técnica.</div>`;
+      } else if (this._fcCargando) {
+        cuerpo = `<div class="fc-empty">Cargando ficha…</div>`;
+      } else {
+        // v1.1.100 — Mensaje que el cliente dejó al reservar ESTA cita.
+        // Va primero: es lo que la recepción necesita leer antes de nada.
+        const notaReserva = String(d.notaReserva || '').trim();
+        const notaReservaHtml = notaReserva
+          ? `<div class="fc-notared">
+               <div class="fc-notared-h">✉ Mensaje del cliente en esta reserva</div>
+               <div class="fc-notared-t">${esc(notaReserva)}</div>
+             </div>`
+          : '';
 
-      // ── Histórico de la pestaña activa ──
-      const porTipo = d.porTipo || {};
-      const notas = Array.isArray(porTipo[tab]) ? porTipo[tab] : [];
-      const notasHtml = notas.length
-        ? notas.map(n => `
-            <div class="fc-nota">
-              <div class="fc-nota-h">
-                <span class="fc-nota-meta">${esc(n.fecha || '')}${n.autor ? ' · ' + esc(n.autor) : ''}</span>
-                <button class="fc-nota-rm" data-id="${esc(n.id)}" title="Retirar esta anotación">✕</button>
-              </div>
-              <div class="fc-nota-t">${esc(n.texto || '')}</div>
-            </div>`).join('')
-        : `<div class="fc-nodata">Todavía no hay anotaciones de ${tab.toLowerCase()}.</div>`;
+        const visitas = Array.isArray(d.visitas) ? d.visitas : [];
+        const visitasHtml = visitas.length
+          ? visitas.map(v => `
+              <div class="fc-visita">
+                <div class="fc-vh">
+                  <span class="fc-vfecha">${esc(v.fecha || '')}</span>
+                  <span class="fc-vhora">${esc(v.hora || '')}</span>
+                  ${v.profesional ? `<span class="fc-vof">${esc(v.profesional)}</span>` : ''}
+                </div>
+                <div class="fc-vsrv">${esc((v.servicios || []).join(' · ')) || '—'}</div>
+                ${v.nota ? `<div class="fc-notared" style="margin-top:8px;margin-bottom:0">
+                  <div class="fc-notared-h">✉ Mensaje del cliente</div>
+                  <div class="fc-notared-t">${esc(v.nota)}</div>
+                </div>` : ''}
+              </div>`).join('')
+          : `<div class="fc-nodata">Sin visitas anteriores registradas.</div>`;
 
-      const cuerpo = this._fcCargando
-        ? `<div class="fc-empty">Cargando ficha…</div>`
-        : `
+        const mensajes = Array.isArray(d.mensajeCliente) ? d.mensajeCliente : [];
+        const mensajesHtml = mensajes.length
+          ? `<div class="fc-sec mt">Mensaje del cliente desde su área</div>` +
+            mensajes.map(m => `
+              <div class="fc-msg">
+                ${m.fecha ? `<div class="fc-msg-f">${esc(m.fecha)}</div>` : ''}
+                <div class="fc-msg-t">${esc(m.texto || '')}</div>
+              </div>`).join('')
+          : '';
+
+        const porTipo = d.porTipo || {};
+        const notas = Array.isArray(porTipo[tab]) ? porTipo[tab] : [];
+        const notasHtml = notas.length
+          ? notas.map(n => `
+              <div class="fc-nota">
+                <div class="fc-nota-h">
+                  <span class="fc-nota-meta">${esc(n.fecha || '')}${n.autor ? ' · ' + esc(n.autor) : ''}</span>
+                  <button class="fc-nota-rm" data-id="${esc(n.id)}" title="Retirar esta anotación">✕</button>
+                </div>
+                <div class="fc-nota-t">${esc(n.texto || '')}</div>
+              </div>`).join('')
+          : `<div class="fc-nodata">Todavía no hay anotaciones de ${esc(tab.toLowerCase())}.</div>`;
+
+        cuerpo = `
+          ${notaReservaHtml}
           <div class="fc-sec">Últimas visitas</div>
           ${visitasHtml}
           ${mensajesHtml}
@@ -9633,32 +9693,46 @@ button { font-family: inherit; cursor: pointer; }
           </div>
           <div class="fc-sec mt">Histórico de ${esc(tab.toLowerCase())}</div>
           ${notasHtml}`;
+      }
 
       scrim.innerHTML = `
         <div class="fc-modal">
           <div class="fc-head">
             <div>
-              <div class="fc-title">📋 Ficha de ${esc(r.clientName || 'cliente')}</div>
+              <div class="fc-title">🎨 Ficha técnica${c.clientName ? ' · ' + esc(c.clientName) : ''}</div>
               <div class="fc-sub">Cada anotación queda con su fecha y quién la escribió</div>
             </div>
             <button class="fc-x" id="fcX">✕</button>
           </div>
+          ${this._fcBuscador ? `<div class="fc-search">
+            <input class="fc-input" id="fcQuery" type="search" placeholder="Buscar cliente por nombre o teléfono…" autocomplete="off">
+            <div class="fc-results" id="fcResults" style="display:none"></div>
+          </div>` : ''}
           <div class="fc-body">${cuerpo}</div>
           <div class="fc-foot">Las anotaciones no se sobrescriben: se añaden.</div>
         </div>`;
 
-      scrim.querySelector('#fcX')?.addEventListener('click', () => this._closeFichaCliente());
-      scrim.addEventListener('click', e => { if (e.target === scrim) this._closeFichaCliente(); });
+      scrim.querySelector('#fcX')?.addEventListener('click', () => this._closeFichaTecnica());
+      scrim.addEventListener('click', e => { if (e.target === scrim) this._closeFichaTecnica(); });
+
+      const q = scrim.querySelector('#fcQuery');
+      if (q) {
+        q.addEventListener('input', () => {
+          const val = q.value.trim();
+          clearTimeout(this._fcBuscarTimer);
+          if (val.length < 2) { this._fcRenderCli([]); return; }
+          this._fcBuscarTimer = setTimeout(() => this._sendToPage('ftBuscarCliente', { query: val }), 250);
+        });
+      }
 
       scrim.querySelectorAll('.fc-tab').forEach(b => b.addEventListener('click', () => {
-        // Se conserva lo tecleado en la pestaña que se abandona.
         const ta = scrim.querySelector('#fcTa');
         if (ta) this._fcBorrador[this._fcTab] = ta.value;
         this._fcTab = b.getAttribute('data-t') || 'COLOR';
-        this._renderFichaCliente();
+        this._renderFichaTecnica();
       }));
 
-      scrim.querySelector('#fcSave')?.addEventListener('click', () => this._guardarFichaCliente());
+      scrim.querySelector('#fcSave')?.addEventListener('click', () => this._guardarFichaTecnica());
 
       scrim.querySelectorAll('.fc-nota-rm').forEach(b => b.addEventListener('click', () => {
         const id = b.getAttribute('data-id');
@@ -9669,26 +9743,27 @@ button { font-family: inherit; cursor: pointer; }
       }));
     }
 
-    _guardarFichaCliente() {
+    _guardarFichaTecnica() {
       const scrim = this.shadowRoot.getElementById('fcScrim');
-      const r = this._fcCtx;
-      if (!scrim || !r) return;
+      const c = this._fcCtx;
+      if (!scrim || !c || !c.contactId) return;
       const ta = scrim.querySelector('#fcTa');
       const texto = ta ? String(ta.value || '').trim() : '';
       if (!texto) { this._toast('Escribe algo antes de guardar'); return; }
 
       this._fcBorrador[this._fcTab] = texto;
       this._fcGuardando = true;
-      this._renderFichaCliente();
+      this._renderFichaTecnica();
 
       this._sendToPage('guardarFichaCliente', {
-        contactId:   r.contactId,
-        clientName:  r.clientName || '',
-        clientPhone: r.clientPhone || '',
+        contactId:   c.contactId,
+        clientName:  c.clientName || '',
+        clientPhone: c.clientPhone || '',
         recordType:  this._fcTab,
         recordText:  texto,
-        // v1.1.98 — vacío cuando se abre sin cita (desde FICHA TÉCNICA).
-        reservaId:   r.reservaId || ''
+        // Vacío cuando la ficha se abre desde la barra: la anotación es del
+        // cliente, no de una visita concreta.
+        reservaId:   c.reservaId || ''
       });
     }
 
@@ -9697,7 +9772,7 @@ button { font-family: inherit; cursor: pointer; }
       const d = (p && p.data) ? p.data : { ok: false };
       this._fcData = d;
       if (!d.ok) this._toast(`No se pudo cargar la ficha${d.error?.message ? ': ' + d.error.message : ''}`);
-      this._renderFichaCliente();
+      this._renderFichaTecnica();
     }
 
     _onFichaClienteGuardada(p) {
@@ -9706,12 +9781,10 @@ button { font-family: inherit; cursor: pointer; }
 
       if (!d.ok) {
         this._toast(`No se pudo guardar${d.error?.message ? ': ' + d.error.message : ''}`);
-        this._renderFichaCliente();
+        this._renderFichaTecnica();
         return;
       }
 
-      // Estado local al día sin recargar: la anotación entra la primera
-      // de su tipo, que es como llega del backend (más reciente arriba).
       const tipo = d.anotacion?.tipo || this._fcTab;
       if (!this._fcData) this._fcData = { ok: true, anotaciones: [], porTipo: {}, visitas: [], mensajeCliente: [] };
       if (!this._fcData.porTipo) this._fcData.porTipo = {};
@@ -9722,7 +9795,7 @@ button { font-family: inherit; cursor: pointer; }
 
       this._fcBorrador[tipo] = '';
       this._toast('Anotación guardada ✓');
-      this._renderFichaCliente();
+      this._renderFichaTecnica();
     }
 
     _onFichaClienteQuitada(p) {
@@ -9731,7 +9804,7 @@ button { font-family: inherit; cursor: pointer; }
 
       if (!d.ok) {
         this._toast(`No se pudo retirar${d.error?.message ? ': ' + d.error.message : ''}`);
-        this._renderFichaCliente();
+        this._renderFichaTecnica();
         return;
       }
 
@@ -9748,197 +9821,7 @@ button { font-family: inherit; cursor: pointer; }
       }
 
       this._toast('Anotación retirada');
-      this._renderFichaCliente();
-    }
-
-    // ═══════════════════════════════════════════════════
-    // v1.1.77 — FICHA TÉCNICA (histórico de color)
-    // ═══════════════════════════════════════════════════
-    // Consulta del histórico del sistema anterior para la sala.
-    // NO muestra dinero porque el backend NO lo envía: ver
-    // getFichaTecnicaCliente en memoriaLegacyLogic v1.0.3.
-
-    _openFichaTecnica() {
-      this._ftCliente = null;
-      this._ftData = null;
-      this._ftCargando = false;
-      const root = this.shadowRoot;
-      root.getElementById('ftScrim')?.remove();
-      const scrim = document.createElement('div');
-      scrim.className = 'ft-scrim';
-      scrim.id = 'ftScrim';
-      root.appendChild(scrim);
-      this._renderFt();
-
-      // v1.1.79 — Precarga por orden de proximidad al operador:
-      // 1º el cliente del aside (lo que tiene delante ahora mismo),
-      // 2º el de la última cita abierta en el calendario.
-      // Sin este orden el popup se quedaba pegado al cliente anterior.
-      let pre = null;
-      const cliAside = this._cliente;
-      if (cliAside && cliAside.nombre) {
-        // v1.1.98 — el contactId viaja también, para la ficha CMS.
-        pre = { nombre: cliAside.nombre, telefono: cliAside.telefono || '', contactId: cliAside.contactId || '' };
-      } else {
-        const u = this._ftUltimoCliente;
-        if (u && (u.telefono || u.nombre)) pre = u;
-      }
-      if (pre) this._ftCargar(pre.nombre, pre.telefono, pre.contactId);
-    }
-
-    _closeFichaTecnica() {
-      this.shadowRoot.getElementById('ftScrim')?.remove();
-    }
-
-    // v1.1.98 — tercer argumento `contactId`. Antes se perdía: el buscador
-    // solo arrastraba nombre y teléfono, y sin contactId no se puede leer
-    // ni escribir en KamisuiteClientRecords.
-    _ftCargar(nombre, telefono, contactId) {
-      this._ftCliente = { nombre: nombre || '', telefono: telefono || '', contactId: contactId || '' };
-      this._ftData = null;
-      this._ftCargando = true;
-      this._renderFt();
-      this._sendToPage('getFichaTecnica', {
-        telefono: telefono || '',
-        clientName: nombre || ''
-      });
-    }
-
-    _onFichaTecnica(p) {
-      this._ftCargando = false;
-      this._ftData = (p && p.data) ? p.data : { ok: false };
-      this._renderFt();
-    }
-
-    _renderFtCli(clientes) {
-      const box = this.shadowRoot.getElementById('ftResults');
-      if (!box) return;
-      if (!clientes.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
-      box.style.display = 'block';
-      box.innerHTML = clientes.map(c => `
-        <div class="ft-cli" data-tel="${esc(c.telefono || '')}" data-nom="${esc(c.nombreCompleto || '')}" data-cid="${esc(c.contactId || '')}">
-          <div class="ft-cli-name">${esc(c.nombreCompleto || '—')}</div>
-          <div class="ft-cli-tel">${esc(c.telefono || 'Sin teléfono')}</div>
-        </div>`).join('');
-      box.querySelectorAll('.ft-cli').forEach(el => {
-        el.addEventListener('click', () => {
-          const q = this.shadowRoot.getElementById('ftQuery');
-          if (q) q.value = '';
-          box.innerHTML = ''; box.style.display = 'none';
-          this._ftCargar(el.getAttribute('data-nom'), el.getAttribute('data-tel'), el.getAttribute('data-cid'));
-        });
-      });
-    }
-
-    _ftFecha(ymd) {
-      if (!ymd || ymd.length < 10) return '—';
-      const M = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-      return Number(ymd.slice(8,10)) + ' ' + (M[Number(ymd.slice(5,7)) - 1] || '') + ' ' + ymd.slice(0,4);
-    }
-
-    _renderFt() {
-      const scrim = this.shadowRoot.getElementById('ftScrim');
-      if (!scrim) return;
-      const cli = this._ftCliente;
-      const d = this._ftData;
-
-      let cuerpo = '';
-      if (this._ftCargando) {
-        cuerpo = `<div class="ft-empty">Buscando el historial…</div>`;
-      } else if (!cli) {
-        cuerpo = `<div class="ft-empty">Busca una clienta para ver su historial de color.</div>`;
-      } else if (!d || !d.ok) {
-        cuerpo = `<div class="ft-empty">No se ha podido consultar el historial.</div>`;
-      } else if (!d.encontrado) {
-        cuerpo = `<div class="ft-empty">Sin historial anterior para <b>${esc(cli.nombre)}</b>.<br>Es clienta nueva o entró ya con el sistema actual.</div>`;
-      } else {
-        const c = d.cliente || {};
-        const habituales = d.habituales || [];
-        const visitas = d.visitas || [];
-
-        // v1.1.78 — las fórmulas van PRIMERO y en bloque propio. Es el
-        // dato por el que se abre este popup; enterrarlo dentro del
-        // historial obliga a rebuscar (solo ~16% de visitas lo tienen).
-        const conFormula = visitas.filter(v => v.formula);
-
-        cuerpo = `
-          <div class="ft-kpis">
-            <div class="ft-kpi"><div class="ft-kpi-l">Visitas</div><div class="ft-kpi-v">${c.visitas || 0}</div></div>
-            <div class="ft-kpi"><div class="ft-kpi-l">Fórmulas</div><div class="ft-kpi-v">${c.formulas || 0}</div></div>
-            <div class="ft-kpi"><div class="ft-kpi-l">Primera</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.primeraVisita))}</div></div>
-            <div class="ft-kpi"><div class="ft-kpi-l">Última</div><div class="ft-kpi-v" style="font-size:13px">${esc(this._ftFecha(c.ultimaVisita))}</div></div>
-          </div>
-
-          <div class="ft-sec">Historial de color (${conFormula.length})</div>
-          ${conFormula.length ? conFormula.map(v => `
-            <div class="ft-color">
-              <div class="ft-color-h">
-                <span class="ft-vfecha">${esc(this._ftFecha(v.fecha))}</span>
-                ${v.profesional ? `<span class="ft-vof">${esc(v.profesional)}</span>` : ''}
-              </div>
-              <div class="ft-formula">${esc(v.formula)}</div>
-              <div class="ft-color-srv">${esc((v.servicios || []).map(x => x.servicio || x.codigo).join(' + ') || '')}</div>
-            </div>`).join('')
-            : `<div class="ft-nocolor">Sin fórmulas anotadas en el sistema anterior.</div>`}
-
-          ${habituales.length ? `<div class="ft-sec">Lo que se le hace</div><div class="ft-habit">${
-            habituales.map(h => `<span class="ft-tag">${esc(h.servicio || h.codigo)} <b>×${h.veces}</b></span>`).join('')
-          }</div>` : ''}
-
-          <div class="ft-sec">Todas sus visitas (${visitas.length})</div>
-          ${visitas.length ? visitas.map(v => `
-            <div class="ft-visita">
-              <div class="ft-vh">
-                <span class="ft-vfecha">${esc(this._ftFecha(v.fecha))}</span>
-                ${v.hora ? `<span class="ft-cli-tel">${esc(v.hora)}</span>` : ''}
-                ${v.profesional ? `<span class="ft-vof">${esc(v.profesional)}</span>` : ''}
-              </div>
-              <div class="ft-vsrv">${esc((v.servicios || []).map(x => x.servicio || x.codigo).join(' + ') || '—')}</div>
-            </div>`).join('') : `<div class="ft-empty">Sin visitas registradas.</div>`}
-        `;
-      }
-
-      scrim.innerHTML = `
-        <div class="ft-modal">
-          <div class="ft-head">
-            <div>
-              <div class="ft-title">🎨 Ficha técnica${cli && cli.nombre ? ' · ' + esc(cli.nombre) : ''}</div>
-              <div class="ft-sub">Historial de color del sistema anterior</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:10px">
-              ${cli && cli.contactId ? `<button class="ks-fichacli" id="ftFichaCli" style="width:auto;padding:8px 14px">📋 Ficha del cliente</button>` : ''}
-              <button class="ft-x" id="ftClose">✕</button>
-            </div>
-          </div>
-          <div class="ft-search">
-            <input class="ft-input" id="ftQuery" type="search" placeholder="Buscar clienta por nombre o teléfono…" autocomplete="off">
-            <div class="ft-results" id="ftResults" style="display:none"></div>
-          </div>
-          <div class="ft-body">${cuerpo}</div>
-          <div class="ft-foot">Solo consulta técnica. Los datos económicos están en Histórico de Facturación.</div>
-        </div>`;
-
-      scrim.querySelector('#ftClose')?.addEventListener('click', () => this._closeFichaTecnica());
-      // v1.1.98 — La ficha CMS se abre ENCIMA del popup legacy (fc-scrim va
-      // en z-index 210, ft-scrim en 200). Al cerrarla se vuelve aquí, con
-      // la clienta todavía cargada. Las dos fuentes son independientes:
-      // este botón aparece aunque el histórico legacy no haya podido leerse.
-      scrim.querySelector('#ftFichaCli')?.addEventListener('click', () => {
-        const c = this._ftCliente;
-        if (c && c.contactId) this._openFichaCliente(c);
-      });
-      scrim.addEventListener('click', (e) => { if (e.target === scrim) this._closeFichaTecnica(); });
-
-      const q = scrim.querySelector('#ftQuery');
-      if (q) {
-        q.addEventListener('input', () => {
-          const val = q.value.trim();
-          clearTimeout(this._ftBuscarTimer);
-          if (val.length < 2) { this._renderFtCli([]); return; }
-          this._ftBuscarTimer = setTimeout(() => this._sendToPage('ftBuscarCliente', { query: val }), 250);
-        });
-      }
-
+      this._renderFichaTecnica();
     }
 
     // ═══════════════════════════════════════════════════
