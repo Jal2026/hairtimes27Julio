@@ -1,11 +1,25 @@
 // =====================================================
 // KAMISUITE — Backend: FICHAS DE CLIENTE (CMS-first)
 // =====================================================
-// VERSION: 1.0.0
+// VERSION: 1.0.1
 // FECHA:   10 de agosto de 2026
 // ARCHIVO: backend/clientRecordsLogic.web.js
 //
 // CHANGELOG
+//   v1.0.1 (10-Ago-2026) — El MENSAJE QUE EL CLIENTE DEJA AL RESERVAR
+//     ONLINE viaja a la ficha. Vive en `KamisuiteReservations.notes`:
+//     lo escribe el widget público (`state.nota` → `notas` →
+//     crearReservaPublica → crearPackReserva → campo `notes`), y hasta
+//     hoy no se leía en ninguna pantalla de Recepción.
+//       · Cada visita devuelve ahora `nota`.
+//       · Se descarta la marca técnica 'RECURSO INTERNO', que el motor
+//         de disponibilidad escribe en ese mismo campo y no es mensaje
+//         de nadie.
+//       · NEW `notaReserva`: el mensaje de la cita desde la que se abre
+//         la ficha. Esa reserva se excluye de `visitas` (es la de hoy),
+//         así que sin este campo su mensaje no se vería justo cuando
+//         más falta hace.
+//     Aditivo puro: quien no lea los campos nuevos funciona igual.
 //   v1.0.0 (10-Ago-2026) — Versión inicial. Sustituye a los campos
 //     personalizados de Wix Contacts como fuente de las fichas de
 //     COLOR, TRATAMIENTO y notas generales del cliente.
@@ -79,7 +93,7 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const TAG = `[ClientRecords][${VERSION}]`;
 
 // =====================================================
@@ -123,6 +137,21 @@ const LIMITE_NOTAS   = 60;
 const LIMITE_CITAS   = 3;
 
 const TIMEZONE_MADRID = 'Europe/Madrid';
+
+// v1.0.1 — Marca que el motor de disponibilidad escribe en `notes` de las
+// filas técnicas. Copiada literal de widgetPublicoLogic y recepcionProLogic,
+// donde ya se filtra con este mismo criterio. No es un mensaje de nadie.
+const NOTA_RECURSO_INTERNO = 'RECURSO INTERNO';
+
+/**
+ * Devuelve el mensaje real del cliente, o cadena vacía.
+ */
+function notaDeReserva(item) {
+  const n = txt(item && item.notes);
+  if (!n) return '';
+  if (n.includes(NOTA_RECURSO_INTERNO)) return '';
+  return n;
+}
 
 // =====================================================
 // CAMPO DEL MENSAJE DEL ÁREA DE CLIENTE (Wix Contacts)
@@ -470,8 +499,26 @@ async function leerUltimasVisitas(contactId, clientName, clientPhone, excluirRes
       hora: horaLegible(it.fechaReserva),
       profesional: txt(it.staffName),
       estado: txt(it.status).toUpperCase() || 'CONFIRMADA',
-      servicios: labelsDeServiciosDetail(it.serviciosDetail)
+      servicios: labelsDeServiciosDetail(it.serviciosDetail),
+      nota: notaDeReserva(it)     // v1.0.1 — mensaje dejado al reservar online
     }));
+}
+
+/**
+ * Mensaje que el cliente dejó al reservar la cita desde la que se abre la
+ * ficha. Esa reserva se excluye de `visitas` por ser la actual, así que sin
+ * esta lectura su mensaje no se vería justo cuando más falta hace.
+ */
+async function leerNotaDeReserva(reservaId) {
+  const rid = txt(reservaId);
+  if (!rid) return '';
+  try {
+    const item = await wixData.get(COL_RESERVAS, rid, { suppressAuth: true });
+    return notaDeReserva(item);
+  } catch (e) {
+    console.log(`${TAG} nota de reserva no disponible: ${safeErr(e).message}`);
+    return '';
+  }
 }
 
 /**
@@ -537,10 +584,11 @@ export const getFichaClienteRecords = webMethod(
         };
       }
 
-      const [anotaciones, visitas, mensaje] = await Promise.all([
+      const [anotaciones, visitas, mensaje, notaReserva] = await Promise.all([
         leerAnotaciones(cid, limiteNotas),
         leerUltimasVisitas(cid, clientName, clientPhone, excluirReservaId, limiteCitas),
-        incluirMensajeCliente ? leerMensajeAreaCliente(cid) : Promise.resolve({ historico: [], raw: '' })
+        incluirMensajeCliente ? leerMensajeAreaCliente(cid) : Promise.resolve({ historico: [], raw: '' }),
+        leerNotaDeReserva(excluirReservaId)
       ]);
 
       // Agrupación por tipo, para que el popup no tenga que filtrar.
@@ -562,7 +610,10 @@ export const getFichaClienteRecords = webMethod(
         anotaciones,
         porTipo,
         visitas,
-        mensajeCliente: mensaje.historico
+        mensajeCliente: mensaje.historico,
+        // v1.0.1 — mensaje de la cita abierta. Vacío si la ficha se abre
+        // desde la barra superior, donde no hay cita de referencia.
+        notaReserva
       };
 
     } catch (e) {
