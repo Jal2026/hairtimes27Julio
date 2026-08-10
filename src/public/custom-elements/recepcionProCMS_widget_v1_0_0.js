@@ -1,7 +1,134 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.89  ·  Vuelve la EXTENSIÓN RAYADA, en todas las fases
+ * VERSION: 1.1.96  ·  Chips de cliente en el panel de Recepción
+ *
+ * v1.1.96 (5 ago 2026) — Al cargar un cliente en el panel izquierdo se
+ *   pintan chips con lo que ya tiene contratado: ⭐ PRIME, 🎟️ cada BONO
+ *   ACTIVO con su servicio y usos restantes, 🎁 tarjetas promocionales y
+ *   🛍 si tiene histórico de compra de producto (veces e importe).
+ *   Reutiliza el mensaje `getProductosCustom` que ya existía para el modal
+ *   de cobro; el backend (recepcionProLogic v1.0.49) añade el histórico de
+ *   compras y devuelve el contactId para poder distinguir de qué cliente
+ *   es cada respuesta — panel y modal piden por el mismo canal y pueden
+ *   estar sobre clientes distintos. Sin bonos ni compras no se pinta nada:
+ *   el panel se queda como estaba.
+ *
+ * v1.1.95 (5 ago 2026) — El preview de ACORTAR ya no queda tapado
+ *
+ * v1.1.95 (5 ago 2026) — FIX visual del acortado (v1.1.91). El preview de
+ *   recorte se pinta ENCIMA del bloque de la cita, pero tanto .ks-appt
+ *   como .ks-appt-resize-preview están en z-index 5, y .ks-appt:hover sube
+ *   a 8 — y durante el arrastre el cursor está sobre la cita, así que el
+ *   bloque tapaba el aviso: se recortaba a ciegas. El de extender no lo
+ *   sufría porque cae en hueco vacío, por debajo de la cita.
+ *   Ahora .is-cut va en z-index 12, por encima de la cita incluso con
+ *   hover, con línea de corte marcada arriba y el texto legible sobre el
+ *   rayado. El preview de extensión no se toca.
+ *
+ * v1.1.94 (5 ago 2026) — Observatorio semanal + confirmación datáfono/Bizum
+ *
+ * v1.1.94 (5 ago 2026) — Requiere cierreLogicExtendido v1.1.8,
+ *   cashRegisterLogic v1.1.4 y page code v1.0.43.
+ *     · Arqueo: bajo "Guardar arqueo", dos botones — Confirmar datáfono y
+ *       Confirmar Bizum — que dejan constancia de que la lectura coincide
+ *       con el informe. Es una confirmación humana, no una conciliación
+ *       importe a importe, y se guarda aparte del conteo de efectivo.
+ *       Al confirmar, el botón queda en verde con la fecha; se puede
+ *       deshacer volviendo a pulsar.
+ *     · Cierre financiero: bloque "Cobros de otros días" con los cobros
+ *       de hoy que corresponden a citas de otra fecha — cliente, importe,
+ *       método, quién cobró y de qué día es la cita.
+ *     · Cierre financiero: OBSERVATORIO SEMANAL al final. Lunes a domingo
+ *       con tarjeta, efectivo, bizum y total por día, y un chip por
+ *       método: CUADRADO en verde, PENDIENTE en rojo. Un método sin
+ *       cobros ese día no se marca: no hay nada que cuadrar.
+ *     · El botón COPIAR de los dos bloques exporta ya lo que se ve en
+ *       pantalla, con la agrupación por profesional, los chips y los
+ *       bloques nuevos.
+ *
+ * v1.1.93 (5 ago 2026) — Informe: quién cobra, y hora en cada servicio
+ *
+ * v1.1.93 (5 ago 2026) — Requiere cierreLogicExtendido v1.1.7.
+ *     · "Cobrado por staff" pasa a agrupar por QUIÉN COBRÓ (el empleado
+ *       logueado), no por la columna del calendario. Sin login, un único
+ *       cajón "Administrador". El subtítulo del bloque lo dice.
+ *     · Cada clienta lleva un tercer chip, 👤, con quién cobró.
+ *     · Servicios del día: cada servicio con su HORA de calendario y la
+ *       clienta, en orden cronológico dentro de cada profesional. Se deja
+ *       de agregar por nombre: agregando se perdía la hora, que es lo que
+ *       permite localizarlo.
+ *
+ * v1.1.92 (5 ago 2026) — Informe del día por profesional + detalle de ventas
+ *
+ * v1.1.92 (5 ago 2026) — INFORME DEL DÍA. Requiere cierreLogicExtendido
+ *   v1.1.6 (si no está desplegado, cada bloque nuevo cae al render antiguo).
+ *     · Servicios del día y Clientes del día se agrupan por PROFESIONAL,
+ *       con la atribución por fase que calcula el backend: quien ejecutó
+ *       la fase, no el titular del pack. Una cita repartida entre dos
+ *       aparece en las dos columnas, cada una con lo suyo, y lleva la
+ *       marca "compartida".
+ *     · Cada clienta lleva ahora dos chips: estado (PAGADO / PDTE) y
+ *       método de cobro.
+ *     · Bloques nuevos "Productos vendidos" y "Especiales vendidos" con
+ *       cliente + concepto + importe. Si el día no tuvo ventas, el bloque
+ *       se pinta igualmente con "Sin actividad": la ausencia de venta es
+ *       información, no un hueco.
+ *     · El producto deja de sumarse al total de servicio de la clienta.
+ *     · Cierre financiero: cada línea de producto lleva el chip del
+ *       empleado que despachó (`soldBy`); sin login → "Administrador".
+ *     · Cierre financiero: bloque nuevo "Pendiente de cobrar" con
+ *       cliente + servicios + profesional.
+ *     · Ficha de la cita: FUERA los productos vendidos. Se colaban ahí
+ *       ventas hechas desde TIENDA después de cobrar la cita, por un
+ *       cruce heurístico por contactId. Su sitio es el informe.
+ *
+ * v1.1.91 (5 ago 2026) — ACORTAR una fase con la misma asa que la extiende
+ *
+ * v1.1.91 (5 ago 2026) — La misma asa inferior que extiende ahora también
+ *   ACORTA. Arrastrar hacia abajo sigue creando extensión rayada, igual
+ *   que en v1.1.89. Arrastrar hacia ARRIBA:
+ *     · si la fase tiene extensión → la consume hasta 0 y ahí para
+ *       (comportamiento v1.1.89 literal, sin tocar);
+ *     · si la fase NO tiene extensión → recorta la DURACIÓN de la fase,
+ *       con mínimo de 5 minutos. El preview cambia de aspecto (bloque
+ *       rojo .is-cut) y anuncia la duración resultante y la nueva hora de
+ *       fin, para que no se confunda con la extensión.
+ *   Nunca se hacen las dos cosas en un mismo arrastre: quitar extensión y
+ *   acortar son dos gestos separados, una sola llamada al backend cada uno.
+ *
+ *   El acortado usa `redimensionarFase` (recepcionProLogic v1.0.40), que ya
+ *   existía y ya era simétrico — solo estaba sin disparador desde v1.1.89.
+ *   Mensaje 'redimensionar-fase', respuesta 'fase-redimensionada': ambos
+ *   ya estaban cableados en page code y widget.
+ *
+ *   IMPORTANTE: acortar NO sube las fases posteriores. Deja el hueco libre
+ *   (mismo criterio deliberado que moverFase y redimensionarFase: manda el
+ *   operador). Si se quiere cerrar el hueco, se arrastran las fases.
+ *
+ * v1.1.90 (5 ago 2026) — Cobro por PESO (gramos) en el modal de la cita
+ *
+ * v1.1.90 (5 ago 2026) — TARIFA POR PESO. Los servicios marcados POR PESO
+ *   en el editor (`cobroporPeso` + `precioGramo` €/g) entraban en la cita a
+ *   0 € y no había forma de cobrarlos salvo teclear el importe a mano con
+ *   "✎ Extra". Ahora, la línea de un servicio por peso muestra debajo un
+ *   campo de GRAMOS: se teclea el gramaje real gastado y el importe lo
+ *   calcula el backend (setLineWeight, recepcionProLogic v1.0.46) leyendo
+ *   el €/g del catálogo. El widget NUNCA manda euros, solo gramos.
+ *
+ *   · Qué línea lleva campo de gramos: se resuelve cruzando el label de la
+ *     línea de serviciosDetail con la fase ocupante `tipo:'servicio'` del
+ *     mismo label (alineado por nº de ocurrencia, soporta el mismo servicio
+ *     repetido) → setupUid → catálogo en memoria (`_porSetupUid`).
+ *   · Los gramos vienen de `r.lineWeights` (campo nuevo del CMS): al
+ *     reabrir la cita siguen ahí y son reeditables. Teclear otro gramaje
+ *     CORRIGE el importe, no lo acumula.
+ *   · Tras aplicar, el modal se repinta EN CALIENTE con el nuevo importe y
+ *     el nuevo TOTAL — sin cerrarse ni recargar. La agenda de detrás se
+ *     refresca en segundo plano.
+ *   · Cita cobrada: se muestra el gramaje en texto, sin campo editable.
+ *   · Nuevo CSS: .ks-weight-row / .ks-weight-input / .ks-weight-rate /
+ *     .ks-weight-ok. Ninguna clase existente se modifica.
  *
  * v1.1.89 (5 ago 2026) — REGRESIÓN CORREGIDA. Hasta v1.1.64, arrastrar el
  *   asa inferior de una cita creaba un buffer RAYADO detrás, con una ✕
@@ -1564,7 +1691,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.89]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.96]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2132,6 +2259,17 @@ button { font-family: inherit; cursor: pointer; }
   color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center;
   justify-content: center; pointer-events: none; z-index: 5;
   border: 1px dashed rgba(255,255,255,.7); }
+/* v1.1.91 — preview de ACORTADO: se pinta ENCIMA del tramo que se recorta.
+   v1.1.95 — z-index 12: por encima de .ks-appt (5) y de .ks-appt:hover (8),
+   que es lo que lo tapaba durante el arrastre. Línea de corte marcada en
+   el borde superior: ahí queda el nuevo final de la fase. */
+.ks-appt-resize-preview.is-cut {
+  z-index: 12;
+  background: repeating-linear-gradient(135deg, rgba(220,80,80,.88), rgba(220,80,80,.88) 5px,
+    rgba(170,30,30,.94) 5px, rgba(170,30,30,.94) 10px);
+  border: 1px dashed rgba(255,255,255,.85);
+  border-top: 2px solid #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,.55); }
 /* v1.1.17 — Modal productos (estilo V1) */
 .pd-search { width: 100%; padding: 9px 12px; border: 1px solid var(--ks-line); border-radius: 8px;
   font-size: 13px; font-family: inherit; margin-bottom: 10px; box-sizing: border-box; }
@@ -2329,6 +2467,12 @@ button { font-family: inherit; cursor: pointer; }
 .ks-item-rm:hover { background: rgba(185,28,28,.08); }
 .ks-item-rm:disabled { opacity: .25; cursor: wait; }
 .ks-item-rm { border: 0; background: transparent; color: oklch(0.6 0.16 25); font-size: 13px; }
+/* v1.1.90 — Fila de gramos de los servicios con tarifa por peso */
+.ks-weight-row { display: flex; align-items: center; gap: 7px; padding: 0 0 8px 4px; }
+.ks-weight-input { width: 78px; padding: 5px 7px; border: 1px solid var(--ks-line2); border-radius: 7px; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; background: var(--ks-paper2); color: var(--ks-ink); }
+.ks-weight-rate { font-size: 11.5px; color: var(--ks-ink3); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ks-weight-ok { margin-left: auto; border: 0; border-radius: 7px; padding: 5px 11px; font-size: 11.5px; font-weight: 700; background: var(--ks-ink); color: var(--ks-paper); cursor: pointer; }
+.ks-weight-ok:disabled { opacity: .4; cursor: wait; }
 .ks-modal-total { display: flex; align-items: center; justify-content: space-between; padding: 13px 0; border-top: 2px solid var(--ks-ink); font-weight: 800; font-size: 15px; }
 .ks-total-val { font-size: 20px; font-variant-numeric: tabular-nums; }
 .ks-modal-pays { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 6px; }
@@ -2540,6 +2684,38 @@ button { font-family: inherit; cursor: pointer; }
 .cierre-section { grid-column:1/-1; margin-top:4px; }
 .cierre-section-title { font-size:10px; font-weight:700; color:#c9a44a; text-transform:uppercase; letter-spacing:.6px; margin-bottom:6px; border-bottom:1px solid #e2e5ea; padding-bottom:4px; }
 .cierre-row { display:flex; justify-content:space-between; align-items:center; padding:4px 8px; font-size:11px; }
+/* v1.1.92 — agrupación por profesional y bloques sin actividad */
+.cierre-staffgroup { display:flex; justify-content:space-between; align-items:center; padding:6px 8px 3px; margin-top:4px; border-bottom:1px solid #e8eaee; }
+.cierre-staffgroup-name { font-size:10.5px; font-weight:800; letter-spacing:.6px; text-transform:uppercase; color:#4b5563; }
+.cierre-staffgroup-tot { font-size:10.5px; font-weight:700; color:#6b7280; font-variant-numeric:tabular-nums; }
+.cierre-row-ind { padding-left:16px; }
+.cierre-row-vacio { display:block; padding:8px; font-size:11px; font-style:italic; color:#9ca3af; }
+/* v1.1.96 — chips de lo que el cliente ya tiene contratado */
+.ks-cchips { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+.ks-cchip { display:inline-flex; align-items:center; gap:3px; padding:2px 7px; border-radius:999px; font-size:10px; font-weight:700; letter-spacing:.2px; border:1px solid transparent; }
+.ks-cchip-n { font-weight:800; opacity:.75; font-variant-numeric:tabular-nums; }
+.ks-cchip.is-prime { background:#fdf3d6; color:#8a6100; border-color:#e8c877; }
+.ks-cchip.is-bono  { background:#e7f3ff; color:#1b5f9e; border-color:#a9cef0; }
+.ks-cchip.is-promo { background:#f3e9ff; color:#6b34a8; border-color:#d3bcf0; }
+.ks-cchip.is-prod  { background:#e6f6ec; color:#1b6b3a; border-color:#a9d9bd; }
+/* v1.1.94 — confirmación de datáfono / Bizum en el arqueo */
+.ks-conf-block { margin-top:10px; padding-top:9px; border-top:1px solid var(--ks-line2); display:flex; flex-wrap:wrap; gap:7px; }
+.ks-conf-hint { flex:1 0 100%; font-size:10.5px; color:var(--ks-ink3); font-weight:600; }
+.ks-conf-btn { flex:1; min-width:120px; border:1px solid var(--ks-line); background:var(--ks-paper2); color:var(--ks-ink2); border-radius:8px; padding:7px 9px; font:inherit; font-size:11.5px; font-weight:700; cursor:pointer; }
+.ks-conf-btn.is-ok { border-color:oklch(0.5 0.14 150); background:oklch(0.5 0.14 150 / .12); color:oklch(0.42 0.14 150); }
+/* v1.1.94 — observatorio semanal */
+.obs-day { padding:6px 8px; border-bottom:1px solid #eef0f3; }
+.obs-day.is-future { opacity:.45; }
+.obs-day-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:3px; }
+.obs-day-name { font-size:11px; font-weight:800; color:#4b5563; text-transform:uppercase; letter-spacing:.4px; }
+.obs-day-tot { font-size:11.5px; font-weight:700; font-variant-numeric:tabular-nums; }
+.obs-line { display:flex; align-items:center; gap:8px; padding:2px 0 2px 10px; font-size:11px; }
+.obs-met { flex:1; color:#6b7280; }
+.obs-imp { font-variant-numeric:tabular-nums; min-width:64px; text-align:right; }
+.obs-chip { min-width:74px; text-align:center; font-size:8.5px; font-weight:800; letter-spacing:.5px; padding:2px 6px; border-radius:4px; }
+.obs-ok { color:#15803d; background:rgba(21,128,61,.13); }
+.obs-pdte { color:#b91c1c; background:rgba(185,28,28,.12); }
+.obs-na { color:#c3c7cd; background:transparent; }
 .cierre-row:nth-child(odd) { background:rgba(0,0,0,.03); border-radius:4px; }
 /* v1.1.21 — bloques rendimiento / cierre + banner reconciliación */
 .cierre-block { border-radius:12px; padding:14px; margin-bottom:14px; border:1px solid var(--ks-line); background:#fff; }
@@ -2659,6 +2835,7 @@ button { font-family: inherit; cursor: pointer; }
       this._disc = 0;
       this._canjeActivo = null;        // v1.1.50 — F4/F5 canje activo del modal de cobro
       this._productosCliente = null;   // v1.1.51 — F4/F5 { prime, bonos, tarjetas } del cliente
+      this._chipsCliente = null;       // v1.1.96 — { contactId, prime, bonos, tarjetas, comprasProductos } del panel
       // v1.1.53 — Columna lateral colapsable. Default según ancho de viewport:
       // < 1024px (móvil horizontal / tablet pequeña) → colapsada de inicio
       //          para que el calendario tenga el ancho completo.
@@ -3122,6 +3299,23 @@ button { font-family: inherit; cursor: pointer; }
           break;
         // v1.1.51 — F4/F5 auto-detección bonos/tarjetas del cliente
         case 'productosCustomCliente':
+          // v1.1.96 — el panel y el modal de cobro comparten este canal y
+          // pueden estar sobre clientes distintos. El backend v1.0.49
+          // devuelve contactId: cada respuesta va a quien la pidió.
+          if (p.ok && p.contactId && this._cliente && this._cliente.contactId === p.contactId) {
+            this._chipsCliente = {
+              contactId: p.contactId,
+              prime: p.prime || null,
+              bonos: Array.isArray(p.bonos) ? p.bonos : [],
+              tarjetas: Array.isArray(p.tarjetas) ? p.tarjetas : [],
+              comprasProductos: p.comprasProductos || null
+            };
+            this._renderClienteSelected();
+          }
+          // Si hay un modal de cobro abierto de OTRO cliente, no pisar sus
+          // bonos con los de este.
+          if (this._modalReserva && p.contactId && this._modalReserva.contactId
+              && this._modalReserva.contactId !== p.contactId) break;
           if (p.ok) {
             this._productosCliente = {
               prime: p.prime || null,
@@ -3315,6 +3509,35 @@ button { font-family: inherit; cursor: pointer; }
         case 'productos-cargados':
           this._renderProductosModal(p.productos || []);
           break;
+        // v1.1.90 — Peso fijado en una línea (tarifa por gramo).
+        // REGLA UX: el modal NO se cierra ni se recarga. Se actualiza el
+        // estado local (línea + total) y se repinta en caliente; la agenda
+        // de detrás se refresca en segundo plano.
+        case 'line-weight-set': {
+          if (p.ok) {
+            const rMod = this._modalReserva;
+            if (rMod && rMod._id === p.reservaId) {
+              rMod.serviciosDetail = p.serviciosDetail;
+              rMod.precioTotal = p.precioTotal;
+              rMod.lineWeights = p.lineWeights || [];
+            }
+            const rLista = (this._reservas || []).find(x => x._id === p.reservaId);
+            if (rLista) {
+              rLista.serviciosDetail = p.serviciosDetail;
+              rLista.precioTotal = p.precioTotal;
+              rLista.lineWeights = p.lineWeights || [];
+            }
+            this._toast(p.grams > 0
+              ? `${p.grams} g × ${p.precioGramo} €/g = ${p.precioLinea}€`
+              : 'Peso quitado · línea a 0€');
+            if (rMod && rMod._id === p.reservaId) this._renderModal();
+            this._sendToPage('getReservas', { fecha: this._fecha });
+          } else {
+            this._toast('Error: ' + (p.error || 'no se pudo fijar el peso'));
+            this.shadowRoot.querySelectorAll('.ks-weight-ok').forEach(b => b.disabled = false);
+          }
+          break;
+        }
         case 'item-quitado':
           if (p.ok) {
             this._toast(`Quitado · -${p.subtotalRemoved}€`);
@@ -3398,6 +3621,16 @@ button { font-family: inherit; cursor: pointer; }
         case 'caja-cerrada':
           if (p.ok) { this._toast('Caja cerrada ✓'); this._cajaRefresh(); }
           else this._toast('Error: ' + (p.error || 'no se pudo cerrar'));
+          break;
+        // v1.1.94 — confirmación de datáfono / Bizum
+        case 'caja-metodo-confirmado':
+          if (p.ok) {
+            const que = p.metodo === 'bizum' ? 'Bizum' : 'Datáfono';
+            this._toast(p.confirmado ? `${que} confirmado ✓` : `${que} sin confirmar`);
+            this._cajaRefresh();
+          } else {
+            this._toast('Error: ' + (p.error || 'no se pudo confirmar'));
+          }
           break;
         case 'caja-movimiento-ok':
           if (p.ok) { this._toast('Movimiento registrado'); this._cajaRefresh(); }
@@ -3976,6 +4209,11 @@ button { font-family: inherit; cursor: pointer; }
       root.getElementById('cliClear').style.display = 'none';
       this._renderClienteSelected();
       this._updateSteps();
+      // v1.1.96 — pedir lo que ya tiene contratado para pintar los chips
+      this._chipsCliente = null;
+      if (this._cliente.contactId) {
+        this._sendToPage('getProductosCustom', { contactId: this._cliente.contactId });
+      }
     }
     _renderClienteSelected() {
       const root = this.shadowRoot;
@@ -4010,13 +4248,44 @@ button { font-family: inherit; cursor: pointer; }
 
       sel.innerHTML = `<div class="ks-cli-selected">
         <div style="flex:1;"><div class="ks-cli-sname">${esc(c.nombre)}${prov}</div>
-        <div class="ks-cli-ssub">${sub}</div>${warnBanner}</div>
+        <div class="ks-cli-ssub">${sub}</div>${warnBanner}${this._chipsClienteHTML()}</div>
         <div style="display:flex;align-items:center;">${btnEdit}<button class="ks-cli-srm" id="cliRm">✕</button></div></div>`;
       sel.querySelector('#cliRm').addEventListener('click', () => { this._cliente = null; sel.innerHTML = ''; this._updateSteps(); });
       if (puedeEditar) {
         sel.querySelector('#cliEdit').addEventListener('click', () => this._openEditarCliente(c));
       }
     }
+    // v1.1.96 — Chips de lo que el cliente YA tiene contratado. Se pintan
+    // solo cuando la respuesta corresponde a este mismo cliente; mientras
+    // no ha llegado, no se pinta nada (no hay hueco ni parpadeo).
+    _chipsClienteHTML() {
+      const c = this._cliente;
+      const cp = this._chipsCliente;
+      if (!c || !cp || cp.contactId !== c.contactId) return '';
+      const chips = [];
+
+      if (cp.prime) {
+        chips.push(`<span class="ks-cchip is-prime">⭐ PRIME</span>`);
+      }
+      for (const b of (cp.bonos || [])) {
+        const usos = (b.remainingUses != null && b.totalUses)
+          ? ` <span class="ks-cchip-n">${b.remainingUses}/${b.totalUses}</span>` : '';
+        const svc = b.serviceLabel || b.code || 'Bono';
+        chips.push(`<span class="ks-cchip is-bono" title="${esc(b.code || '')}">🎟️ ${esc(svc)}${usos}</span>`);
+      }
+      for (const t of (cp.tarjetas || [])) {
+        chips.push(`<span class="ks-cchip is-promo" title="${esc(t.code || '')}">🎁 ${esc(t.serviceLabel || 'Tarjeta')}</span>`);
+      }
+      const compras = cp.comprasProductos;
+      if (compras && compras.veces > 0) {
+        const veces = compras.veces === 1 ? '1 compra' : `${compras.veces} compras`;
+        chips.push(`<span class="ks-cchip is-prod" title="${esc(compras.ultimoProducto || '')}">🛍 ${veces} · ${Math.round(compras.total)}€</span>`);
+      }
+
+      if (!chips.length) return '';
+      return `<div class="ks-cchips">${chips.join('')}</div>`;
+    }
+
     // v1.1.34 — Detección de ficha incompleta (patrón V1 literal de
     // kamisuite-agenda v2.0.5). Banner en sidebar cliente + modal cita.
     // Los emails genéricos del salón se tratan como "vacío" porque no
@@ -5203,36 +5472,69 @@ button { font-family: inherit; cursor: pointer; }
         const startMin = parseInt(handle.dataset.startMin, 10) || 0;
         const extBase = Math.max(0, parseInt(handle.dataset.faseExt, 10) || 0);
         const finFaseMin = startMin + durFase;
-        let preview = null, startY = 0, curExt = extBase, dragging = false;
+
+        // ── v1.1.91 — LA MISMA ASA ACORTA ──────────────────────────────
+        // `target` es un único escalar con el resultado del arrastre:
+        //    target > 0  → minutos de EXTENSIÓN rayada (extender-fase)
+        //    target = 0  → sin extensión
+        //    target < 0  → minutos que se RECORTAN de la fase
+        //                  (redimensionar-fase con nuevaDur = durFase+target)
+        // Tope inferior: si la fase YA tiene extensión, subir solo la
+        // consume hasta 0 y para ahí — quitar extensión y acortar NUNCA
+        // ocurren en el mismo arrastre (un gesto = una llamada al backend).
+        // Sin extensión, se puede recortar hasta un mínimo de 5 min de fase.
+        const DUR_MIN_FASE = 5;
+        const topeArriba = extBase > 0 ? 0 : -Math.max(0, durFase - DUR_MIN_FASE);
+        let preview = null, startY = 0, target = extBase, dragging = false;
+
+        const _pintarPreview = (t) => {
+          if (!preview) return;
+          if (t >= 0) {
+            preview.classList.remove('is-cut');
+            preview.style.top = (appt.offsetTop + appt.offsetHeight) + 'px';
+            preview.style.height = Math.max(t * _ppm, 1) + 'px';
+            preview.textContent = t > 0
+              ? `EXTENSIÓN · ${t} MIN · hasta ${minToHHMM(finFaseMin + t)}`
+              : (extBase > 0 ? 'SIN EXTENSIÓN' : '');
+          } else {
+            const recorte = -t;
+            const nuevaDur = Math.max(DUR_MIN_FASE, durFase - recorte);
+            preview.classList.add('is-cut');
+            preview.style.top = (appt.offsetTop + appt.offsetHeight - recorte * _ppm) + 'px';
+            preview.style.height = Math.max(recorte * _ppm, 1) + 'px';
+            preview.textContent = `ACORTAR · ${nuevaDur} MIN · hasta ${minToHHMM(startMin + nuevaDur)}`;
+          }
+        };
+
         handle.addEventListener('mousedown', e => {
           e.preventDefault(); e.stopPropagation();
-          dragging = true; startY = e.clientY; curExt = extBase;
+          dragging = true; startY = e.clientY; target = extBase;
           // preview rayado, anclado al borde inferior del bloque
           preview = document.createElement('div');
           preview.className = 'ks-appt-resize-preview';
-          preview.style.top = (appt.offsetTop + appt.offsetHeight) + 'px';
-          preview.style.height = Math.max(curExt * _ppm, 1) + 'px';
-          preview.textContent = curExt > 0 ? `EXTENSIÓN · ${curExt} MIN` : '';
           appt.parentElement.appendChild(preview);
+          _pintarPreview(target);
           const onMove = ev => {
             if (!dragging) return;
             const dy = ev.clientY - startY;
             let ne = extBase + Math.round((dy / _ppm) / 5) * 5;   // snap 5 min
-            if (ne < 0) ne = 0;
-            curExt = ne;
-            preview.style.height = Math.max(ne * _ppm, 1) + 'px';
-            preview.textContent = ne > 0
-              ? `EXTENSIÓN · ${ne} MIN · hasta ${minToHHMM(finFaseMin + ne)}`
-              : 'SIN EXTENSIÓN';
+            if (ne < topeArriba) ne = topeArriba;
+            target = ne;
+            _pintarPreview(ne);
           };
           const onUp = () => {
             dragging = false;
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
             if (preview) { preview.remove(); preview = null; }
-            if (curExt !== extBase) {
-              this._toast(curExt > 0 ? `Extendiendo +${curExt} min…` : 'Quitando extensión…');
-              this._sendToPage('extender-fase', { reservaId, faseIndex, extMin: curExt });
+            if (target === extBase) return;
+            if (target >= 0) {
+              this._toast(target > 0 ? `Extendiendo +${target} min…` : 'Quitando extensión…');
+              this._sendToPage('extender-fase', { reservaId, faseIndex, extMin: target });
+            } else {
+              const nuevaDur = Math.max(DUR_MIN_FASE, durFase + target);
+              this._toast(`Acortando a ${nuevaDur} min…`);
+              this._sendToPage('redimensionar-fase', { reservaId, faseIndex, nuevaDur });
             }
           };
           window.addEventListener('mousemove', onMove);
@@ -6054,13 +6356,54 @@ button { font-family: inherit; cursor: pointer; }
         if (!_d && items.length <= 1) _d = Number(r.duracionTotal) || 0;
         return _d > 0 ? `<span class="ks-item-dur">${Math.round(_d)}′</span>` : '';
       };
-      const itemsHTML = (items.length ? items : [{ label: r.title || 'Servicio', price: Number(r.precioTotal) || 0 }]).map((it, i) => `<div class="ks-modal-item ${i > 0 ? 'is-compl' : ''}" data-i="${i}"><span class="ks-item-label">${i > 0 ? '<span class="ks-item-complflag">⛓</span>' : ''}${esc(it.label)}</span><span class="ks-item-right">${_durLinea(it.label)}<span class="ks-item-price">${it.price}€</span>${items.length > 1 ? `<button class="ks-item-rm" data-i="${i}" title="Quitar este servicio" aria-label="Quitar">✕</button>` : ''}</span></div>`).join('');
-      // v1.1.24 — Productos vendidos asociados a esta cita
-      const productosVendidos = Array.isArray(r.productosVendidos) ? r.productosVendidos : [];
-      const productosHTML = productosVendidos.map(p => {
-        const qty = p.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${p.cantidad}</span>` : '';
-        return `<div class="ks-modal-item is-prod"><span class="ks-item-label"><span class="ks-item-prodflag">🛒</span>${esc(p.nombre)}${qty} <span class="ks-prod-badge">VENDIDO</span></span><span class="ks-item-right"><span class="ks-item-price">${p.subtotal}€</span></span></div>`;
-      }).join('');
+      // v1.1.90 — TARIFA POR PESO. Una línea lleva campo de gramos solo si
+      // su servicio tiene `cobroporPeso` + `precioGramo` en el catálogo. Se
+      // identifica el servicio de cada línea cruzando su label con la fase
+      // ocupante tipo:'servicio' del mismo label, alineada por número de
+      // ocurrencia (mismo criterio que quitarItemReserva en el backend).
+      const _pesosGuardados = {};
+      for (const w of (Array.isArray(r.lineWeights) ? r.lineWeights : [])) {
+        if (w && Number.isFinite(Number(w.index))) _pesosGuardados[Number(w.index)] = Number(w.grams) || 0;
+      }
+      const _fasesSvc = _fasesModal.filter(f => f && f.tipo === 'servicio');
+      const _occVistas = {};
+      const _pesoInfo = items.map((it, i) => {
+        const lab = String(it.label || '').trim();
+        if (!lab) return null;
+        const occ = _occVistas[lab] || 0;
+        _occVistas[lab] = occ + 1;
+        let seen = 0, uid = '';
+        for (const f of _fasesSvc) {
+          if (String(f.label || '').trim() !== lab) continue;
+          if (seen === occ) { uid = String(f.setupUid || ''); break; }
+          seen++;
+        }
+        const svc = uid ? (this._porSetupUid || {})[uid] : null;
+        if (!svc || svc.cobroporPeso !== true) return null;
+        const eurG = Number(svc.precioGramo) || 0;
+        if (eurG <= 0) return null;
+        return { precioGramo: eurG, grams: Number(_pesosGuardados[i]) || 0 };
+      });
+      const _pesoHTML = (i) => {
+        const info = _pesoInfo[i];
+        if (!info) return '';
+        if (paid) {
+          return `<div class="ks-weight-row"><span class="ks-weight-rate">${info.grams ? info.grams + ' g × ' : ''}${info.precioGramo} €/g</span></div>`;
+        }
+        return `<div class="ks-weight-row">`
+          + `<input type="number" class="ks-weight-input" id="wIn${i}" data-wi="${i}" min="0" step="1" placeholder="gramos" value="${info.grams || ''}">`
+          + `<span class="ks-weight-rate">g × ${info.precioGramo} €/g</span>`
+          + `<button class="ks-weight-ok" data-wi="${i}">Aplicar</button>`
+          + `</div>`;
+      };
+
+      const itemsHTML = (items.length ? items : [{ label: r.title || 'Servicio', price: Number(r.precioTotal) || 0 }]).map((it, i) => `<div class="ks-modal-item ${i > 0 ? 'is-compl' : ''}" data-i="${i}"><span class="ks-item-label">${i > 0 ? '<span class="ks-item-complflag">⛓</span>' : ''}${esc(it.label)}</span><span class="ks-item-right">${_durLinea(it.label)}<span class="ks-item-price">${it.price}€</span>${items.length > 1 ? `<button class="ks-item-rm" data-i="${i}" title="Quitar este servicio" aria-label="Quitar">✕</button>` : ''}</span></div>${_pesoHTML(i)}`).join('');
+      // v1.1.92 — Los productos vendidos YA NO se pintan en la ficha de la
+      // cita. El cruce que los traía era heurístico (mismo contactId + mismo
+      // día, pegado a la cita más cercana en el tiempo), así que una venta
+      // hecha desde TIENDA después de cobrar acababa colgada de una cita ya
+      // cerrada. Las ventas se ven en el informe del día, con cliente,
+      // concepto, importe y vendedor.
       // v1.1.26 — cálculo unificado del descuento (% o €)
       // v1.1.39 — soporta promo del servicio encadenada con manual operador.
       const { subtotal, discPct, discEur, subtotalOriginal, ahorroPromo, tienePromo } = this._calcDescuento();
@@ -6147,7 +6490,7 @@ button { font-family: inherit; cursor: pointer; }
         <div class="ks-modal-meta">${hhmm}${endH ? '–' + endH : ''}</div>
         ${contactRow}
         ${modalWarn}
-        <div class="ks-modal-items">${itemsHTML}${productosHTML}</div>
+        <div class="ks-modal-items">${itemsHTML}</div>
         ${paid ? '' : `<div class="ks-modal-disc" id="discBox"></div>`}
         ${paid ? '' : `<div class="ks-modal-canje" id="canjeBox" style="margin-top:6px"></div>`}
         <div class="ks-modal-total"><span>TOTAL</span><span class="ks-total-wrap">${mostrarTachado ? `<span class="ks-total-strike">${subtotalOriginal}€</span> <span class="ks-total-discnote" style="font-size:11px;color:#d48a1a;font-weight:600">${noteText}</span>` : ''}<span class="ks-total-val">${total}€</span></span></div>
@@ -6201,6 +6544,27 @@ button { font-family: inherit; cursor: pointer; }
         modal.querySelector('#mCancelRes')?.addEventListener('click', () => {
           if (confirm('¿Cancelar esta cita? Se borrarán sus huecos del calendario.')) this._sendToPage('cancelarReserva', { reservaId: r._id });
         });
+        // v1.1.90 — Aplicar gramos de una línea con tarifa por peso.
+        // Se envían GRAMOS, nunca euros: el importe lo calcula el backend
+        // con el precioGramo del catálogo.
+        const _enviarPeso = (i) => {
+          const inp = modal.querySelector('#wIn' + i);
+          if (!inp) return;
+          const g = Number(inp.value);
+          if (!Number.isFinite(g) || g < 0) { this._toast('Gramos inválidos'); return; }
+          modal.querySelectorAll('.ks-weight-ok').forEach(b => b.disabled = true);
+          this._sendToPage('set-line-weight', { reservaId: r._id, itemIndex: i, grams: g });
+        };
+        modal.querySelectorAll('.ks-weight-ok').forEach(btn => btn.addEventListener('click', () => {
+          const i = parseInt(btn.getAttribute('data-wi'), 10);
+          if (!isNaN(i)) _enviarPeso(i);
+        }));
+        modal.querySelectorAll('.ks-weight-input').forEach(inp => inp.addEventListener('keydown', ev => {
+          if (ev.key !== 'Enter') return;
+          ev.preventDefault();
+          const i = parseInt(inp.getAttribute('data-wi'), 10);
+          if (!isNaN(i)) _enviarPeso(i);
+        }));
         modal.querySelector('#addSvc')?.addEventListener('click', () => this._openAddServicioModal(r));
         modal.querySelector('#addCompl')?.addEventListener('click', () => this._openAddComplementoModal(r));
         modal.querySelector('#addProd')?.addEventListener('click', () => this._openAddProductoModal(r));
@@ -6214,6 +6578,8 @@ button { font-family: inherit; cursor: pointer; }
         const _sinPermiso = () => this._toast('No tienes permiso para esta acción');
         modal.querySelectorAll('.ks-pay[data-m]').forEach(b => b.addEventListener('click', _sinPermiso));
         modal.querySelector('#mCancelRes')?.addEventListener('click', _sinPermiso);
+        modal.querySelectorAll('.ks-weight-ok').forEach(b => b.addEventListener('click', _sinPermiso));
+        modal.querySelectorAll('.ks-weight-input').forEach(i => { i.disabled = true; });
         modal.querySelector('#addSvc')?.addEventListener('click', _sinPermiso);
         modal.querySelector('#addCompl')?.addEventListener('click', _sinPermiso);
         modal.querySelector('#addProd')?.addEventListener('click', _sinPermiso);
@@ -7652,6 +8018,10 @@ button { font-family: inherit; cursor: pointer; }
         if (!this._cajaNota && d.registro.differenceNote) this._cajaNota = String(d.registro.differenceNote);
       }
 
+      // v1.1.94 — estado de las confirmaciones de datáfono y Bizum
+      const cardOk = !!(d.registro && d.registro.cardConfirmed === true);
+      const bizumOk = !!(d.registro && d.registro.bizumConfirmed === true);
+
       const esperado = Number(d.esperado || 0);
       const contado = Number(this._cajaContado || 0);
       const dif = Math.round((contado - esperado) * 100) / 100;
@@ -7681,7 +8051,14 @@ button { font-family: inherit; cursor: pointer; }
           <button class="ks-pay pay-tarjeta" id="cajaGuardar" style="flex:1">Guardar arqueo</button>
           ${this._cajaModo === 'cierre' ? `<button class="ks-pay pay-efectivo" id="cajaCerrar" style="flex:1">🔒 Cerrar día</button>` : ''}
         </div>
-        ${guardado ? `<div style="text-align:center;margin-top:8px;font-size:12px;font-weight:800;color:oklch(0.5 0.14 150)">✓ Arqueo guardado${d.registro && d.registro.difference != null ? ` · dif ${Number(d.registro.difference)}€` : ''}</div>` : ''}`}
+        ${guardado ? `<div style="text-align:center;margin-top:8px;font-size:12px;font-weight:800;color:oklch(0.5 0.14 150)">✓ Arqueo guardado${d.registro && d.registro.difference != null ? ` · dif ${Number(d.registro.difference)}€` : ''}</div>` : ''}
+        <!-- v1.1.94 — Confirmación de lecturas. No concilia importe a
+             importe: deja constancia de que alguien lo ha comprobado. -->
+        <div class="ks-conf-block">
+          <div class="ks-conf-hint">Confirma si la lectura coincide con el informe</div>
+          <button class="ks-conf-btn ${cardOk ? 'is-ok' : ''}" id="cajaConfCard">${cardOk ? '✓ Datáfono confirmado' : 'Confirmar datáfono'}</button>
+          <button class="ks-conf-btn ${bizumOk ? 'is-ok' : ''}" id="cajaConfBizum">${bizumOk ? '✓ Bizum confirmado' : 'Confirmar Bizum'}</button>
+        </div>`}
         ${movimientos.length ? `<div class="ks-modal-items" style="border-top:1px solid var(--ks-line2);margin-top:8px"><div class="ks-eyebrow" style="padding:6px 0">Movimientos del día</div>${movimientos.map(m => `<div class="ks-modal-item"><span class="ks-item-label">${esc(this._movLabel(m.movementType))} · ${esc(m.description || '')}</span><span class="ks-item-price">${Number(m.amount || 0)}€</span></div>`).join('')}</div>` : ''}
         <div class="ks-modal-foot"><span></span><button class="ks-modal-close" id="cajaClose">Cerrar</button></div>`;
 
@@ -7707,6 +8084,12 @@ button { font-family: inherit; cursor: pointer; }
           const v = parseFloat(raw) || 0;
           this._sendToPage('caja-set-fondo', { fechaISO: this._fecha, openingBalance: v });
         });
+        // v1.1.94 — confirmar / deshacer lectura de datáfono y Bizum
+        const _conf = (metodo, estadoActual) => {
+          this._sendToPage('caja-confirmar-metodo', { fechaISO: this._fecha, metodo, confirmado: !estadoActual });
+        };
+        body.querySelector('#cajaConfCard')?.addEventListener('click', () => _conf('card', cardOk));
+        body.querySelector('#cajaConfBizum')?.addEventListener('click', () => _conf('bizum', bizumOk));
         body.querySelector('#cajaGuardar')?.addEventListener('click', () => {
           this._sendToPage('caja-guardar', { fechaISO: this._fecha, countedCash: this._cajaContado, differenceNote: this._cajaNota, countBreakdown: '', closedBy: '' });
         });
@@ -7948,8 +8331,24 @@ button { font-family: inherit; cursor: pointer; }
       </div>`;
       h += `<div class="cierre-headertotal"><div class="cierre-headertotal-label">TOTAL DEL DÍA</div><div class="cierre-headertotal-val">${eur(rendimiento.total)}</div><div class="cierre-headertotal-sub">${rendimiento.clientesTotal} clientes</div></div>`;
 
-      // Servicios del día
-      if (rendimiento.servicios?.length) {
+      // Servicios del día — v1.1.92: agrupados por profesional (atribución
+      // por fase, la calcula cierreLogicExtendido v1.1.6). Si el backend es
+      // anterior no manda serviciosPorStaff y cae al listado plano de antes.
+      if (rendimiento.serviciosPorStaff?.length) {
+        h += `<div class="cierre-section"><div class="cierre-section-title">✂️ Servicios del día</div>`;
+        for (const g of rendimiento.serviciosPorStaff) {
+          h += `<div class="cierre-staffgroup"><span class="cierre-staffgroup-name">${esc(g.staffName)}</span><span class="cierre-staffgroup-tot">${eur(g.total)}</span></div>`;
+          for (const s of g.servicios) {
+            // v1.1.93 — hora de la fase + clienta: el servicio se localiza
+            // en el calendario sin tener que buscarlo.
+            const qty = s.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${s.cantidad}</span>` : '';
+            const hora = s.hora ? `<b>${esc(s.hora)}</b> · ` : '';
+            const cli = s.cliente ? ` <span style="color:#9ca3af;font-size:10px;">${esc(s.cliente)}</span>` : '';
+            h += `<div class="cierre-row cierre-row-ind"><span class="cierre-nombre">${hora}${esc(s.nombre)}${qty}${cli}</span><span class="cierre-importe">${eur(s.total)}</span></div>`;
+          }
+        }
+        h += `</div>`;
+      } else if (rendimiento.servicios?.length) {
         h += `<div class="cierre-section"><div class="cierre-section-title">✂️ Servicios del día</div>`;
         for (const s of rendimiento.servicios) {
           const subtitle = s.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">${eur(s.total / s.cantidad)} ×${s.cantidad} =</span>` : '';
@@ -7958,21 +8357,45 @@ button { font-family: inherit; cursor: pointer; }
         h += `</div>`;
       }
 
-      // Clientes del día
-      if (rendimiento.clientes?.length) {
-        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">👥 Clientes del día (${rendimiento.clientes.length})</div>`;
-        for (const c of rendimiento.clientes) {
-          const svcs = (c.servicios || []).map(s => esc(s.nombre)).filter(Boolean).join(' · ');
-          const badge = c.status === 'PAGADO'
-            ? '<span style="color:#15803d;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(21,128,61,.12);padding:1px 5px;border-radius:4px;margin-left:6px;">PAGADO</span>'
-            : '<span style="color:#a55b00;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(165,91,0,.12);padding:1px 5px;border-radius:4px;margin-left:6px;">PDTE</span>';
-          // v1.1.27 — si hay descuento, mostrar bruto tachado + neto
-          const hayDesc = c.descLabel && c.bruto && c.bruto > c.total;
-          const importeHTML = hayDesc
-            ? `<span style="color:#9ca3af;text-decoration:line-through;font-size:10.5px;margin-right:4px;">${eur(c.bruto)}</span><span style="color:#d48a1a;font-size:10px;font-weight:700;margin-right:4px;">${esc(c.descLabel)}</span>${eur(c.total)}`
-            : `${eur(c.total)}`;
-          h += `<div class="cierre-row"><span class="cierre-nombre"><b>${esc(c.hora || '')}</b> · <b>${esc(c.nombre)}</b>${svcs ? ' — ' + svcs : ''}${badge}</span><span class="cierre-importe">${importeHTML}</span></div>`;
+      // Clientes del día — v1.1.92: agrupadas por profesional y con chip de
+      // método de cobro además del de estado.
+      const _chipEstado = (st) => st === 'PAGADO'
+        ? '<span style="color:#15803d;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(21,128,61,.12);padding:1px 5px;border-radius:4px;margin-left:6px;">PAGADO</span>'
+        : '<span style="color:#a55b00;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(165,91,0,.12);padding:1px 5px;border-radius:4px;margin-left:6px;">PDTE</span>';
+      const _chipMetodo = (m) => {
+        if (!m) return '';
+        const ico = { 'Efectivo': '💵', 'Tarjeta': '💳', 'Bizum': '📲', 'Mixto': '🔀', 'Canje': '🎟️' }[m] || '💰';
+        return `<span style="color:#4b5563;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(75,85,99,.10);padding:1px 5px;border-radius:4px;margin-left:4px;">${ico} ${esc(m)}</span>`;
+      };
+      // v1.1.93 — quién pasó el cobro. Sin login → Administrador.
+      const _chipCobrador = (c) => {
+        if (c.status !== 'PAGADO') return '';
+        const quien = (c.cobradoPor && String(c.cobradoPor).trim()) || 'Administrador';
+        return `<span style="color:#4b5563;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(75,85,99,.10);padding:1px 5px;border-radius:4px;margin-left:4px;">👤 ${esc(quien)}</span>`;
+      };
+      const _importeCli = (c) => {
+        const hayDesc = c.descLabel && c.bruto && c.bruto > c.total;
+        return hayDesc
+          ? `<span style="color:#9ca3af;text-decoration:line-through;font-size:10.5px;margin-right:4px;">${eur(c.bruto)}</span><span style="color:#d48a1a;font-size:10px;font-weight:700;margin-right:4px;">${esc(c.descLabel)}</span>${eur(c.total)}`
+          : `${eur(c.total)}`;
+      };
+      const _filaCliente = (c) => {
+        const svcs = (c.servicios || []).map(s => esc(s.nombre)).filter(Boolean).join(' · ');
+        const compart = c.compartida ? ' <span style="color:#8b5cf6;font-size:9px;font-weight:700;">⇄ compartida</span>' : '';
+        return `<div class="cierre-row cierre-row-ind"><span class="cierre-nombre"><b>${esc(c.hora || '')}</b> · <b>${esc(c.nombre)}</b>${svcs ? ' — ' + svcs : ''}${compart}${_chipEstado(c.status)}${_chipMetodo(c.metodoPago)}${_chipCobrador(c)}</span><span class="cierre-importe">${_importeCli(c)}</span></div>`;
+      };
+
+      if (rendimiento.clientesPorStaff?.length) {
+        const nCli = rendimiento.clientes?.length || 0;
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">👥 Clientes del día (${nCli})</div>`;
+        for (const g of rendimiento.clientesPorStaff) {
+          h += `<div class="cierre-staffgroup"><span class="cierre-staffgroup-name">${esc(g.staffName)}</span><span class="cierre-staffgroup-tot">${g.clientes.length} · ${eur(g.total)}</span></div>`;
+          for (const c of g.clientes) h += _filaCliente(c);
         }
+        h += `</div>`;
+      } else if (rendimiento.clientes?.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">👥 Clientes del día (${rendimiento.clientes.length})</div>`;
+        for (const c of rendimiento.clientes) h += _filaCliente(c);
         h += `</div>`;
       }
 
@@ -7997,15 +8420,42 @@ button { font-family: inherit; cursor: pointer; }
         h += `</div>`;
       }
 
-      // Productos vendidos (rendimiento)
-      if (rendimiento.productos?.length) {
-        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🛒 Productos vendidos</div>`;
+      // v1.1.92 — VENTA DE PRODUCTOS. Vender también es productividad, así
+      // que el bloque vive en Rendimiento con cliente + producto + importe.
+      // Se pinta SIEMPRE: un día sin ventas es un dato, no un hueco.
+      const _prodDet = cierre.productosDetalle || null;
+      h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🛒 Venta de productos</div>`;
+      if (_prodDet && _prodDet.length) {
+        for (const p of _prodDet) {
+          const qty = p.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${p.cantidad}</span>` : '';
+          const cli = p.cliente ? `<b>${esc(p.cliente)}</b> — ` : '';
+          h += `<div class="cierre-row"><span class="cierre-nombre">${cli}${esc(p.producto)}${qty}</span><span class="cierre-importe">${eur(p.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total productos</span><span class="cierre-importe" style="font-weight:700;">${eur(cierre.productosTotal || 0)}</span></div>`;
+      } else if (!_prodDet && rendimiento.productos?.length) {
+        // Backend anterior a v1.1.6: solo hay agregado sin cliente.
         for (const p of rendimiento.productos) {
           const sub = p.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${p.cantidad}</span>` : '';
           h += `<div class="cierre-row"><span class="cierre-nombre">${esc(p.nombre)}${sub}</span><span class="cierre-importe">${eur(p.total)}</span></div>`;
         }
-        h += `</div>`;
+      } else {
+        h += `<div class="cierre-row cierre-row-vacio">Sin actividad</div>`;
       }
+      h += `</div>`;
+
+      // v1.1.92 — VENTA DE ESPECIALES (Bono 🎟️ / PRIME ⭐ / Tarjeta 🎁).
+      const _espDet = cierre.especiales || null;
+      h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🎟️ Venta de especiales</div>`;
+      if (_espDet && _espDet.length) {
+        for (const e of _espDet) {
+          const cli = e.cliente ? `<b>${esc(e.cliente)}</b> — ` : '';
+          h += `<div class="cierre-row"><span class="cierre-nombre">${cli}${esc(e.concepto)}</span><span class="cierre-importe">${eur(e.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total especiales</span><span class="cierre-importe" style="font-weight:700;">${eur(cierre.especialesTotal || 0)}</span></div>`;
+      } else {
+        h += `<div class="cierre-row cierre-row-vacio">Sin actividad</div>`;
+      }
+      h += `</div>`;
 
       // Externos (bruto)
       if (rendimiento.externos?.length) {
@@ -8070,7 +8520,7 @@ button { font-family: inherit; cursor: pointer; }
 
       // Productividad staff financiera
       if (cierre.staff?.length) {
-        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">💼 Cobrado por staff</div>`;
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">💼 Cobrado por staff <span style="color:#9ca3af;font-size:9.5px;font-weight:600;text-transform:none;letter-spacing:0;">· quién pasó el cobro</span></div>`;
         for (const s of cierre.staff) {
           const ext = s.isExternal ? ` <span style="color:#a78bfa;font-size:9px;font-weight:700;background:rgba(167,139,250,.12);padding:1px 5px;border-radius:4px;">EXT</span>` : '';
           h += `<div class="cierre-row"><span class="cierre-nombre"><b>${esc(s.staffName)}</b>${ext} <span style="color:#9ca3af;font-size:10px;">${s.citas} cobros</span></span><span class="cierre-importe">${eur(s.cobrado)}</span></div>`;
@@ -8078,13 +8528,39 @@ button { font-family: inherit; cursor: pointer; }
         h += `</div>`;
       }
 
-      // Productos
-      if (cierre.productos?.length) {
+      // Productos — v1.1.92: detalle con cliente y chip del empleado que
+      // despachó. `soldBy` lo graba tiendaProductos v1.5.13 con el usuario
+      // logueado en Recepción; vacío = sin capa de acceso → Administrador.
+      const _chipVendedor = (quien) => {
+        const nombre = (quien && String(quien).trim()) || 'Administrador';
+        return `<span style="color:#4b5563;font-size:9px;font-weight:700;letter-spacing:.4px;background:rgba(75,85,99,.10);padding:1px 5px;border-radius:4px;margin-left:6px;">👤 ${esc(nombre)}</span>`;
+      };
+      if (cierre.productosDetalle?.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🛒 Productos cobrados hoy</div>`;
+        for (const p of cierre.productosDetalle) {
+          const qty = p.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${p.cantidad}</span>` : '';
+          const cli = p.cliente ? `<b>${esc(p.cliente)}</b> — ` : '';
+          h += `<div class="cierre-row"><span class="cierre-nombre">${cli}${esc(p.producto)}${qty}${_chipVendedor(p.soldBy)}</span><span class="cierre-importe">${eur(p.importe)}</span></div>`;
+        }
+        h += `</div>`;
+      } else if (cierre.productos?.length) {
         h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🛒 Productos cobrados hoy</div>`;
         for (const p of cierre.productos) {
           const sub = p.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${p.cantidad}</span>` : '';
           h += `<div class="cierre-row"><span class="cierre-nombre">${esc(p.nombre)}${sub}</span><span class="cierre-importe">${eur(p.total)}</span></div>`;
         }
+        h += `</div>`;
+      }
+
+      // v1.1.92 — PENDIENTE DE COBRAR: lo que se ha trabajado hoy y aún no
+      // ha entrado en caja. Cliente + servicios + profesional que lo hizo.
+      if (rendimiento.pendientes?.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">⏳ Pendiente de cobrar</div>`;
+        for (const pd of rendimiento.pendientes) {
+          const svcs = (pd.servicios || []).map(x => esc(x)).filter(Boolean).join(' · ');
+          h += `<div class="cierre-row"><span class="cierre-nombre"><b>${esc(pd.hora || '')}</b> · <b>${esc(pd.cliente)}</b>${svcs ? ' — ' + svcs : ''} <span style="color:#9ca3af;font-size:10px;">${esc(pd.staff)}</span></span><span class="cierre-importe" style="color:#a55b00;">${eur(pd.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total pendiente</span><span class="cierre-importe" style="font-weight:700;color:#a55b00;">${eur(rendimiento.pendientesTotal || 0)}</span></div>`;
         h += `</div>`;
       }
 
@@ -8156,6 +8632,49 @@ button { font-family: inherit; cursor: pointer; }
           h += `<div class="cierre-row" style="margin-top:4px;"><span class="cierre-nombre" style="color:#9ca3af;font-size:11px;font-style:italic;">Arqueo no realizado — pulsa 🏦 para contar</span></div>`;
         }
         if (sinEsp > 0) h += `<div class="cierre-row" style="margin-top:4px;"><span class="cierre-nombre" style="color:#d48a1a;font-size:10px;">⚠️ ${eur(sinEsp)} cobrados sin método asignado (no cuentan como efectivo)</span></div>`;
+        h += `</div>`;
+      }
+
+      // v1.1.94 — COBROS DE OTROS DÍAS. Dinero que entró hoy pero cuya cita
+      // es de otra fecha: es la explicación de por qué el cobrado de hoy no
+      // coincide con lo trabajado hoy.
+      const otrosDias = (reconciliacion && reconciliacion.cobrosDeOtrosDias) || [];
+      if (otrosDias.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🔁 Cobros de otros días</div>`;
+        for (const c of otrosDias) {
+          const cita = c.fechaCita ? ` <span style="color:#8b5cf6;font-size:10px;font-weight:700;">cita ${esc(c.fechaCita)}${c.horaCita ? ' ' + esc(c.horaCita) : ''}</span>` : '';
+          const met = c.metodo ? ` <span style="color:#9ca3af;font-size:10px;">${esc(c.metodo)}</span>` : '';
+          const quien = `<span style="color:#4b5563;font-size:9px;font-weight:700;background:rgba(75,85,99,.10);padding:1px 5px;border-radius:4px;margin-left:4px;">👤 ${esc((c.cobradoPor || '').trim() || 'Administrador')}</span>`;
+          h += `<div class="cierre-row"><span class="cierre-nombre"><b>${esc(c.hora || '')}</b> · <b>${esc(c.cliente || 'Sin nombre')}</b>${cita}${met}${quien}</span><span class="cierre-importe">${eur(c.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total de otras fechas</span><span class="cierre-importe" style="font-weight:700;">${eur(reconciliacion.totalCobrosDeOtrosDias || 0)}</span></div>`;
+        h += `</div>`;
+      }
+
+      // v1.1.94 — OBSERVATORIO SEMANAL. Lunes a domingo de la semana de la
+      // fecha visible. Por día, lo cobrado en cada método y si está cuadrado.
+      // Un método sin cobros ese día no se marca: no hay nada que cuadrar.
+      const obs = d.observatorio || null;
+      if (obs && Array.isArray(obs.dias)) {
+        const chip = (estado) => {
+          if (estado === 'ok') return `<span class="obs-chip obs-ok">CUADRADO</span>`;
+          if (estado === 'pendiente') return `<span class="obs-chip obs-pdte">PENDIENTE</span>`;
+          return `<span class="obs-chip obs-na">—</span>`;
+        };
+        h += `<div class="cierre-section" style="margin-top:12px;border-top:2px solid #c9a44a;padding-top:12px;">`;
+        h += `<div class="cierre-section-title" style="font-size:13px;">📅 Observatorio semanal <span style="color:#9ca3af;font-size:9.5px;font-weight:600;text-transform:none;letter-spacing:0;">· ${esc(obs.desde)} → ${esc(obs.hasta)}</span></div>`;
+        for (const dia of obs.dias) {
+          const hoyTag = dia.esHoy ? ` <span style="color:#8b5cf6;font-size:9px;font-weight:800;">HOY</span>` : '';
+          h += `<div class="obs-day ${dia.futuro ? 'is-future' : ''}">`;
+          h += `<div class="obs-day-head"><span class="obs-day-name">${esc(dia.nombre)} ${dia.diaMes}${hoyTag}</span><span class="obs-day-tot">${eur(dia.total)}</span></div>`;
+          h += `<div class="obs-line"><span class="obs-met">💳 Tarjeta</span><span class="obs-imp">${eur(dia.tarjeta)}</span>${chip(dia.estadoTarjeta)}</div>`;
+          h += `<div class="obs-line"><span class="obs-met">💵 Efectivo</span><span class="obs-imp">${eur(dia.efectivo)}</span>${chip(dia.estadoEfectivo)}</div>`;
+          h += `<div class="obs-line"><span class="obs-met">📲 Bizum</span><span class="obs-imp">${eur(dia.bizum)}</span>${chip(dia.estadoBizum)}</div>`;
+          if (dia.otros > 0) h += `<div class="obs-line"><span class="obs-met">Otros</span><span class="obs-imp">${eur(dia.otros)}</span><span class="obs-chip obs-na">—</span></div>`;
+          h += `</div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:6px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total semana</span><span class="cierre-importe" style="font-weight:700;">${eur(obs.totales.total)}</span></div>`;
+        h += `<div class="cierre-row"><span class="cierre-nombre" style="color:#9ca3af;font-size:10.5px;">💳 ${eur(obs.totales.tarjeta)} · 💵 ${eur(obs.totales.efectivo)} · 📲 ${eur(obs.totales.bizum)}${obs.totales.otros ? ` · otros ${eur(obs.totales.otros)}` : ''}</span><span></span></div>`;
         h += `</div>`;
       }
 
@@ -8459,18 +8978,42 @@ button { font-family: inherit; cursor: pointer; }
         if (r.servicios && r.servicios.length) {
           L.push('');
           L.push('✂️ Servicios del día');
-          for (const s of r.servicios) {
-            const mult = s.cantidad > 1 ? ` (${eur(s.total / s.cantidad)} ×${s.cantidad})` : '';
-            L.push(`- ${s.nombre}${mult}: ${eur(s.total)}`);
+          // v1.1.94 — el texto copiado refleja lo que se ve: agrupado por
+          // profesional y con la hora de cada servicio.
+          if (r.serviciosPorStaff && r.serviciosPorStaff.length) {
+            for (const g of r.serviciosPorStaff) {
+              L.push(`  ${g.staffName.toUpperCase()} — ${eur(g.total)}`);
+              for (const s of g.servicios) {
+                const mult = s.cantidad > 1 ? ` ×${s.cantidad}` : '';
+                const cli = s.cliente ? ` (${s.cliente})` : '';
+                L.push(`  - ${s.hora || ''} ${s.nombre}${mult}${cli}: ${eur(s.total)}`);
+              }
+            }
+          } else {
+            for (const s of r.servicios) {
+              const mult = s.cantidad > 1 ? ` (${eur(s.total / s.cantidad)} ×${s.cantidad})` : '';
+              L.push(`- ${s.nombre}${mult}: ${eur(s.total)}`);
+            }
           }
         }
         if (r.clientes && r.clientes.length) {
           L.push('');
           L.push(`👥 Clientes del día (${r.clientes.length})`);
-          for (const c of r.clientes) {
+          const lineaCli = (c) => {
             const svcs = (c.servicios || []).map(s => s.nombre).filter(Boolean).join(' · ');
             const estado = c.status === 'PAGADO' ? '[PAGADO]' : '[PDTE]';
-            L.push(`- ${c.hora || ''} ${c.nombre}${svcs ? ' — ' + svcs : ''} ${estado}: ${eur(c.total)}`);
+            const met = c.metodoPago ? ` [${c.metodoPago}]` : '';
+            const quien = c.status === 'PAGADO' ? ` [${(c.cobradoPor || '').trim() || 'Administrador'}]` : '';
+            const comp = c.compartida ? ' (compartida)' : '';
+            return `  - ${c.hora || ''} ${c.nombre}${svcs ? ' — ' + svcs : ''}${comp} ${estado}${met}${quien}: ${eur(c.total)}`;
+          };
+          if (r.clientesPorStaff && r.clientesPorStaff.length) {
+            for (const g of r.clientesPorStaff) {
+              L.push(`  ${g.staffName.toUpperCase()} — ${g.clientes.length} · ${eur(g.total)}`);
+              for (const c of g.clientes) L.push(lineaCli(c));
+            }
+          } else {
+            for (const c of r.clientes) L.push(lineaCli(c));
           }
         }
         if (r.descuentos && r.descuentos.length) {
@@ -8491,12 +9034,34 @@ button { font-family: inherit; cursor: pointer; }
             L.push(`- ${s.staffName}${e} · ${s.citas} citas: ${eur(s.cobrado)}${pdte}`);
           }
         }
-        if (r.productos && r.productos.length) {
+        // v1.1.94 — venta de productos y especiales, siempre presentes
+        {
+          const cx = ext.cierre || {};
           L.push('');
-          L.push('🛒 Productos vendidos');
-          for (const p of r.productos) {
-            const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
-            L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
+          L.push('🛒 Venta de productos');
+          if (cx.productosDetalle && cx.productosDetalle.length) {
+            for (const p of cx.productosDetalle) {
+              const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
+              L.push(`- ${p.cliente ? p.cliente + ' — ' : ''}${p.producto}${mult}: ${eur(p.importe)}`);
+            }
+            L.push(`Total productos: ${eur(cx.productosTotal || 0)}`);
+          } else if (r.productos && r.productos.length) {
+            for (const p of r.productos) {
+              const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
+              L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
+            }
+          } else {
+            L.push('Sin actividad');
+          }
+          L.push('');
+          L.push('🎟️ Venta de especiales');
+          if (cx.especiales && cx.especiales.length) {
+            for (const e of cx.especiales) {
+              L.push(`- ${e.cliente ? e.cliente + ' — ' : ''}${e.concepto}: ${eur(e.importe)}`);
+            }
+            L.push(`Total especiales: ${eur(cx.especialesTotal || 0)}`);
+          } else {
+            L.push('Sin actividad');
           }
         }
         if (r.externos && r.externos.length) {
@@ -8513,6 +9078,7 @@ button { font-family: inherit; cursor: pointer; }
       if (tipo === 'fin') {
         const c = ext.cierre;
         if (!c) return '';
+        const r = ext.rendimiento || null;   // v1.1.94 — pendientes de cobro
         const cab = this._salonLegalName ? `${this._salonLegalName} · ` : '';
         L.push('💰 CIERRE FINANCIERO');
         L.push(`${cab}${fecha}`);
@@ -8544,19 +9110,49 @@ button { font-family: inherit; cursor: pointer; }
         }
         if (c.staff && c.staff.length) {
           L.push('');
-          L.push('💼 Cobrado por staff');
+          L.push('💼 Cobrado por staff · quién pasó el cobro');
           for (const s of c.staff) {
             const e = s.isExternal ? ' [EXT]' : '';
             L.push(`- ${s.staffName}${e} · ${s.citas} cobros: ${eur(s.cobrado)}`);
           }
         }
-        if (c.productos && c.productos.length) {
+        if (c.productosDetalle && c.productosDetalle.length) {
+          L.push('');
+          L.push('🛒 Productos cobrados hoy');
+          for (const p of c.productosDetalle) {
+            const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
+            const quien = (p.soldBy || '').trim() || 'Administrador';
+            L.push(`- ${p.cliente ? p.cliente + ' — ' : ''}${p.producto}${mult} [${quien}]: ${eur(p.importe)}`);
+          }
+        } else if (c.productos && c.productos.length) {
           L.push('');
           L.push('🛒 Productos cobrados hoy');
           for (const p of c.productos) {
             const mult = p.cantidad > 1 ? ` ×${p.cantidad}` : '';
             L.push(`- ${p.nombre}${mult}: ${eur(p.total)}`);
           }
+        }
+        // v1.1.94 — pendiente de cobrar
+        if (r && r.pendientes && r.pendientes.length) {
+          L.push('');
+          L.push('⏳ Pendiente de cobrar');
+          for (const pd of r.pendientes) {
+            const svcs = (pd.servicios || []).join(' · ');
+            L.push(`- ${pd.hora || ''} ${pd.cliente}${svcs ? ' — ' + svcs : ''} (${pd.staff}): ${eur(pd.importe)}`);
+          }
+          L.push(`Total pendiente: ${eur(r.pendientesTotal || 0)}`);
+        }
+        // v1.1.94 — cobros de otros días
+        const rec = ext.reconciliacion;
+        if (rec && rec.cobrosDeOtrosDias && rec.cobrosDeOtrosDias.length) {
+          L.push('');
+          L.push('🔁 Cobros de otros días');
+          for (const co of rec.cobrosDeOtrosDias) {
+            const cita = co.fechaCita ? ` (cita ${co.fechaCita}${co.horaCita ? ' ' + co.horaCita : ''})` : '';
+            const met = co.metodo ? ` [${co.metodo}]` : '';
+            L.push(`- ${co.hora || ''} ${co.cliente || 'Sin nombre'}${cita}${met}: ${eur(co.importe)}`);
+          }
+          L.push(`Total de otras fechas: ${eur(rec.totalCobrosDeOtrosDias || 0)}`);
         }
         // v1.1.80 — Especiales vendidos hoy
         if (c.especiales && c.especiales.length) {
@@ -8603,6 +9199,21 @@ button { font-family: inherit; cursor: pointer; }
             const dif = Math.round(((arq.contado || 0) - (arq.esperado || 0)) * 100) / 100;
             L.push(Math.abs(dif) < 0.01 ? 'Caja cuadrada' : `Diferencia: ${dif >= 0 ? '+' : ''}${eur(dif)}`);
           }
+        }
+        // v1.1.94 — observatorio semanal
+        const obs = d.observatorio;
+        if (obs && Array.isArray(obs.dias)) {
+          const et = (e) => e === 'ok' ? 'CUADRADO' : (e === 'pendiente' ? 'PENDIENTE' : '—');
+          L.push('');
+          L.push(`📅 Observatorio semanal (${obs.desde} → ${obs.hasta})`);
+          for (const dia of obs.dias) {
+            L.push(`${dia.nombre} ${dia.diaMes} — ${eur(dia.total)}`);
+            L.push(`  💳 Tarjeta ${eur(dia.tarjeta)} · ${et(dia.estadoTarjeta)}`);
+            L.push(`  💵 Efectivo ${eur(dia.efectivo)} · ${et(dia.estadoEfectivo)}`);
+            L.push(`  📲 Bizum ${eur(dia.bizum)} · ${et(dia.estadoBizum)}`);
+            if (dia.otros > 0) L.push(`  Otros ${eur(dia.otros)}`);
+          }
+          L.push(`Total semana: ${eur(obs.totales.total)}`);
         }
         return L.join('\n');
       }
