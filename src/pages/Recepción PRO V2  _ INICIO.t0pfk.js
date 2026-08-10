@@ -1,10 +1,38 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.39
+// VERSION: 1.0.43
 // FECHA: 5 de agosto de 2026
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
+// v1.0.43: 📅 Observatorio semanal + confirmación de datáfono/Bizum.
+//          · `cierre-dia` llama además a obtenerObservatorioSemanal
+//            (cierreLogicExtendido v1.1.8) dentro del mismo Promise.all,
+//            así que no añade una vuelta extra: viaja en `data.observatorio`.
+//          · NEW puente `caja-confirmar-metodo` → confirmarLecturaMetodo
+//            (cashRegisterLogic v1.1.4), responde 'caja-metodo-confirmado'.
+//            Firma con el empleado logueado, igual que los movimientos.
+// v1.0.42: 👤 `soldBy` también en el COBRO de la cita. El informe agrupaba
+//          "Cobrado por staff" por el titular de la cita — la columna del
+//          calendario — cuando lo que se quiere saber es quién estaba en
+//          recepción pasando el cobro. Se manda `_empleadoActivo.staffName`
+//          a marcarPagadoReserva (v1.0.48). Sin capa de acceso activa va
+//          vacío y el informe lo agrupa entero bajo "Administrador".
+// v1.0.41: 🧾 `soldBy` en la venta de productos desde la agenda. La venta
+//          se registraba en PaymentReservations con staff='TIENDA', que es
+//          un discriminador de tipo y no una persona: el informe del día no
+//          podía decir quién despachó. Ahora se envía el empleado logueado
+//          (`_empleadoActivo.staffName`, el mismo que ya firma los
+//          movimientos de caja desde v1.0.22). Sin login se manda vacío y
+//          el informe lo pinta como "Administrador". Requiere
+//          tiendaProductos v1.5.13 y el campo CMS `soldBy`.
+// v1.0.40: ⚖️ Puente `set-line-weight` → setLineWeight (recepcionProLogic
+//          v1.0.46). Cobro por peso desde el modal de la cita: el widget
+//          v1.1.90 manda los GRAMOS de una línea y el backend calcula el
+//          importe con el precioGramo de ServiceCatalog. Responde
+//          'line-weight-set'. + import, + handler, + case, + entrada en
+//          LOG_EVENT_MAP ('cambio_reserva'). Cambio ADITIVO: ningún
+//          handler ni contrato de mensaje existente se toca.
 // v1.0.39: 📐 Puente `extender-fase` → extenderFase (recepcionProLogic
 //          v1.0.45). Devuelve al asa de resize la EXTENSIÓN RAYADA, ahora
 //          en cualquier fase y no solo al final de la cita. Responde
@@ -438,6 +466,7 @@ import {
   moverFase,
   redimensionarFase,
   extenderFase,   // v1.0.39 — extensión rayada por fase
+  setLineWeight,  // v1.0.40 — cobro por peso (gramos) desde el modal de cita
   // v1.0.17 — bloqueos persistentes
   crearBloqueo,
   eliminarBloqueo,
@@ -469,7 +498,8 @@ import {
   getCajaDia,
   getFondoSugerido,
   abrirCaja,
-  setOpeningBalance
+  setOpeningBalance,
+  confirmarLecturaMetodo          // v1.0.43 — datáfono / Bizum
 } from 'backend/cashRegisterLogic.web';
 
 // v1.0.5 — Cierre del día (panel inferior). Backends existentes, NO modificados.
@@ -479,7 +509,8 @@ import {
 } from 'backend/testCheckout.web';
 
 import {
-  obtenerDatosCierreExtendidos
+  obtenerDatosCierreExtendidos,
+  obtenerObservatorioSemanal      // v1.0.43 — semana lunes→domingo
 } from 'backend/cierreLogicExtendido.web';
 
 // v1.0.28 — Cierre de externos V2 (backend dedicado, lee PagoreservasExternos).
@@ -530,7 +561,7 @@ import {
 // Nombre comprobado contra el resto de imports de este archivo: no colisiona.
 import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.39]';
+const TAG = '[RecepcionProCMS v1.0.43]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -567,6 +598,7 @@ const LOG_EVENT_MAP = {
   'mover-fase':            'cambio_reserva',
   'redimensionar-fase':    'cambio_reserva',
   'extender-fase':         'cambio_reserva',
+  'set-line-weight':       'cambio_reserva',
   // cobros
   'pagarReserva':          'cobro',
   'vender-productos-cita': 'cobro',
@@ -574,6 +606,7 @@ const LOG_EVENT_MAP = {
   'caja-calcular':         'acceso_arqueo',
   // v1.0.32 — apertura de caja (fondo inicial del día)
   'caja-abrir':            'apertura_caja',
+  'caja-confirmar-metodo': 'acceso_arqueo',
   // acceso a informe / cierre del día
   'cierre-dia':            'acceso_informe'
 };
@@ -866,7 +899,10 @@ async function handlePagarReserva(msg) {
       metodoPago: msg.metodoPago,
       desglosemetodopago: msg.desglosemetodopago,
       importeNeto: msg.importeNeto,           // v1.0.6 — neto ya descontado
-      descripcionExtra: msg.descripcionExtra  // v1.0.6 — token 🏷️ Descuento
+      descripcionExtra: msg.descripcionExtra, // v1.0.6 — token 🏷️ Descuento
+      // v1.0.42 — quién cobra. Vacío si el salón trabaja sin login: el
+      // informe lo agrupa como "Administrador".
+      soldBy: (_empleadoActivo && _empleadoActivo.staffName) || ''
     });
     sendResponse('reservaPagada', result);
   } catch (e) {
@@ -1182,6 +1218,24 @@ async function handleCajaCerrar(msg) {
   } catch (e) { sendResponse('caja-cerrada', { ok: false, error: e.message }); }
 }
 
+// v1.0.43 — Confirmación de que la lectura del datáfono / el resumen de
+// Bizum coincide con el informe del día. Firma con el empleado logueado.
+async function handleCajaConfirmarMetodo(msg) {
+  try {
+    const recordedBy = (_empleadoActivo && _empleadoActivo.staffName) || msg.recordedBy || '';
+    const result = await confirmarLecturaMetodo({
+      fechaISO: msg.fechaISO,
+      metodo: msg.metodo,
+      confirmado: msg.confirmado !== false,
+      recordedBy
+    });
+    sendResponse('caja-metodo-confirmado', result);
+  } catch (e) {
+    console.error(`${TAG} ❌ caja-confirmar-metodo:`, e);
+    sendResponse('caja-metodo-confirmado', { ok: false, error: e.message });
+  }
+}
+
 async function handleCajaMovimiento(msg) {
   try {
     const result = await registrarMovimiento({ fechaISO: msg.fechaISO, movementType: msg.movementType, amount: msg.amount, description: msg.description || '', recordedBy: msg.recordedBy || '', registerId: msg.registerId || '' });
@@ -1268,13 +1322,14 @@ async function handleCierreDia(msg) {
   const fechaISO = msg.fechaISO;
   if (!fechaISO) { sendResponse('cierre-data', { fecha: '', data: { error: 'Falta fechaISO' } }); return; }
   try {
-    const [dia, pagos, extendido, esp, caja, externosV2] = await Promise.all([
+    const [dia, pagos, extendido, esp, caja, externosV2, observatorio] = await Promise.all([
       obtenerDatosCierreDia({ fechaISO }).catch(e => ({ ok: false, error: e?.message || 'err' })),
       obtenerPagos({ fechaISO }).catch(e => ({ ok: false, error: e?.message || 'err' })),
       obtenerDatosCierreExtendidos({ fechaISO }).catch(e => ({ ok: false, error: e?.message || 'err' })),
       calcularEfectivoEsperado({ fechaISO }).catch(e => ({ ok: false, error: e?.message || 'err' })),
       getCajaDia({ fechaISO }).catch(e => ({ registro: null })),
-      obtenerDatosCierreExternos({ fechaISO }).catch(e => ({ ok: false, error: e?.message || 'err' }))
+      obtenerDatosCierreExternos({ fechaISO }).catch(e => ({ ok: false, error: e?.message || 'err' })),
+      obtenerObservatorioSemanal({ fechaISO }).catch(e => ({ ok: false, error: e?.message || 'err' }))
     ]);
     // Construcción del bloque 'arqueo' (solo lectura)
     let arqueo = null;
@@ -1307,7 +1362,8 @@ async function handleCierreDia(msg) {
         extendido: extendido && extendido.ok ? extendido : (extendido || {}),
         externosV2: externosV2 && externosV2.ok ? (externosV2.externos || null) : null,
         financiero,
-        arqueo
+        arqueo,
+        observatorio: observatorio && observatorio.ok ? observatorio : null   // v1.0.43
       }
     });
   } catch (e) {
@@ -1533,6 +1589,19 @@ async function handleRedimensionarFase(msg) {
   }
 }
 
+// v1.0.40 — Cobro por peso. El widget manda GRAMOS (nunca euros): el
+// importe lo calcula el backend con el precioGramo de ServiceCatalog.
+async function handleSetLineWeight(msg) {
+  try {
+    const { reservaId, itemIndex, grams } = msg || {};
+    const r = await setLineWeight({ reservaId, itemIndex, grams });
+    sendResponse('line-weight-set', r);
+  } catch (e) {
+    console.error(`${TAG} ❌ set-line-weight:`, e);
+    sendResponse('line-weight-set', { ok: false, error: e?.message || 'Error' });
+  }
+}
+
 async function handleAgregarExtra(msg) {
   try {
     const { reservaId, importe, descripcion } = msg || {};
@@ -1602,7 +1671,10 @@ async function handleVenderProductosCita(msg) {
       metodoPago: metodoPago || 'Efectivo',
       currency: 'EUR',
       packId: reservaId || '',
-      bookingId: ''
+      bookingId: '',
+      // v1.0.41 — empleado logueado en Recepción. Vacío si no hay capa de
+      // acceso activa; el informe lo muestra como "Administrador".
+      soldBy: (_empleadoActivo && _empleadoActivo.staffName) || ''
     });
     console.log(`${TAG} 🛍 venderProductosDesdeAgenda result:`, JSON.stringify(res));
     if (res?.ok) {
@@ -1835,6 +1907,7 @@ $w.onReady(function () {
         case 'caja-calcular':    handleCajaCalcular(msg); break;
         case 'caja-guardar':     handleCajaGuardar(msg); break;
         case 'caja-cerrar':      handleCajaCerrar(msg); break;
+        case 'caja-confirmar-metodo': handleCajaConfirmarMetodo(msg); break;
         case 'caja-movimiento':  handleCajaMovimiento(msg); break;
         // v1.0.32 — apertura de caja (fondo inicial del día)
         case 'check-apertura-caja': handleCheckApertura(msg); break;
@@ -1858,6 +1931,7 @@ $w.onReady(function () {
         case 'mover-fase':           handleMoverFase(msg); break;
         case 'redimensionar-fase':   handleRedimensionarFase(msg); break;
         case 'extender-fase':        handleExtenderFase(msg); break;
+        case 'set-line-weight':      handleSetLineWeight(msg); break;
         // v1.0.17 — bloqueos persistentes
         case 'crearBloqueo':         handleCrearBloqueo(msg); break;
         case 'eliminarBloqueo':      handleEliminarBloqueo(msg); break;
