@@ -1,8 +1,21 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.44
+// VERSION: 1.0.45
 // FECHA: 10 de agosto de 2026
+//
+// v1.0.45: 🧹 FUERA el circuito del histórico importado del software
+//          anterior. La FICHA TÉCNICA pasa a ser única y CMS-first
+//          (widget v1.1.99): se retiran el import de
+//          getFichaTecnicaCliente (memoriaLegacyLogic), el handler
+//          handleFichaTecnica y el case 'getFichaTecnica'.
+//          Era una fuente de un solo salón, nacida de una migración
+//          concreta, y no puede sostener una pantalla del producto.
+//          SE CONSERVA handleFtBuscarCliente y su case: es el buscador
+//          de cliente sobre `cacheContactos`, y ahora alimenta el
+//          buscador del modal único. Nada que ver con el histórico.
+//          `memoriaLegacyLogic` no se toca: sigue sirviendo al módulo
+//          MEMORIA, que es su sitio.
 // ARCHIVO: page code de la página de la NUEVA Recepción PRO
 //
 // v1.0.44: 📋 FICHA DEL CLIENTE en el modal de la cita (widget v1.1.97).
@@ -574,12 +587,6 @@ import {
   registrarMovimiento as registrarMovimientoStock
 } from 'backend/stockLogic.web';
 
-// v1.0.35 — FICHA TÉCNICA (histórico de color del sistema anterior).
-// Backend de SOLO LECTURA y SIN datos económicos: getFichaTecnicaCliente
-// no devuelve importes ni métodos de pago en ningún nivel del payload.
-// Nombre comprobado contra el resto de imports de este archivo: no colisiona.
-import { getFichaTecnicaCliente } from 'backend/memoriaLegacyLogic.web';
-
 // v1.0.44 — FICHA DEL CLIENTE (CMS-first, KamisuiteClientRecords).
 // Backend NUEVO y aditivo: no toca recepcionProLogic (motor compartido),
 // ni fichaClienteLogic, ni clienteAreaLogic. Los tres nombres se han
@@ -590,7 +597,7 @@ import {
   desactivarFichaClienteRecord
 } from 'backend/clientRecordsLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.44]';
+const TAG = '[RecepcionProCMS v1.0.45]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -741,13 +748,10 @@ async function handleGetEspecialesData() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// v1.0.35 — FICHA TÉCNICA (histórico de color del sistema anterior)
+// v1.0.45 — Buscador de cliente de la FICHA TÉCNICA
 // ═══════════════════════════════════════════════════════════
-// Popup de la barra superior. Uso: personal de sala.
-//
-// ⚠️ SIN DATOS ECONÓMICOS. El filtro está en el backend, no aquí ni en
-// el widget: getFichaTecnicaCliente nunca envía importes. Filtrar en el
-// render sería inútil (se vería en el inspector del navegador).
+// Alimenta el buscador del modal único de FICHA TÉCNICA cuando se abre
+// desde la barra superior y no hay cliente que heredar.
 //
 // El buscador usa cacheContactos con canal propio
 // (ftBuscarCliente/ftClientesEncontrados) para no pisar ni la búsqueda
@@ -768,27 +772,6 @@ function handleFtBuscarCliente(msg) {
     totalEncontrados: filtered.length,
     mostrados: limitados.length
   });
-}
-
-async function handleFichaTecnica(msg) {
-  try {
-    const data = await getFichaTecnicaCliente({
-      telefono: msg.telefono || '',
-      clientId: (msg.clientId === undefined || msg.clientId === '') ? null : msg.clientId
-    });
-    sendResponse('fichaTecnicaData', {
-      data,
-      clientName: msg.clientName || '',
-      telefono: msg.telefono || ''
-    });
-  } catch (e) {
-    console.error(`${TAG} ❌ fichaTecnica:`, e);
-    sendResponse('fichaTecnicaData', {
-      data: { ok: false, error: { message: e?.message || 'Error' } },
-      clientName: msg.clientName || '',
-      telefono: msg.telefono || ''
-    });
-  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2043,7 +2026,6 @@ $w.onReady(function () {
         case 'logEvent':             handleLogEvent(msg); break;
         // v1.0.34 — popup ALMACÉN
         case 'ftBuscarCliente':      handleFtBuscarCliente(msg); break;
-        case 'getFichaTecnica':      handleFichaTecnica(msg); break;
         // v1.0.44 — FICHA DEL CLIENTE (popup del modal de la cita)
         case 'getFichaClienteRecords': handleGetFichaCliente(msg); break;
         case 'guardarFichaCliente':    handleGuardarFichaCliente(msg); break;
