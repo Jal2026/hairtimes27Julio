@@ -1,8 +1,107 @@
 // =====================================================
 // KAMISUITE - Backend Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.11
-// FECHA: 6 de julio de 2026
+// VERSION: 1.9.13
+// FECHA: 11 de agosto de 2026
+//
+// v1.9.13 — MIGRACIÓN DE TRES CANALES DE NOTAS A CMS.
+//   Color, Tratamientos y Notas internas del salón dejan de vivir en
+//   campos personalizados de Wix Contacts y pasan a la colección
+//   KamisuiteClientRecords, la misma que ya usa la FICHA TÉCNICA de
+//   Recepción PRO desde el 10-ago-2026 (clientRecordsLogic v1.0.1).
+//
+//   Motivo (decisión Jal, bitácora 10-ago-2026): un campo de texto por
+//   categoría no tiene histórico — sin fecha, sin autor, sin visita —
+//   y la fórmula anterior se pierde al sobrescribir. El modelo del CMS
+//   es UNA FILA POR ANOTACIÓN: nunca se sobrescribe, retirar es
+//   active=false.
+//
+//   MAPEO:
+//     ef['color']         → fila recordType='COLOR'
+//     ef['tratamientos']  → fila recordType='TRATAMIENTO'
+//     ef['custom.ficha']  → fila recordType='GENERAL'
+//   Todas con source='CRM'.
+//
+//   ⚠️ EL SHAPE DE SALIDA NO CAMBIA. Es la condición de esta entrega:
+//   no se toca ni el page code ni el widget, ni desktop ni móvil.
+//     · profile.notasColor / profile.notasTratamientos siguen siendo
+//       un string: se sirve el TEXTO DE LA FILA ACTIVA MÁS RECIENTE de
+//       ese tipo.
+//     · cliente.notasSalonHistorial sigue siendo el mismo string
+//       "[fecha] autor: texto | [fecha] autor: texto", compuesto ahora
+//       desde las filas GENERAL en orden antiguo→reciente, que es como
+//       el widget lo parte por ' | ' y lo invierte para pintarlo.
+//       Formato de fecha idéntico al que escribía guardarNotaSalon:
+//       toLocaleString('es-ES', { timeZone: 'Europe/Madrid' }).
+//
+//   SE LEEN TODAS LAS FILAS DEL CLIENTE, sea cual sea su `source`. La
+//   ficha del cliente es UNA: lo que anota Recepción PRO se ve en el
+//   CRM y al revés. `source` registra procedencia, no segrega.
+//
+//   CAMBIOS POR FUNCIÓN:
+//     · NEW leerAnotacionesCliente(contactId) — una query a
+//       KamisuiteClientRecords que devuelve {notasColor,
+//       notasTratamientos, historialGeneral}. Filtro de `active` EN
+//       MEMORIA a propósito: una fila sin el campo informado no debe
+//       desaparecer por un .eq(active,true). Mismo criterio que
+//       clientRecordsLogic v1.0.1.
+//     · NEW insertarAnotacionCliente(...) — INSERT puro, nunca update.
+//     · formatearContacto(contact, historialGeneral='') — segundo
+//       parámetro opcional. Ya no lee ef['custom.ficha'].
+//     · getFichaCliente — añade leerAnotacionesCliente al Promise.all
+//       existente (sin latencia extra) y sirve desde ahí notasColor,
+//       notasTratamientos y notasSalonHistorial.
+//     · actualizarContactoCRM — notasColor y notasTratamientos ya no
+//       van a contactInfo.extendedFields: cada uno inserta su fila.
+//       El resto del webMethod intacto (nombre, apellido, email,
+//       teléfono, birthdate, sexo, clubKalonice, ultimaVisita,
+//       notasPublicas). Devuelve el histórico releído para que el
+//       widget no vacíe la pestaña Notas tras editar el contacto.
+//     · guardarNotaSalon — inserta fila GENERAL en vez de hacer append
+//       a custom.ficha. SIGUE escribiendo ClientProfile.notasSalon,
+//       que es lo que enciende el badge 📝 Notas del widget.
+//     · extraerPatchCamposCRM — deja de devolver notasColor y
+//       notasTratamientos. Devolverlos leyendo Wix Contacts serviría
+//       valores legacy congelados; omitir las claves es más seguro que
+//       devolverlas vacías, porque en un merge no pisan nada.
+//     · CRM_FIELD_DEFS — fuera las entradas notasColor y
+//       notasTratamientos, y sus constantes FIELD_*.
+//
+//   ⚠️ TEXTO VACÍO YA NO BORRA. En el modelo antiguo, guardar una
+//   textarea vacía sobrescribía el campo con ''. En un modelo de solo
+//   inserción eso no existe: si el texto llega vacío no se inserta
+//   nada y se responde ok sin cambios. Retirar una anotación es
+//   active=false, y eso lo hace desactivarFichaClienteRecord.
+//
+//   NO SE TOCA: notasPublicas (customnotaspublicas), el mensaje del
+//   cliente (notas_fonyem…), sexo, club, ultima_visita, birthdate,
+//   nombre/emails/teléfonos, ni los otros seis webMethods.
+//   NO se importa clientRecordsLogic: las queries van locales con
+//   wixData, por la lección de clienteAreaLogic v1.6.1 (los imports
+//   cross-backend devolvían vacío en silencio).
+//
+// v1.9.12 — HOTFIX leerExternosDeCliente para tenants sin SvExternalRecords.
+//   Contexto: SvExternalRecords es una colección legacy V1 (histórico
+//   de servicios pagados a staff externo). Solo existe en Hair-Times.
+//   En KALONICE (y en cualquier tenant nueva) la colección no está
+//   creada, por lo que wixData.query('SvExternalRecords') lanza
+//     WDE0025: The SvExternalRecords collection does not exist.
+//   Al no estar envuelta, esa excepción caía dentro del Promise.all
+//   de getFichaCliente y sincronizarClientProfile, tumbando toda la
+//   respuesta: el pagecode recibía { ok:false } y el widget se
+//   quedaba en "Cargando citas..." con todas las pestañas a 0.
+//   Fix mínimo: envolver el cuerpo de leerExternosDeCliente en un
+//   try/catch que devuelva [] cuando la colección no exista, con el
+//   mismo patrón defensivo que ya usa este archivo en
+//   leerBonosCliente, leerTarjetasCliente y leerPrimeMembershipCliente.
+//   En Hair-Times sigue leyendo SvExternalRecords como antes.
+//   En KALONICE devuelve [] silenciosamente → calcularStats no suma
+//   externos (no hay que sumar) y el widget recibe fichaExternos vacío.
+//   Sin cambios en imports, en el resto de helpers, ni en ninguno
+//   de los webMethods (getFichaCliente, getHistorialCliente,
+//   actualizarContactoCRM, guardarNotaSalon, actualizarFotoCliente,
+//   sincronizarClientProfile, enviarMensajeInbox,
+//   getProximasCitasCliente, crearContactoCRM).
 //
 // v1.9.11 — HOTFIX crearContactoCRM: nunca exponer texto Wix crudo en
 //   pantalla + renombrar DUPLICATE_EMAIL → DUPLICATE_PHONE.
@@ -135,7 +234,7 @@ import { members } from 'wix-members.v2';
 import { accounts } from 'wix-loyalty.v2';
 import { mediaManager } from 'wix-media-backend';
 
-const VERSION = '1.9.11';
+const VERSION = '1.9.13';
 const TAG = `[FichaCliente][${VERSION}]`;
 
 // Colecciones CMS
@@ -145,6 +244,34 @@ const COLLECTION_CARE_PROFILE         = 'ClientCareProfile';
 const COLLECTION_EXTERNAL_RECORDS     = 'SvExternalRecords';
 const COLLECTION_RESERVATIONS_V2      = 'KamisuiteReservations';
 const COLLECTION_MEMBERS_BADGES       = 'Members/Badges';
+
+// v1.9.13 — Anotaciones del cliente (Color / Tratamiento / General).
+// Misma colección que usa la FICHA TÉCNICA de Recepción PRO.
+const COLLECTION_CLIENT_RECORDS = 'KamisuiteClientRecords';
+
+// IDs de campo de KamisuiteClientRecords.
+// Bloque aislado a propósito, igual que en clientRecordsLogic v1.0.1:
+// si Wix generó algún ID distinto al declarado al crear la colección,
+// se corrige AQUÍ y en ningún otro sitio del archivo.
+const REC_CONTACT_ID   = 'contactId';
+const REC_CLIENT_NAME  = 'clientName';
+const REC_CLIENT_PHONE = 'clientPhone';
+const REC_RECORD_TYPE  = 'recordType';
+const REC_RECORD_TEXT  = 'recordText';
+const REC_RECORD_DATE  = 'recordDate';
+const REC_AUTHOR       = 'author';
+const REC_BOOKING_ID   = 'bookingId';
+const REC_SOURCE       = 'source';
+const REC_ACTIVE       = 'active';
+
+const REC_TIPO_COLOR       = 'COLOR';
+const REC_TIPO_TRATAMIENTO = 'TRATAMIENTO';
+const REC_TIPO_GENERAL     = 'GENERAL';
+
+const REC_SOURCE_CRM = 'CRM';
+
+const REC_LIMITE_TEXTO = 4000;
+const REC_LIMITE_FILAS = 200;
 
 // v1.9.8 — Productos custom y config
 const COLLECTION_VOUCHERS      = 'KamisuiteVouchers';
@@ -161,10 +288,12 @@ const TIMEZONE_MADRID = 'Europe/Madrid';
 // no el nombre visible. Ejemplo confirmado en captura:
 //   Nombre: custom.notasPublicas
 //   Clave:  customnotaspublicas
+// v1.9.13 — FIELD_NOTAS_COLOR ('color') y FIELD_NOTAS_TRATAM
+// ('tratamientos') retirados: esos dos canales viven ahora en
+// KamisuiteClientRecords. El dato antiguo sigue en Wix Contacts, este
+// backend ya no lo lee ni lo escribe.
 const FIELD_NOTAS_PUBLICAS  = 'customnotaspublicas';
 const FIELD_NOTAS_CLIENTE   = 'notas_fonyemjtcfteotgxzkaamjbuwmyuz';
-const FIELD_NOTAS_COLOR     = 'color';
-const FIELD_NOTAS_TRATAM    = 'tratamientos';
 const FIELD_ULTIMA_VISITA   = 'ultima_visita';
 const FIELD_CLUB_KALONICE   = 'club_kalonice';
 const FIELD_SEXO            = 'sexo';
@@ -194,26 +323,8 @@ const CRM_FIELD_DEFS = {
       'notasclientesalon'
     ]
   },
-  notasColor: {
-    key: FIELD_NOTAS_COLOR,
-    aliases: [
-      FIELD_NOTAS_COLOR,
-      'color',
-      'custom.color',
-      'notasColor',
-      'notascolor'
-    ]
-  },
-  notasTratamientos: {
-    key: FIELD_NOTAS_TRATAM,
-    aliases: [
-      FIELD_NOTAS_TRATAM,
-      'tratamientos',
-      'custom.tratamientos',
-      'notasTratamientos',
-      'notastratamientos'
-    ]
-  },
+  // v1.9.13 — notasColor y notasTratamientos ya no se resuelven contra
+  // Wix Contacts: viven en KamisuiteClientRecords.
   ultimaVisita: {
     key: FIELD_ULTIMA_VISITA,
     aliases: [FIELD_ULTIMA_VISITA, 'custom.ultima_visita', 'ultimaVisita', 'ultimavisita']
@@ -624,8 +735,10 @@ function extraerPatchCamposCRM(contactRaw) {
     notasClienteSalonRaw,
     notasClienteSalonHistorico,
     notasClienteSalonUltima: notasClienteSalonHistorico[0] || null,
-    notasColor: String(leerCampoCRM(ef, 'notasColor').value || ''),
-    notasTratamientos: String(leerCampoCRM(ef, 'notasTratamientos').value || ''),
+    // v1.9.13 — notasColor y notasTratamientos ya no se devuelven aquí.
+    // Leerlas de Wix Contacts serviría el valor legacy congelado, y
+    // devolverlas vacías podría vaciar la textarea en un merge; omitir
+    // las claves es lo único que no puede pisar nada.
     ultimaVisitaCustom,
     clubKalonice: { activo: normalizarClubActivo(leerCampoCRM(ef, 'clubKalonice').value) },
     sexo: String(leerCampoCRM(ef, 'sexo').value || ''),
@@ -895,10 +1008,174 @@ async function leerTarjetasCliente(contactId) {
 }
 
 // =====================================================
+// v1.9.13 — ANOTACIONES DEL CLIENTE (KamisuiteClientRecords)
+// =====================================================
+// Sustituyen a los campos personalizados 'color', 'tratamientos' y
+// 'custom.ficha' de Wix Contacts. Una FILA POR ANOTACIÓN: aquí solo se
+// lee y se inserta, nunca se hace update de una fila existente.
+//
+// Se leen TODAS las filas del cliente, sin filtrar por `source`: la
+// ficha del cliente es una sola, y lo que anota Recepción PRO tiene
+// que verse en el CRM igual que al revés.
+// =====================================================
+
+/**
+ * Formatea una fecha con el mismo formato que escribía guardarNotaSalon
+ * en custom.ficha, para que el string compuesto sea indistinguible del
+ * que el widget lleva parseando desde siempre.
+ */
+function fechaAnotacionLegible(valor) {
+  try {
+    const d = valor instanceof Date ? valor : new Date(valor);
+    if (isNaN(d)) return '';
+    return d.toLocaleString('es-ES', { timeZone: TIMEZONE_MADRID });
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
+ * Una sola query. Devuelve:
+ *   notasColor         — texto de la fila COLOR activa más reciente
+ *   notasTratamientos  — texto de la fila TRATAMIENTO activa más reciente
+ *   historialGeneral   — filas GENERAL activas en el string
+ *                        "[fecha] autor: texto | [fecha] autor: texto",
+ *                        ordenado de la más ANTIGUA a la más reciente,
+ *                        que es como el widget lo espera antes de
+ *                        invertirlo para pintar.
+ *
+ * El filtro de `active` va EN MEMORIA a propósito: una fila sin ese
+ * campo informado no debe desaparecer por un .eq(active, true). Mismo
+ * criterio que clientRecordsLogic v1.0.1.
+ *
+ * Ante cualquier fallo (colección todavía no creada en una tenant
+ * nueva, por ejemplo) devuelve los tres campos vacíos y deja aviso en
+ * consola: la ficha se pinta sin anotaciones, no se rompe.
+ */
+async function leerAnotacionesCliente(contactId) {
+  const vacio = { notasColor: '', notasTratamientos: '', historialGeneral: '' };
+
+  if (!contactId || !isGuid(contactId)) return vacio;
+
+  try {
+    const res = await wixData.query(COLLECTION_CLIENT_RECORDS)
+      .eq(REC_CONTACT_ID, contactId)
+      .descending(REC_RECORD_DATE)
+      .limit(REC_LIMITE_FILAS)
+      .find({ suppressAuth: true });
+
+    const items = (res?.items || []).filter(it => it && it[REC_ACTIVE] !== false);
+
+    let notasColor = '';
+    let notasTratamientos = '';
+    const generales = [];
+
+    // items viene de más reciente a más antigua.
+    for (const it of items) {
+      const tipo  = String(it[REC_RECORD_TYPE] || '').trim().toUpperCase();
+      const texto = String(it[REC_RECORD_TEXT] || '').trim();
+      if (!texto) continue;
+
+      if (tipo === REC_TIPO_COLOR) {
+        if (!notasColor) notasColor = texto;
+      } else if (tipo === REC_TIPO_TRATAMIENTO) {
+        if (!notasTratamientos) notasTratamientos = texto;
+      } else {
+        // Todo lo que no sea COLOR ni TRATAMIENTO cuenta como GENERAL,
+        // incluida una fila con el tipo vacío.
+        const fecha = fechaAnotacionLegible(it[REC_RECORD_DATE] || it._createdDate);
+        const autor = String(it[REC_AUTHOR] || '').trim();
+        let entrada = texto;
+        if (fecha && autor)      entrada = `[${fecha}] ${autor}: ${texto}`;
+        else if (fecha)          entrada = `[${fecha}] ${texto}`;
+        generales.push(entrada);
+      }
+    }
+
+    // El widget parte por ' | ' y luego invierte: hay que entregarlo de
+    // la más antigua a la más reciente.
+    const historialGeneral = generales.reverse().join(' | ');
+
+    console.log(
+      `${TAG} anotaciones ${contactId} | filas=${items.length} ` +
+      `color=${notasColor ? 'sí' : 'no'} trat=${notasTratamientos ? 'sí' : 'no'} ` +
+      `generales=${generales.length}`
+    );
+
+    return { notasColor, notasTratamientos, historialGeneral };
+
+  } catch (e) {
+    console.warn(`${TAG} leerAnotacionesCliente no disponible: ${e.message}`);
+    return vacio;
+  }
+}
+
+/**
+ * INSERT puro. Nunca update: el histórico no se sobrescribe.
+ * Texto vacío no inserta nada y devuelve { ok:true, insertado:false }.
+ */
+async function insertarAnotacionCliente({
+  contactId,
+  clientName = '',
+  clientPhone = '',
+  recordType,
+  recordText,
+  author = ''
+} = {}) {
+  const texto = String(recordText || '').trim().slice(0, REC_LIMITE_TEXTO);
+  if (!contactId || !isGuid(contactId)) {
+    return { ok: false, insertado: false, error: 'contactId requerido' };
+  }
+  if (!texto) {
+    return { ok: true, insertado: false };
+  }
+
+  const ahora = new Date();
+
+  const registro = {
+    [REC_CONTACT_ID]:   contactId,
+    [REC_CLIENT_NAME]:  String(clientName || '').trim(),
+    [REC_CLIENT_PHONE]: String(clientPhone || '').trim(),
+    [REC_RECORD_TYPE]:  recordType,
+    [REC_RECORD_TEXT]:  texto,
+    [REC_RECORD_DATE]:  ahora,
+    [REC_AUTHOR]:       String(author || '').trim(),
+    [REC_BOOKING_ID]:   '',
+    [REC_SOURCE]:       REC_SOURCE_CRM,
+    [REC_ACTIVE]:       true
+  };
+
+  const insertado = await wixData.insert(COLLECTION_CLIENT_RECORDS, registro, { suppressAuth: true });
+
+  console.log(
+    `${TAG} ✅ anotación ${recordType} guardada | cliente=${contactId} ` +
+    `autor=${registro[REC_AUTHOR] || '(sin firma)'} chars=${texto.length}`
+  );
+
+  return { ok: true, insertado: true, id: insertado._id, fecha: ahora };
+}
+
+/**
+ * Nombre y teléfono del contacto, para dejar la fila legible sin tener
+ * que resolver el contactId cada vez que se lee la colección.
+ */
+function datosClienteParaAnotacion(contact) {
+  const infoName = contact?.info?.name || {};
+  const nombre   = infoName.first || '';
+  const apellido = infoName.last  || '';
+  const phonesArr = contact?.info?.phones || [];
+  const telefono  = Array.isArray(phonesArr) ? (phonesArr[0]?.phone || '') : '';
+  return {
+    clientName:  `${nombre} ${apellido}`.trim(),
+    clientPhone: String(telefono || '').trim()
+  };
+}
+
+// =====================================================
 // FORMATEAR CONTACTO
 // =====================================================
 
-function formatearContacto(contact) {
+function formatearContacto(contact, historialGeneral = '') {
   const infoName = contact?.info?.name || {};
   const nombre   = infoName.first || contact?.name?.first || contact?.firstName || '';
   const apellido = infoName.last  || contact?.name?.last  || contact?.lastName  || '';
@@ -914,8 +1191,11 @@ function formatearContacto(contact) {
   const tags        = contact?.info?.labelKeys || [];
   const createdDate = contact?.createdDate || null;
 
-  const ef = contact?.info?.extendedFields || {};
-  const notasSalonHistorial = ef['custom.ficha'] || '';
+  // v1.9.13 — El histórico de notas internas ya no sale de
+  // ef['custom.ficha']: lo compone leerAnotacionesCliente desde
+  // KamisuiteClientRecords y llega por parámetro. Mismo string, mismo
+  // formato, mismo consumidor.
+  const notasSalonHistorial = String(historialGeneral || '');
 
   // v1.9.8 — Campo NATIVO Wix Contacts (no extendedFields)
   const fechaNacimiento = extraerFechaNacimientoDeContacto(contact);
@@ -968,13 +1248,29 @@ async function leerPagosDeCliente(contactId) {
   return items;
 }
 
+// v1.9.12 — Blindaje ante tenants sin colección SvExternalRecords.
+// SvExternalRecords es una colección legacy V1 que solo existe en
+// Hair-Times. En KALONICE y en cualquier tenant nueva la colección
+// no está creada; wixData.query lanza WDE0025 ("The X collection
+// does not exist") y, al ejecutarse esta función dentro de un
+// Promise.all en getFichaCliente y sincronizarClientProfile, la
+// excepción tumbaba toda la respuesta y dejaba el CRM en
+// "Cargando...". Con el try/catch aquí devolvemos [] silenciosamente
+// cuando falla la lectura, exactamente igual que ya hacen
+// leerBonosCliente / leerTarjetasCliente / leerPrimeMembershipCliente
+// para sus colecciones custom.
 async function leerExternosDeCliente(contactId) {
-  const result = await wixData.query(COLLECTION_EXTERNAL_RECORDS)
-    .eq('contactId', contactId)
-    .descending('date')
-    .limit(200)
-    .find({ suppressAuth: true });
-  return result?.items || [];
+  try {
+    const result = await wixData.query(COLLECTION_EXTERNAL_RECORDS)
+      .eq('contactId', contactId)
+      .descending('date')
+      .limit(200)
+      .find({ suppressAuth: true });
+    return result?.items || [];
+  } catch (e) {
+    console.warn(`${TAG} leerExternosDeCliente (colección opcional): ${e.message}`);
+    return [];
+  }
 }
 
 function calcularStats(pagos, externosItems) {
@@ -1184,9 +1480,11 @@ export const getFichaCliente = webMethod(Permissions.Anyone, async (payload) => 
     // v1.9.8 — Añadimos 5 queries paralelas: salonCfg, primeImagen,
     // primeMemb, bonosCli, tarjetasCli. Todo por Promise.all para no
     // penalizar la latencia.
+    // v1.9.13 — leerAnotacionesCliente entra en el Promise.all que ya
+    // existía: una query más en paralelo, sin latencia añadida.
     const [
       contactRaw, pagos, externosItems, careResult, profileResult,
-      salonCfg, primeImagen, primeMemb, bonosCli, tarjetasCli
+      salonCfg, primeImagen, primeMemb, bonosCli, tarjetasCli, anotaciones
     ] = await Promise.all([
       elevatedGet(contactId),
       leerPagosDeCliente(contactId),
@@ -1197,12 +1495,13 @@ export const getFichaCliente = webMethod(Permissions.Anyone, async (payload) => 
       leerPrimeImagenPublica(),
       leerPrimeMembershipCliente(contactId),
       leerBonosCliente(contactId),
-      leerTarjetasCliente(contactId)
+      leerTarjetasCliente(contactId),
+      leerAnotacionesCliente(contactId)
     ]);
 
     if (!contactRaw) throw new Error(`Contacto no encontrado: ${contactId}`);
 
-    const cliente       = formatearContacto(contactRaw);
+    const cliente       = formatearContacto(contactRaw, anotaciones.historialGeneral);
     const profileExist  = (profileResult?.items || [])[0] || null;
     const careProfile   = (careResult?.items || [])[0] || null;
     const hasExpediente = !!careProfile;
@@ -1218,8 +1517,11 @@ export const getFichaCliente = webMethod(Permissions.Anyone, async (payload) => 
     const notasClienteSalonRaw = String(leerCampoCRM(ef, 'notasClienteSalon').value || '');
     const notasClienteSalonHistorico = parseNotasClienteSalonHistorico(notasClienteSalonRaw);
     const notasClienteSalonUltima = notasClienteSalonHistorico[0] || null;
-    const notasColor       = String(leerCampoCRM(ef, 'notasColor').value || '');
-    const notasTratamient  = String(leerCampoCRM(ef, 'notasTratamientos').value || '');
+    // v1.9.13 — desde KamisuiteClientRecords, no desde Wix Contacts.
+    // Se sirve el texto de la fila activa más reciente de cada tipo,
+    // que es lo que el widget espera: un string por categoría.
+    const notasColor       = anotaciones.notasColor;
+    const notasTratamient  = anotaciones.notasTratamientos;
     const sexo             = String(leerCampoCRM(ef, 'sexo').value || '');
     const clubActivo       = normalizarClubActivo(leerCampoCRM(ef, 'clubKalonice').value);
     const ultimaVisitaRaw  = leerCampoCRM(ef, 'ultimaVisita').value;
@@ -1476,12 +1778,35 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
     if (notasPublicas !== undefined) {
       await setCampoCRM('notasPublicas', String(notasPublicas || ''));
     }
+
+    // v1.9.13 — Color y Tratamientos ya no van a extendedFields: cada
+    // uno inserta su fila en KamisuiteClientRecords. Texto vacío no
+    // inserta nada (en un modelo de solo inserción, guardar en blanco
+    // no puede significar "borrar"). Sin autor: el CRM no identifica
+    // al operador en estas dos textareas, igual que hace Recepción PRO
+    // cuando no hay nadie logueado.
+    const datosAnotacion = datosClienteParaAnotacion(current);
+    let anotacionesInsertadas = 0;
+
     if (notasColor !== undefined) {
-      await setCampoCRM('notasColor', String(notasColor || ''));
+      const r = await insertarAnotacionCliente({
+        contactId,
+        ...datosAnotacion,
+        recordType: REC_TIPO_COLOR,
+        recordText: notasColor
+      });
+      if (r.insertado) anotacionesInsertadas++;
     }
     if (notasTratamientos !== undefined) {
-      await setCampoCRM('notasTratamientos', String(notasTratamientos || ''));
+      const r = await insertarAnotacionCliente({
+        contactId,
+        ...datosAnotacion,
+        recordType: REC_TIPO_TRATAMIENTO,
+        recordText: notasTratamientos
+      });
+      if (r.insertado) anotacionesInsertadas++;
     }
+
     if (sexo !== undefined) {
       await setCampoCRM('sexo', String(sexo || ''));
     }
@@ -1498,9 +1823,35 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
 
     if (Object.keys(ext).length) contactInfo.extendedFields = ext;
 
+    // v1.9.13 — Guardar solo Color o solo Tratamientos ya no toca Wix
+    // Contacts: contactInfo queda vacío y no hay nada que actualizar.
+    // Pero SÍ ha habido cambio, así que no puede responderse
+    // "sinCambios": se relee el histórico y se devuelve el contacto
+    // con él, para que el widget no vacíe la pestaña Notas.
     if (!Object.keys(contactInfo).length) {
+      const anotacionesTrasGuardar = await leerAnotacionesCliente(contactId);
+
+      if (anotacionesInsertadas > 0) {
+        console.log(
+          `${TAG} actualizarContactoCRM OK: ${contactId} | ` +
+          `solo anotaciones CMS (${anotacionesInsertadas})`
+        );
+        return {
+          ok: true,
+          version: VERSION,
+          cliente: formatearContacto(current, anotacionesTrasGuardar.historialGeneral),
+          profilePatch: extraerPatchCamposCRM(current),
+          debug: { anotacionesInsertadas, contactInfoEscritos: [] }
+        };
+      }
+
       console.warn(`${TAG} actualizarContactoCRM: sin cambios efectivos`);
-      return { ok: true, version: VERSION, sinCambios: true, cliente: formatearContacto(current) };
+      return {
+        ok: true,
+        version: VERSION,
+        sinCambios: true,
+        cliente: formatearContacto(current, anotacionesTrasGuardar.historialGeneral)
+      };
     }
 
     const elevatedUpdate = elevate(contacts.updateContact);
@@ -1523,10 +1874,16 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
 
     const profilePatch = extraerPatchCamposCRM(after);
 
+    // v1.9.13 — El histórico de notas internas viaja en `cliente`, y el
+    // widget lo repinta con cada renderContactData. Si no se relee, la
+    // pestaña Notas se vaciaría al editar cualquier dato del contacto.
+    const anotacionesTrasGuardar = await leerAnotacionesCliente(contactId);
+
     console.log(
       `${TAG} actualizarContactoCRM OK: ${contactId} | ` +
       `campos=${Object.keys(contactInfo).join(',')}` +
       `${Object.keys(ext).length ? ' | ext=' + Object.keys(ext).join(',') : ''}` +
+      `${anotacionesInsertadas ? ' | anotacionesCMS=' + anotacionesInsertadas : ''}` +
       `${Object.keys(extSources).length ? ' | resolved=' + safeJsonLog(extSources, 1200) : ''}` +
       ` | postRead=${safeJsonLog(profilePatch, 1200)}`
     );
@@ -1534,11 +1891,12 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
     return {
       ok: true,
       version: VERSION,
-      cliente: formatearContacto(after || updatedContact),
+      cliente: formatearContacto(after || updatedContact, anotacionesTrasGuardar.historialGeneral),
       profilePatch,
       debug: {
         extendedFieldsEscritos: Object.keys(ext),
         contactInfoEscritos: Object.keys(contactInfo),
+        anotacionesInsertadas,
         resolved: extSources
       }
     };
@@ -1576,11 +1934,9 @@ export const guardarNotaSalon = webMethod(Permissions.Anyone, async (payload) =>
       elevatedGet(contactId)
     ]);
 
-    if (!contactRaw || !contactRaw.revision) throw new Error('Contacto no encontrado');
+    if (!contactRaw) throw new Error('Contacto no encontrado');
 
-    const profile          = (profileResult?.items || [])[0] || null;
-    const fichaActual      = contactRaw?.info?.extendedFields?.['custom.ficha'] || '';
-    const fichaActualizada = fichaActual ? `${fichaActual} | ${entrada}` : entrada;
+    const profile = (profileResult?.items || [])[0] || null;
 
     const promises = [];
 
@@ -1604,12 +1960,20 @@ export const guardarNotaSalon = webMethod(Permissions.Anyone, async (payload) =>
       );
     }
 
+    // v1.9.13 — La nota interna deja de hacer append a
+    // ef['custom.ficha'] y pasa a ser una fila GENERAL de
+    // KamisuiteClientRecords. Ya no hay update de Wix Contacts aquí,
+    // así que tampoco hace falta la `revision`.
+    // ClientProfile.notasSalon SIGUE escribiéndose: es lo que enciende
+    // el badge 📝 Notas del widget.
     promises.push(
-      elevate(contacts.updateContact)(
-        { contactId, revision: contactRaw.revision },
-        { extendedFields: { 'custom.ficha': fichaActualizada } },
-        { suppressAuth: true }
-      )
+      insertarAnotacionCliente({
+        contactId,
+        ...datosClienteParaAnotacion(contactRaw),
+        recordType: REC_TIPO_GENERAL,
+        recordText: notaTexto,
+        author: autorTexto
+      })
     );
 
     await Promise.all(promises);
