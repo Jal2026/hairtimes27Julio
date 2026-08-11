@@ -1,8 +1,29 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.45
-// FECHA: 10 de agosto de 2026
+// VERSION: 1.0.46
+// FECHA: 11 de agosto de 2026
+//
+// v1.0.46: 🩹 FIX handleGuardarFichaCliente — guardaba una sola
+//          anotación por pulsación. El modal de FICHA TÉCNICA tiene
+//          tres contenedores de texto (Color, Tratamiento, General) y
+//          un único botón de guardar; el widget solo enviaba el de la
+//          pestaña visible y las otras dos anotaciones se perdían sin
+//          aviso. Verificado en KamisuiteClientRecords: las filas
+//          nunca llegaron a insertarse.
+//          Ahora el handler acepta `msg.anotaciones` (array de
+//          {recordType, recordText}), las inserta una a una y responde
+//          UNA SOLA VEZ con la lista guardada y las que fallaron.
+//          Se mantiene el formato antiguo {recordType, recordText} por
+//          compatibilidad.
+//          Una sola respuesta es obligatorio, no una preferencia:
+//          `sendResponse` es un setAttribute directo sin cola FIFO, y
+//          varias respuestas en el mismo tick se sobrescriben.
+//          Solo se responde ok:false si NO entró ninguna anotación; un
+//          fallo parcial va en `fallidas` para que el widget lo diga y
+//          conserve ese borrador.
+//          Requiere widget v1.1.101. No se toca ningún otro handler,
+//          import ni case del switch.
 //
 // v1.0.45: 🧹 FUERA el circuito del histórico importado del software
 //          anterior. La FICHA TÉCNICA pasa a ser única y CMS-first
@@ -597,7 +618,7 @@ import {
   desactivarFichaClienteRecord
 } from 'backend/clientRecordsLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.45]';
+const TAG = '[RecepcionProCMS v1.0.46]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -806,27 +827,68 @@ async function handleGetFichaCliente(msg) {
   }
 }
 
+// v1.0.46 — Guarda TODAS las anotaciones que el widget mande en una
+// sola pulsación. El widget envía `anotaciones: [{recordType,
+// recordText}]`; se admite el formato antiguo de una sola por
+// compatibilidad. Se responde UNA VEZ con la lista: `sendResponse` es
+// un setAttribute directo, sin cola, y varias respuestas en el mismo
+// tick se pisan entre sí.
 async function handleGuardarFichaCliente(msg) {
+  const lista = Array.isArray(msg.anotaciones) && msg.anotaciones.length
+    ? msg.anotaciones
+    : [{ recordType: msg.recordType || 'GENERAL', recordText: msg.recordText || '' }];
+
+  const guardadas = [];
+  const fallidas = [];
+
   try {
-    const data = await guardarFichaClienteRecord({
-      contactId:   msg.contactId || '',
-      clientName:  msg.clientName || '',
-      clientPhone: msg.clientPhone || '',
-      recordType:  msg.recordType || 'GENERAL',
-      recordText:  msg.recordText || '',
-      bookingId:   msg.reservaId || '',
-      source:      'RECEPCION',
-      // Firma con el empleado logueado, igual que `soldBy` en el cobro
-      // (v1.0.42). Sin capa de acceso activa va vacío y el CMS lo guarda
-      // sin autor, que es la verdad: no había nadie identificado.
-      author: (_empleadoActivo && _empleadoActivo.staffName) || ''
+    for (const item of lista) {
+      const tipo  = (item && item.recordType) || 'GENERAL';
+      const texto = String((item && item.recordText) || '').trim();
+      if (!texto) continue;
+
+      try {
+        const data = await guardarFichaClienteRecord({
+          contactId:   msg.contactId || '',
+          clientName:  msg.clientName || '',
+          clientPhone: msg.clientPhone || '',
+          recordType:  tipo,
+          recordText:  texto,
+          bookingId:   msg.reservaId || '',
+          source:      'RECEPCION',
+          // Firma con el empleado logueado, igual que `soldBy` en el cobro
+          // (v1.0.42). Sin capa de acceso activa va vacío y el CMS lo guarda
+          // sin autor, que es la verdad: no había nadie identificado.
+          author: (_empleadoActivo && _empleadoActivo.staffName) || ''
+        });
+
+        if (data && data.ok && data.anotacion) guardadas.push(data.anotacion);
+        else fallidas.push({ tipo, message: data?.error?.message || 'Error' });
+
+      } catch (eItem) {
+        console.error(`${TAG} ❌ guardarFichaCliente ${tipo}:`, eItem);
+        fallidas.push({ tipo, message: eItem?.message || 'Error' });
+      }
+    }
+
+    // Solo es un fallo global si no entró ninguna.
+    const ok = guardadas.length > 0;
+
+    sendResponse('fichaClienteGuardada', {
+      data: {
+        ok,
+        anotaciones: guardadas,
+        fallidas,
+        error: ok ? undefined : { message: fallidas[0]?.message || 'No se guardó ninguna anotación' }
+      },
+      recordType: guardadas[0]?.tipo || lista[0]?.recordType || 'GENERAL'
     });
-    sendResponse('fichaClienteGuardada', { data, recordType: msg.recordType || 'GENERAL' });
+
   } catch (e) {
     console.error(`${TAG} ❌ guardarFichaCliente:`, e);
     sendResponse('fichaClienteGuardada', {
-      data: { ok: false, error: { message: e?.message || 'Error' } },
-      recordType: msg.recordType || 'GENERAL'
+      data: { ok: false, error: { message: e?.message || 'Error' }, anotaciones: [], fallidas },
+      recordType: lista[0]?.recordType || 'GENERAL'
     });
   }
 }
