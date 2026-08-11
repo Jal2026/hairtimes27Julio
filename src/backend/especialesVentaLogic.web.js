@@ -1,8 +1,8 @@
 // =====================================================
 // KAMISUITE - Venta manual de ESPECIALES (PRIME · Bonos · Tarjetas) - Backend
 // =====================================================
-// VERSION: 1.0.1
-// FECHA:   31 de julio de 2026 (v1.0.1: 2 de agosto de 2026)
+// VERSION: 1.1.0
+// FECHA:   31 de julio de 2026 (v1.1.0: 11 de agosto de 2026)
 // ARCHIVO: backend/especialesVentaLogic.web.js
 //
 // PROPÓSITO
@@ -29,9 +29,11 @@
 //   · Cliente identificado por contactId. El page code lo resuelve o lo da
 //     de alta antes; aquí no se exige Wix Member logado.
 //
-// REGLA DE NEGOCIO (Jal, 31-jul-2026):
+// REGLA DE NEGOCIO (Jal, 31-jul-2026, MATIZADA el 11-ago-2026):
 //   La venta de BONO exige que el cliente esté en el listado PRIME activo
 //   (guard en emitirBonoManual). PRIME y tarjetas NO llevan candado PRIME.
+//   Desde v1.1.0 ese candado del bono es CONFIGURABLE por salón mediante
+//   KamisuiteProductsConfig.vouchersSkipPrime (ver changelog).
 //
 // PERMISOS: Permissions.SiteMember en todos los webMethods. suppressAuth
 //   en las queries CMS. El flag de club en Wix Contacts vía elevate().
@@ -41,6 +43,30 @@
 //   PaymentReservations (cobro).
 //
 // CHANGELOG
+// v1.1.0 - 🔓 CANDADO PRIME DEL BONO AHORA CONFIGURABLE.
+//          El guard de emitirBonoManual pasa a depender del interruptor
+//          global KamisuiteProductsConfig.vouchersSkipPrime (Booleano):
+//            · false / vacío → candado puesto. Comportamiento de v1.0.1
+//              literal, sin ninguna diferencia observable.
+//            · true          → venta libre en mostrador: se puede emitir
+//              un bono a un cliente que no sea PRIME.
+//          Polaridad de APERTURA deliberada: el Booleano nuevo llega vacío
+//          en las filas existentes del CMS y el patrón `=== true` lo
+//          resuelve a false, así que el candado NO se cae solo al desplegar.
+//          buscarPrimeActiva se sigue ejecutando SIEMPRE (su _id alimenta
+//          primeMembershipId); con el interruptor abierto deja de ser
+//          bloqueante y, si el cliente no tiene PRIME, el bono se emite con
+//          primeMembershipId ''.
+//          La lectura del flag usa una query propia y NO altera la query a
+//          KamisuiteProductsConfig que la función ya hacía más abajo para
+//          voucherValidityMonths: reordenarla habría tocado el cálculo de
+//          caducidad, fuera del alcance de este cambio.
+//          CERO cambios en emitirPrimeManual y emitirTarjetaManual (nunca
+//          tuvieron candado PRIME), en el registro del cobro, en el
+//          descuento manual de v1.0.1 ni en el canje (que nunca comprobó
+//          PRIME, decisión D-2).
+//          Pareja config: productosKamisuiteLogic.web.js v1.0.4.
+//          Pareja online: voucherPublicLogic.web.js v1.3.0.
 // v1.0.1 - DESCUENTO MANUAL DEL OPERADOR (regalar/descontar en la venta).
 //          Los tres métodos aceptan `importeNeto` + `descripcionExtra`
 //          opcionales (mismo contrato que recepcionProLogic.marcarPagadoReserva
@@ -62,7 +88,7 @@ import wixData from 'wix-data';
 import { contacts } from 'wix-crm-backend';
 import { elevate } from 'wix-auth';
 
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const TAG = `[EspecialesVenta][${VERSION}]`;
 
 const CMS_PRIME       = 'KamisuitePrimeMemberships';
@@ -366,13 +392,36 @@ export const emitirBonoManual = webMethod(
       if (!serviceSetupUid) return { success: false, error: 'Falta identificador de servicio' };
 
       // ── CANDADO PRIME (regla de negocio): el cliente debe ser PRIME activo.
+      //
+      // v1.1.0 — CONDICIONAL al interruptor global
+      // KamisuiteProductsConfig.vouchersSkipPrime:
+      //   · false / vacío → candado puesto (comportamiento histórico).
+      //   · true          → venta libre en mostrador.
+      //
+      // La lectura se hace AQUÍ, con su propia query, y NO se toca la query
+      // a CMS_CONFIG que esta misma función ya hace más abajo para resolver
+      // voucherValidityMonths: hoistarla obligaría a reordenar el cálculo de
+      // caducidad, y ese bloque no entra en el alcance de este cambio. El
+      // coste de una query extra es irrelevante en una operación manual de
+      // mostrador.
+      let skipPrime = false;
+      try {
+        const cfgSkipRes = await wixData.query(CMS_CONFIG).limit(1).find({ suppressAuth: true });
+        if (cfgSkipRes.items.length > 0) {
+          skipPrime = cfgSkipRes.items[0].vouchersSkipPrime === true;
+        }
+      } catch (_) {}
+
       const prime = await buscarPrimeActiva(safeContactId);
-      if (!prime) {
+      if (!prime && !skipPrime) {
         return {
           success: false,
           needsPrime: true,
           error: 'El cliente no es PRIME activo. No se puede vender un bono a quien no está en el listado PRIME.'
         };
+      }
+      if (!prime) {
+        console.log(`${TAG} 🔓 vouchersSkipPrime activo — venta manual sin PRIME para contacto ${safeContactId}`);
       }
 
       // Cargar servicio del catálogo (por setupUid o _id).
@@ -475,7 +524,11 @@ export const emitirBonoManual = webMethod(
         paymentMethod: metodoPago || 'Efectivo',
         paymentId: '',
         paymentReservationId: '',
-        primeMembershipId: prime._id,
+        // v1.1.0 — Con vouchersSkipPrime activo el cliente puede no tener
+        // PRIME: el vínculo queda vacío. Con el candado puesto, prime SIEMPRE
+        // existe aquí (el guard habría cortado antes) y el valor es idéntico
+        // al histórico.
+        primeMembershipId: prime ? prime._id : '',
         status: STATUS_VOUCHER_ACTIVO,
         salonId: ''
       };
