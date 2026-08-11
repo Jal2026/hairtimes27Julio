@@ -10,8 +10,27 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════
-   KAMISUITE — Widget público Bonos v1.0.6
+   KAMISUITE — Widget público Bonos v1.0.7
    F2.3 del módulo Productos Custom.
+
+   v1.0.7 (11 ago 2026):
+     · 🔓 INTERRUPTOR GLOBAL "bonos sin PRIME". El banner #primeGate
+       ("Los bonos son exclusivos de miembros PRIME" + botón "Hazte
+       PRIME") deja de pintarse cuando el salón ha abierto la venta
+       desde KamisuiteProductsConfig.vouchersSkipPrime. El flag llega
+       en el bootstrap (page code v1.0.2 ← voucherPublicLogic v1.3.0).
+     · Cambio de UNA condición en renderCatalog:
+         showGate = isMember && !isPrime  →  && !state.vouchersSkipPrime
+       Si el flag no llega (despliegue parcial), state.vouchersSkipPrime
+       queda false → banner visible → comportamiento actual. Sin riesgo
+       de apertura accidental.
+     · Cero cambios en CSS, tokens, skins, copy, DOM (mismos ids),
+       estados de vista, variantes, precios, flujo de compra y bloqueo
+       "YA LO TIENES". El eyebrow de cabecera ("Membresía PRIME") se
+       mantiene INTACTO por decisión expresa: este cambio es puramente
+       funcional.
+     · El case 'needsPrime' se conserva sin tocar: sigue siendo la
+       respuesta legítima del backend cuando el candado SÍ está puesto.
 
    v1.0.6 (2 ago 2026):
      · 🗂️ Catálogo ordenado ALFABÉTICAMENTE por group (categoría),
@@ -1038,6 +1057,10 @@ html, body {
     // Se usa por renderVariantSelectorInModal y validarForm.
     selectedVariantInModal: null,
     member: { isMember: false, isPrime: false, primeExpirationDate: null, serviciosBloqueados: [], bonosActivos: [] },
+    // v1.0.7 — Interruptor global del salón: true = comprar un bono NO
+    // exige Tarjeta PRIME activa. Llega en el bootstrap. Por defecto
+    // false → banner PRIME visible (comportamiento histórico).
+    vouchersSkipPrime: false,
     termsUrl: '',
     bootstrapped: false,
     currentView: 'loading'
@@ -1149,6 +1172,8 @@ html, body {
         }
         state.vouchers = p.vouchers || [];
         state.member = p.member || state.member;
+        // v1.0.7 — Interruptor global "bonos sin PRIME".
+        state.vouchersSkipPrime = p.vouchersSkipPrime === true;
         state.bootstrapped = true;
         if (!state.vouchers.length) {
           showView('empty');
@@ -1219,7 +1244,10 @@ html, body {
   // ═══════════════════════════════════════════════════
   function renderCatalog() {
     // Banner PRIME gate: solo si el miembro es Wix Member pero NO PRIME.
-    var showGate = state.member.isMember && !state.member.isPrime;
+    // v1.0.7 — ...y solo si el salón NO ha abierto la venta de bonos a
+    // todo el mundo (vouchersSkipPrime). Con el interruptor abierto el
+    // banner no tiene sentido: la compra ya no exige PRIME.
+    var showGate = state.member.isMember && !state.member.isPrime && !state.vouchersSkipPrime;
     if (showGate) $('primeGate').classList.remove('kp-hidden');
     else $('primeGate').classList.add('kp-hidden');
 
