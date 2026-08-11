@@ -1,7 +1,36 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.100  ·  El mensaje del cliente, visible en el calendario
+ * VERSION: 1.1.101  ·  Un botón, todo lo escrito se guarda
+ *
+ * v1.1.101 (11 ago 2026) — FIX: el botón de FICHA TÉCNICA solo guardaba
+ *   la pestaña visible.
+ *   SÍNTOMA: se escribe en Color, se pasa a Tratamiento, se escribe, se
+ *   pasa a General, se escribe, se pulsa "Guardar anotación" — y en
+ *   KamisuiteClientRecords solo aparece una fila, la de la pestaña que
+ *   estaba abierta al pulsar. Las otras dos se quedaban en
+ *   `_fcBorrador` y se perdían al cerrar el modal, sin ningún aviso.
+ *   CAUSA: tres contenedores de texto y un único botón, pero
+ *   `_guardarFichaTecnica` leía solo `#fcTa`, el textarea visible, y
+ *   enviaba `recordType: this._fcTab`. Con un único botón no se le
+ *   puede pedir al operador que lo pulse tres veces.
+ *   ARREGLO:
+ *     · `_guardarFichaTecnica` vuelca el textarea visible al borrador y
+ *       recoge los TRES borradores. Guarda todos los que no estén
+ *       vacíos en la misma pulsación.
+ *     · Va UN SOLO mensaje `guardarFichaCliente` con `anotaciones: []`
+ *       en vez de tres mensajes seguidos. Motivo: el `sendResponse` del
+ *       page code de Recepción PRO es un `setAttribute` directo, sin
+ *       cola FIFO — tres respuestas en el mismo tick se pisan entre sí
+ *       y volveríamos a perder anotaciones, con otro síntoma.
+ *     · `_onFichaClienteGuardada` admite la lista `anotaciones` y sigue
+ *       admitiendo la `anotacion` suelta del formato anterior.
+ *     · Si alguna falla, se dice cuál y su borrador se conserva en
+ *       pantalla; las que entraron se limpian.
+ *   Requiere el page code 1.0.46. Sin él, el page code antiguo no
+ *   entiende `anotaciones` y no guardaría nada.
+ *   No se toca ningún otro flujo del widget, ni CSS, ni layout: el
+ *   modal se ve exactamente igual.
  *
  * v1.1.100 (10 ago 2026) — MENSAJE QUE EL CLIENTE DEJA AL RESERVAR ONLINE.
  *   Vive en KamisuiteReservations.notes desde que el widget público lo
@@ -1741,7 +1770,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.100]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.101]';
 
   // ─── helpers ───
   function esc(s) {
@@ -9743,15 +9772,31 @@ button { font-family: inherit; cursor: pointer; }
       }));
     }
 
+    // v1.1.101 — El botón guarda TODO lo pendiente, no solo la pestaña
+    // visible. Antes, con tres borradores escritos y un único botón,
+    // solo se insertaba el de la pestaña abierta: los otros dos se
+    // quedaban en _fcBorrador y se perdían al cerrar el modal.
+    //
+    // Va UN SOLO mensaje con un array. El sendResponse del page code de
+    // Recepción PRO es un setAttribute directo, sin cola FIFO: tres
+    // mensajes seguidos harían que las respuestas se pisaran entre sí
+    // dentro del mismo tick.
     _guardarFichaTecnica() {
       const scrim = this.shadowRoot.getElementById('fcScrim');
       const c = this._fcCtx;
       if (!scrim || !c || !c.contactId) return;
-      const ta = scrim.querySelector('#fcTa');
-      const texto = ta ? String(ta.value || '').trim() : '';
-      if (!texto) { this._toast('Escribe algo antes de guardar'); return; }
 
-      this._fcBorrador[this._fcTab] = texto;
+      // El textarea visible todavía no está volcado al borrador: solo
+      // se vuelca al cambiar de pestaña.
+      const ta = scrim.querySelector('#fcTa');
+      if (ta) this._fcBorrador[this._fcTab] = String(ta.value || '');
+
+      const pendientes = ['COLOR', 'TRATAMIENTO', 'GENERAL']
+        .map(tipo => ({ recordType: tipo, recordText: String(this._fcBorrador[tipo] || '').trim() }))
+        .filter(a => a.recordText);
+
+      if (!pendientes.length) { this._toast('Escribe algo antes de guardar'); return; }
+
       this._fcGuardando = true;
       this._renderFichaTecnica();
 
@@ -9759,8 +9804,7 @@ button { font-family: inherit; cursor: pointer; }
         contactId:   c.contactId,
         clientName:  c.clientName || '',
         clientPhone: c.clientPhone || '',
-        recordType:  this._fcTab,
-        recordText:  texto,
+        anotaciones: pendientes,
         // Vacío cuando la ficha se abre desde la barra: la anotación es del
         // cliente, no de una visita concreta.
         reservaId:   c.reservaId || ''
@@ -9775,6 +9819,9 @@ button { font-family: inherit; cursor: pointer; }
       this._renderFichaTecnica();
     }
 
+    // v1.1.101 — La respuesta trae ahora una LISTA de anotaciones, una
+    // por cada borrador que se guardó en la misma pulsación. Se admite
+    // también el formato antiguo de una sola por compatibilidad.
     _onFichaClienteGuardada(p) {
       this._fcGuardando = false;
       const d = (p && p.data) ? p.data : { ok: false };
@@ -9785,16 +9832,33 @@ button { font-family: inherit; cursor: pointer; }
         return;
       }
 
-      const tipo = d.anotacion?.tipo || this._fcTab;
+      const guardadas = Array.isArray(d.anotaciones)
+        ? d.anotaciones.filter(Boolean)
+        : (d.anotacion ? [d.anotacion] : []);
+
       if (!this._fcData) this._fcData = { ok: true, anotaciones: [], porTipo: {}, visitas: [], mensajeCliente: [] };
       if (!this._fcData.porTipo) this._fcData.porTipo = {};
-      if (!Array.isArray(this._fcData.porTipo[tipo])) this._fcData.porTipo[tipo] = [];
-      this._fcData.porTipo[tipo].unshift(d.anotacion);
       if (!Array.isArray(this._fcData.anotaciones)) this._fcData.anotaciones = [];
-      this._fcData.anotaciones.unshift(d.anotacion);
 
-      this._fcBorrador[tipo] = '';
-      this._toast('Anotación guardada ✓');
+      for (const anotacion of guardadas) {
+        const tipo = anotacion.tipo || this._fcTab;
+        if (!Array.isArray(this._fcData.porTipo[tipo])) this._fcData.porTipo[tipo] = [];
+        this._fcData.porTipo[tipo].unshift(anotacion);
+        this._fcData.anotaciones.unshift(anotacion);
+        this._fcBorrador[tipo] = '';
+      }
+
+      // Los fallos parciales se dicen: si de tres borradores solo entran
+      // dos, el operador tiene que saber cuál se quedó fuera. El que
+      // falla conserva su borrador y sigue en pantalla.
+      const fallidas = Array.isArray(d.fallidas) ? d.fallidas.filter(Boolean) : [];
+      if (fallidas.length) {
+        const nombres = fallidas.map(f => String(f.tipo || '').toLowerCase()).filter(Boolean).join(', ');
+        this._toast(`No se pudo guardar: ${nombres || 'alguna anotación'}`);
+      } else {
+        this._toast(guardadas.length > 1 ? `${guardadas.length} anotaciones guardadas ✓` : 'Anotación guardada ✓');
+      }
+
       this._renderFichaTecnica();
     }
 
