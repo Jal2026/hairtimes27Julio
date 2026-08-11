@@ -9,11 +9,31 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-   KAMISUITE — Editor de Productos Widget v1.0.2
+   KAMISUITE — Editor de Productos Widget v1.0.3
    PRIME · Bonos · Tarjetas Promocionales
    Dark theme. Paleta copiada literal de edicionservicios v1.11.4.
 
    CHANGELOG:
+   v1.0.3: NUEVO toggle "Compra de bonos sin Tarjeta PRIME" en la
+     pestaña Bonos, dentro del bloque "Configuración de Bonos", junto a
+     "Venta de bonos activa". Escribe
+     KamisuiteProductsConfig.vouchersSkipPrime (Booleano) vía el botón
+     "Guardar configuración" que ya existía.
+       · Apagado (por defecto): comprar un bono exige Tarjeta PRIME
+         activa — comportamiento histórico.
+       · Encendido: la venta de bonos queda libre, tanto online (/bonos)
+         como presencial en Recepción (ESPECIALES).
+     Tres puntos tocados, clonando literalmente el tratamiento de
+     vouchersActive: el checkbox en el DOM, la línea de carga en
+     renderConfig y la clave del payload de bonosConfigSaveBtn. Sin CSS
+     nuevo, sin tokens nuevos, sin cambios de layout: reutiliza la clase
+     .kp-toggle / .kp-toggle-track / .kp-toggle-label y el patrón
+     .kp-helper ya presentes en ese mismo bloque.
+     Parejas: productosKamisuiteLogic.web.js v1.0.4 (persiste el campo),
+     voucherPublicLogic.web.js v1.3.0 (online),
+     especialesVentaLogic.web.js v1.1.0 (presencial).
+     Page code del Gestor SIN CAMBIOS: guardarConfig reenvía el payload
+     tal cual y actualizarProductosConfig acepta payload parcial.
    v1.0.2: UX modal de campaña — al cambiar el servicio en el selector,
      el campo PVP se autocompleta con el precio del servicio del
      catálogo (data-price). Solo se dispara con interacción manual del
@@ -635,6 +655,15 @@ html, body {
           </label>
           <div class="kp-helper">Si está apagado, no se pueden comprar bonos</div>
         </div>
+        <!-- v1.0.3 — Interruptor: desliga la compra de bonos de la Tarjeta PRIME -->
+        <div class="kp-field">
+          <label class="kp-toggle">
+            <input type="checkbox" id="vouchersSkipPrime">
+            <span class="kp-toggle-track"></span>
+            <span class="kp-toggle-label">Compra de bonos sin Tarjeta PRIME</span>
+          </label>
+          <div class="kp-helper">Si está apagado, solo los clientes con Tarjeta PRIME activa pueden comprar bonos. Si lo enciendes, cualquier cliente puede comprarlos (web y recepción)</div>
+        </div>
         <div class="kp-field">
           <label class="kp-label">Validez del bono <small>(meses desde la emisión)</small></label>
           <input type="number" min="1" max="120" step="1" class="kp-input" id="voucherValidityMonths" placeholder="12">
@@ -1116,6 +1145,8 @@ html, body {
     updateImagePreview('primeImagePreview', c.primeImagePublicUrl || c.primeImage || '');
 
     $('vouchersActive').checked = !!c.vouchersActive;
+    // v1.0.3 — true = la compra de bonos NO exige Tarjeta PRIME activa.
+    $('vouchersSkipPrime').checked = !!c.vouchersSkipPrime;
     $('voucherValidityMonths').value = c.voucherValidityMonths != null ? c.voucherValidityMonths : 12;
 
     // v1.0.1: ya no se pinta promoCardsActive — el campo se ignora en
@@ -1377,6 +1408,7 @@ html, body {
   $('bonosConfigSaveBtn').addEventListener('click', function () {
     send('saveConfig', {
       vouchersActive: $('vouchersActive').checked,
+      vouchersSkipPrime: $('vouchersSkipPrime').checked,   // v1.0.3
       voucherValidityMonths: Number($('voucherValidityMonths').value || 12)
     });
   });
