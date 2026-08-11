@@ -1,6 +1,50 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.5.3
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.6.0
 // =====================================================
+// v2.6.0: Externos V2 + eje de días continuo + paginación
+//
+//   1) EXTERNOS — la fuente pasa a ser PagoreservasExternos (ledger V2)
+//      · Causa del defecto: el bloque leía SOLO SvExternalRecords, la
+//        colección V1 que rellena externosLogic. Desde que el cobro de
+//        externos se unificó en Recepción PRO V2
+//        (recepcionProLogic v1.0.37, rama isExternal → PagoreservasExternos,
+//        bookingId = 'EXT_<reservaId>'), NADIE escribe ya en
+//        SvExternalRecords → el bloque salía vacío.
+//      · Fuente primaria: PagoreservasExternos filtrada por fechaPago,
+//        coherente con el resto del informe (que filtra
+//        PaymentReservations.fechaPago).
+//      · Cruce de comisión POR EMPLEADO replicado literalmente de
+//        cierreExternosLogic v1.1.0 (el backend del Informe del día):
+//        ExternalServices.staffResourceId → StaffConfig.wixResourceId
+//        → StaffConfig.displayName, comparado contra
+//        PagoreservasExternos.staff. Fallback compat por contactPerson
+//        para filas legacy. SIN fallback global.
+//        Así Estadísticas y el Informe del día dan la MISMA comisión.
+//      · Histórico preservado: se siguen leyendo las filas PAGADAS de
+//        SvExternalRecords del rango, pero SOLO las que no tienen gemela
+//        en PagoreservasExternos (bookingId = 'EXT_' + _id). Esas gemelas
+//        existen desde externosLogic v1.1.3 (mar-2026), que escribía en
+//        ambas colecciones. Cero duplicados, cero pérdida de histórico
+//        anterior a marzo-2026. El cálculo de comisión de las filas
+//        legacy se mantiene EXACTAMENTE como en v2.5.3 (por category
+//        contra serviceName, con fallback) para no alterar informes ya
+//        emitidos.
+//
+//   2) EJE DE DÍAS CONTINUO — ingresosPorDia (serie cronológica)
+//      · Antes la serie se construía con Object.keys(ingresosPorDia): un
+//        día sin cobros no generaba punto y DESAPARECÍA del eje
+//        (los domingos, p.ej.). Ahora se recorre el rango
+//        fechaDesde→fechaHasta completo y los días sin cobros valen 0.
+//      · ingresosPorDiaRanking, porDiaSemana y los promedios por día de
+//        semana quedan INTACTOS: los días a 0 no se cuentan como días
+//        trabajados y no diluyen ninguna media.
+//
+//   3) PAGINACIÓN de PaymentReservations
+//      · La query principal era .limit(1000) sin skip: en rangos largos
+//        (trimestre, año) truncaba en silencio. Ahora pagina con el
+//        mismo patrón skip/limit que ya usaba obtenerMediaDiaSemanaAnio
+//        en este mismo archivo.
+//
 // v2.5.3: Fix Día de semana con poco histórico + zona Madrid
 //   - obtenerMediaDiaSemanaAnio funciona aunque solo haya 1 ocurrencia histórica
 //   - Elimina el filtro mínimo cnt < 2
@@ -44,14 +88,31 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const TAG = '[Stats v2.5.3]';
+const TAG = '[Stats v2.6.0]';
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
 const CMS_EXTERNAL_RECORDS = 'SvExternalRecords';
+const CMS_PAGOS_EXTERNOS = 'PagoreservasExternos';   // v2.6.0 — ledger V2 de cobros externos
+const CMS_STAFF = 'StaffConfig';                      // v2.6.0 — puente staffResourceId → displayName
 const CMS_SALON_CONFIG = 'SalonConfig';
 const TIMEZONE_MADRID = 'Europe/Madrid';
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DEFAULT_VAT_RATE = 21;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v2.6.0 — HELPER replicado LITERALMENTE de cierreExternosLogic v1.1.0
+// Extrae el nombre de servicio del primer token de `descripcion`.
+// Formato que escribe marcarPagadoReserva:
+//   "Corte (12€), Peinado (8€)"  →  "Corte"
+//   "Manicura completa (25€)"    →  "Manicura completa"
+// ═══════════════════════════════════════════════════════════════════════════
+function nombreServicioDesdeDescripcion(descripcion) {
+  const primerToken = String(descripcion || '').split(',')[0].trim();
+  if (!primerToken) return '';
+  const idxParen = primerToken.lastIndexOf('(');
+  const nombre = idxParen > 0 ? primerToken.slice(0, idxParen).trim() : primerToken;
+  return nombre;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUNCIÓN PRINCIPAL
@@ -149,16 +210,31 @@ export const obtenerEstadisticas = webMethod(
       // ══════════════════════════════════════════════════════════════
       // 1. LEER PAYMENTRESERVATIONS
       // ══════════════════════════════════════════════════════════════
-      let query = wixData.query(COLECCION_PAGOS);
-      if (fechaDesde) query = query.ge('fechaPago', new Date(fechaDesde));
-      if (fechaHasta) {
-        const hasta = new Date(fechaHasta);
-        hasta.setDate(hasta.getDate() + 1);
-        query = query.lt('fechaPago', hasta);
+      // v2.6.0: paginación (antes .limit(1000) sin skip → truncaba en
+      // silencio los rangos largos). Mismo patrón que
+      // obtenerMediaDiaSemanaAnio más abajo en este archivo.
+      let pagos = [];
+      let pagosOffset = 0;
+      let pagosHasMore = true;
+
+      while (pagosHasMore) {
+        let query = wixData.query(COLECCION_PAGOS);
+        if (fechaDesde) query = query.ge('fechaPago', new Date(fechaDesde));
+        if (fechaHasta) {
+          const hasta = new Date(fechaHasta);
+          hasta.setDate(hasta.getDate() + 1);
+          query = query.lt('fechaPago', hasta);
+        }
+        const result = await query.skip(pagosOffset).limit(1000).find();
+        const items = result.items || [];
+        pagos = pagos.concat(items);
+
+        pagosHasMore = items.length === 1000;
+        pagosOffset += 1000;
+
+        if (pagosOffset > 50000) break;
       }
-      query = query.limit(1000);
-      const result = await query.find();
-      let pagos = result.items;
+
       console.log(`${TAG} Registros brutos: ${pagos.length}`);
 
       // ══════════════════════════════════════════════════════════════
@@ -430,9 +506,154 @@ export const obtenerEstadisticas = webMethod(
       }
 
       // ══════════════════════════════════════════════════════════════
-      // 4. EXTERNOS — v2.4: solo status PAGADO
+      // 4. EXTERNOS
+      //   v2.6.0 — 4.A fuente V2 (PagoreservasExternos, por fechaPago)
+      //          + 4.B histórico V1 (SvExternalRecords) sin duplicar
+      //   v2.4   — legacy: solo status PAGADO
       // ══════════════════════════════════════════════════════════════
       let externosResult = { citas: 0, ventaBruta: 0, comisionTotal: 0, desglose: [] };
+
+      // Acumuladores comunes a las dos fuentes.
+      let extCitas = 0;
+      let extVentaBruta = 0;
+      let extComisionTotal = 0;
+      const extDesglose = {};
+
+      const acumularExterno = (nombreServicio, precio, comision) => {
+        extCitas++;
+        extVentaBruta += precio;
+        extComisionTotal += comision;
+        if (!extDesglose[nombreServicio]) {
+          extDesglose[nombreServicio] = { nombre: nombreServicio, count: 0, ventaBruta: 0, comision: 0 };
+        }
+        extDesglose[nombreServicio].count++;
+        extDesglose[nombreServicio].ventaBruta += precio;
+        extDesglose[nombreServicio].comision += comision;
+      };
+
+      // bookingIds de PagoreservasExternos vistos en el rango — sirven para
+      // no volver a contar por 4.B una cita que ya se contó por 4.A.
+      const bookingIdsV2 = new Set();
+
+      // ──────────────────────────────────────────────────────────────
+      // 4.A — FUENTE V2: PagoreservasExternos (filtrada por fechaPago)
+      //   Cruce de comisión POR EMPLEADO, replicado literalmente de
+      //   cierreExternosLogic v1.1.0 (backend del Informe del día).
+      // ──────────────────────────────────────────────────────────────
+      try {
+        // Mapa displayName(UPPER) → % comisión.
+        let mapaComisionesPorEmpleado = {};
+
+        try {
+          const extCatResult = await wixData.query(CMS_EXTERNAL_SERVICES)
+            .eq('activeStatus', true)
+            .limit(100)
+            .find({ suppressAuth: true });
+
+          const catalogoExt = extCatResult.items || [];
+
+          const resourceIds = [];
+          for (const it of catalogoExt) {
+            const rid = it.staffResourceId;
+            if (typeof rid === 'string' && rid.length > 0) resourceIds.push(rid);
+          }
+
+          let displayNamePorResourceId = {};
+          if (resourceIds.length) {
+            try {
+              const staffResult = await wixData.query(CMS_STAFF)
+                .hasSome('wixResourceId', resourceIds)
+                .limit(100)
+                .find({ suppressAuth: true });
+
+              for (const s of (staffResult.items || [])) {
+                const rid = s.wixResourceId;
+                if (typeof rid === 'string' && rid.length > 0) {
+                  const dn = s.displayName || s.canonicalName || '';
+                  if (dn) displayNamePorResourceId[rid] = dn;
+                }
+              }
+            } catch (stErr) {
+              console.warn(`${TAG} Error leyendo StaffConfig: ${stErr.message}`);
+            }
+          }
+
+          for (const item of catalogoExt) {
+            const pct = Number(item.commissionPercentage || 0);
+            const rid = item.staffResourceId;
+            const displayName = (typeof rid === 'string' && rid.length > 0)
+              ? (displayNamePorResourceId[rid] || '')
+              : '';
+
+            if (displayName) {
+              const key = displayName.trim().toUpperCase();
+              if (key) mapaComisionesPorEmpleado[key] = pct;
+            } else {
+              const contact = String(item.contactPerson || '').trim().toUpperCase();
+              if (contact) mapaComisionesPorEmpleado[contact] = pct;
+            }
+          }
+        } catch (catErr) {
+          console.warn(`${TAG} Error leyendo ExternalServices (V2): ${catErr.message}`);
+        }
+
+        // Cobros externos del rango. Mismo criterio de fecha que el resto
+        // del informe: fechaPago. Margen ±3h + filtro fino Madrid.
+        const startRangeV2 = new Date(new Date(`${fechaDesde}T00:00:00`).getTime() - 3 * 3600000);
+        const endRangeV2 = new Date(new Date(`${fechaHasta}T23:59:59`).getTime() + 3 * 3600000);
+
+        let allPagosExt = [];
+        let pgOffset = 0;
+        let pgHasMore = true;
+        while (pgHasMore) {
+          const pgResult = await wixData.query(CMS_PAGOS_EXTERNOS)
+            .ge('fechaPago', startRangeV2)
+            .le('fechaPago', endRangeV2)
+            .ascending('fechaPago')
+            .skip(pgOffset)
+            .limit(500)
+            .find({ suppressAuth: true });
+
+          const items = pgResult.items || [];
+          allPagosExt = allPagosExt.concat(items);
+          pgHasMore = items.length === 500;
+          pgOffset += 500;
+          if (pgOffset > 50000) break;
+        }
+
+        const pagosExtRango = allPagosExt.filter(p => {
+          if (!p.fechaPago) return false;
+          const madridDate = new Date(p.fechaPago).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
+          return madridDate >= fechaDesde && madridDate <= fechaHasta;
+        });
+
+        for (const pago of pagosExtRango) {
+          const bid = String(pago.bookingId || '');
+          if (bid) bookingIdsV2.add(bid);
+
+          const precio = Number(pago.importeTotal || 0);
+          const nombreServicio = nombreServicioDesdeDescripcion(pago.descripcion) || 'Servicio externo';
+
+          const staffUpper = String(pago.staff || '').trim().toUpperCase();
+          const pctComision = (staffUpper && mapaComisionesPorEmpleado[staffUpper] !== undefined)
+            ? mapaComisionesPorEmpleado[staffUpper]
+            : 0;
+
+          const comision = Math.round((precio * pctComision / 100) * 100) / 100;
+          acumularExterno(nombreServicio, precio, comision);
+        }
+
+        console.log(`${TAG} Externos V2 (PagoreservasExternos): ${pagosExtRango.length} cobros, bruta=${Math.round(extVentaBruta * 100) / 100}€`);
+      } catch (extV2Err) {
+        console.warn(`${TAG} Error externos V2: ${extV2Err.message}`);
+      }
+
+      // ──────────────────────────────────────────────────────────────
+      // 4.B — HISTÓRICO V1: SvExternalRecords
+      //   Solo las filas SIN gemela en PagoreservasExternos
+      //   (bookingId = 'EXT_' + _id). Cálculo de comisión INTACTO
+      //   respecto a v2.5.3.
+      // ──────────────────────────────────────────────────────────────
       try {
         let mapaComisiones = {};
         let comisionFallback = 0;
@@ -459,7 +680,7 @@ export const obtenerEstadisticas = webMethod(
           extOffset += 100;
         }
 
-        const citasValidas = allExtRecords.filter(item => {
+        const citasEnRango = allExtRecords.filter(item => {
           if (!item.date) return false;
           const d = new Date(item.date);
           const madridDate = d.toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
@@ -467,9 +688,39 @@ export const obtenerEstadisticas = webMethod(
           return true;
         });
 
-        let ventaBruta = 0, comisionTotal = 0;
-        const desglosePorServicio = {};
-        for (const cita of citasValidas) {
+        // ── Dedup v2.6.0 ──
+        // Paso 1: descartar las que ya se contaron en 4.A (gemela dentro
+        //         del rango).
+        let candidatas = citasEnRango.filter(item => !bookingIdsV2.has(`EXT_${item._id}`));
+
+        // Paso 2: descartar las que tienen gemela FUERA del rango. Ese
+        //         cobro pertenece a su fecha de pago y se contará en el
+        //         informe de ese periodo; contarlo aquí lo duplicaría
+        //         entre informes. Consulta en bloques de 50 ids.
+        if (candidatas.length) {
+          const idsPendientes = candidatas.map(it => `EXT_${it._id}`);
+          const conGemela = new Set();
+          for (let i = 0; i < idsPendientes.length; i += 50) {
+            const bloque = idsPendientes.slice(i, i + 50);
+            try {
+              const gemResult = await wixData.query(CMS_PAGOS_EXTERNOS)
+                .hasSome('bookingId', bloque)
+                .limit(500)
+                .find({ suppressAuth: true });
+              for (const g of (gemResult.items || [])) {
+                const bid = String(g.bookingId || '');
+                if (bid) conGemela.add(bid);
+              }
+            } catch (gemErr) {
+              console.warn(`${TAG} Error comprobando gemelas V2: ${gemErr.message}`);
+            }
+          }
+          if (conGemela.size) {
+            candidatas = candidatas.filter(it => !conGemela.has(`EXT_${it._id}`));
+          }
+        }
+
+        for (const cita of candidatas) {
           const precio = Number(cita.totalPrice || 0);
           const catUpper = (cita.category || '').trim().toUpperCase();
           let pctComision = mapaComisiones[catUpper] !== undefined ? mapaComisiones[catUpper] : 0;
@@ -480,23 +731,28 @@ export const obtenerEstadisticas = webMethod(
             if (pctComision === 0 && comisionFallback > 0) pctComision = comisionFallback;
           }
           const comision = Math.round((precio * pctComision / 100) * 100) / 100;
-          ventaBruta += precio;
-          comisionTotal += comision;
           const nombreServicio = cita.modality || cita.category || 'Servicio externo';
-          if (!desglosePorServicio[nombreServicio]) desglosePorServicio[nombreServicio] = { nombre: nombreServicio, count: 0, ventaBruta: 0, comision: 0 };
-          desglosePorServicio[nombreServicio].count++;
-          desglosePorServicio[nombreServicio].ventaBruta += precio;
-          desglosePorServicio[nombreServicio].comision += comision;
+          acumularExterno(nombreServicio, precio, comision);
         }
 
-        externosResult = {
-          citas: citasValidas.length,
-          ventaBruta: Math.round(ventaBruta * 100) / 100,
-          comisionTotal: Math.round(comisionTotal * 100) / 100,
-          desglose: Object.values(desglosePorServicio)
-        };
-        console.log(`${TAG} Externos: ${citasValidas.length} citas PAGADAS, bruta=${externosResult.ventaBruta}€, comisión=${externosResult.comisionTotal}€`);
-      } catch (extErr) { console.warn(`${TAG} Error externos: ${extErr.message}`); }
+        console.log(`${TAG} Externos V1 (SvExternalRecords): ${citasEnRango.length} en rango, ${candidatas.length} sin gemela V2`);
+      } catch (extErr) { console.warn(`${TAG} Error externos V1: ${extErr.message}`); }
+
+      // ── Consolidación de las dos fuentes ──
+      externosResult = {
+        citas: extCitas,
+        ventaBruta: Math.round(extVentaBruta * 100) / 100,
+        comisionTotal: Math.round(extComisionTotal * 100) / 100,
+        desglose: Object.values(extDesglose)
+          .map(it => ({
+            nombre: it.nombre,
+            count: it.count,
+            ventaBruta: Math.round(it.ventaBruta * 100) / 100,
+            comision: Math.round(it.comision * 100) / 100
+          }))
+          .sort((a, b) => b.ventaBruta - a.ventaBruta)
+      };
+      console.log(`${TAG} Externos TOTAL: ${externosResult.citas} cobros, bruta=${externosResult.ventaBruta}€, comisión=${externosResult.comisionTotal}€`);
 
       // ══════════════════════════════════════════════════════════════
       // 5. PRODUCTOS
@@ -567,14 +823,35 @@ export const obtenerEstadisticas = webMethod(
       }
 
       // ── Ingresos por día (cronológico) — con IVA + día semana + promedio ──
-      const diasOrdenados = Object.keys(ingresosPorDia).sort();
+      // v2.6.0: eje CONTINUO. Antes se construía solo con los días que
+      // tenían cobros, así que un día sin actividad desaparecía del eje.
+      // Ahora se recorre el rango completo y los días sin cobros valen 0.
+      // ingresosPorDia (el objeto de datos reales) NO se toca: el ranking
+      // y los promedios por día de semana siguen calculados solo sobre
+      // días con actividad.
+      const diasConDatos = Object.keys(ingresosPorDia).sort();
+      let diasOrdenados = diasConDatos;
+
+      if (fechaDesde && fechaHasta) {
+        const diasSet = new Set(diasConDatos);
+        let cursor = new Date(`${fechaDesde}T00:00:00.000Z`);
+        const finRango = new Date(`${fechaHasta}T00:00:00.000Z`);
+        let guardDias = 0;
+        while (cursor.getTime() <= finRango.getTime() && guardDias < 1100) {
+          diasSet.add(cursor.toISOString().split('T')[0]);
+          cursor = new Date(cursor.getTime() + 86400000);
+          guardDias++;
+        }
+        diasOrdenados = Array.from(diasSet).sort();
+      }
+
       const datosIngresosDia = {
         labels: diasOrdenados.map(d => { const f = new Date(d); return `${f.getDate()}/${f.getMonth() + 1}`; }),
-        valores: diasOrdenados.map(d => ingresosPorDia[d]),
+        valores: diasOrdenados.map(d => ingresosPorDia[d] || 0),
         diasSemana: diasOrdenados.map(d => DIAS_SEMANA[new Date(d).getDay()]),
         promediosDiaSemana: diasOrdenados.map(d => promedioPorDiaSemana[DIAS_SEMANA[new Date(d).getDay()]] || 0),
-        valoresBase: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d], vatRate).base),
-        valoresIva: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d], vatRate).cuota)
+        valoresBase: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d] || 0, vatRate).base),
+        valoresIva: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d] || 0, vatRate).cuota)
       };
 
       // ── Ingresos por día (ranking) — con IVA + día semana + promedio ──
