@@ -1,0 +1,1540 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KAMISUITE — Editor de Productos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+/* ═══════════════════════════════════════════════════
+   KAMISUITE — Editor de Productos Widget v1.0.2
+   PRIME · Bonos · Tarjetas Promocionales
+   Dark theme. Paleta copiada literal de edicionservicios v1.11.4.
+
+   CHANGELOG:
+   v1.0.2: UX modal de campaña — al cambiar el servicio en el selector,
+     el campo PVP se autocompleta con el precio del servicio del
+     catálogo (data-price). Solo se dispara con interacción manual del
+     usuario sobre el dropdown; al abrir el modal en modo editar, el
+     PVP guardado en la campaña se respeta (puede diferir del precio
+     actual del catálogo si el servicio cambió de precio después). El
+     "Precio promocional" no se toca: lo decide el salón.
+   v1.0.1: Dos correcciones tras prueba de Jal:
+     · ELIMINADO el toggle global promoCardsActive de la pestaña
+       Tarjetas Promocionales. Cada campaña tiene su propio toggle
+       de activación; un killswitch global es redundante.
+     · El selector de servicio del modal de campaña ahora se llena
+       desde state.todosServicios (TODOS los servicios activos del
+       catálogo, agrupados por categoría), NO desde state.serviciosConBono.
+       Una tarjeta promocional puede ser de cualquier servicio del
+       salón, no solo de los que tengan bono activo.
+   v1.0.0: Versión inicial.
+   ═══════════════════════════════════════════════════ */
+:root {
+  --bg: #0f1117;
+  --surface: #181b23;
+  --surface2: #1e222c;
+  --surface3: #252a36;
+  --border: rgba(255, 255, 255, .08);
+  --border-hover: rgba(255, 255, 255, .18);
+  --text: #e8e9ed;
+  --text-secondary: rgba(255, 255, 255, .65);
+  --muted: rgba(255, 255, 255, .40);
+  --accent: #c9a44a;
+  --accent-dim: rgba(201, 164, 74, .15);
+  --green: #36c06a;
+  --green-dim: rgba(54, 192, 106, .12);
+  --red: #e85454;
+  --red-dim: rgba(232, 84, 84, .12);
+  --blue: #4a9ec9;
+  --blue-dim: rgba(74, 158, 201, .12);
+  --purple: #9b59b6;
+  --purple-dim: rgba(155, 89, 182, .12);
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Bai Jamjuree', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+.kp-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 18px 28px 0 28px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.kp-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+.kp-title small {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 10px;
+  font-size: 12px;
+}
+.kp-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+.kp-tab {
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 12px 18px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+.kp-tab:hover { color: var(--text); }
+.kp-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.kp-main { padding: 24px 28px 60px 28px; }
+.kp-pane { display: none; }
+.kp-pane.active { display: block; }
+
+.kp-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.kp-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.kp-section-title .kp-hint {
+  font-weight: 400;
+  letter-spacing: .2px;
+  text-transform: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.kp-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.kp-field { display: flex; flex-direction: column; gap: 6px; }
+.kp-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+.kp-label small {
+  font-weight: 400;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.kp-input, .kp-textarea, .kp-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 9px 11px;
+  outline: none;
+  transition: border-color .15s, background .15s;
+  width: 100%;
+}
+.kp-input:focus, .kp-textarea:focus, .kp-select:focus {
+  border-color: var(--accent);
+  background: var(--surface3);
+}
+.kp-textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+.kp-select { cursor: pointer; }
+
+.kp-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.kp-toggle input { display: none; }
+.kp-toggle-track {
+  width: 40px;
+  height: 22px;
+  background: var(--surface3);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background .2s, border-color .2s;
+}
+.kp-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition: transform .2s, background .2s;
+}
+.kp-toggle input:checked + .kp-toggle-track {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+.kp-toggle input:checked + .kp-toggle-track::after {
+  background: var(--accent);
+  transform: translateX(18px);
+}
+.kp-toggle-label {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.kp-btn {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background .15s, border-color .15s, transform .08s;
+}
+.kp-btn:hover { background: var(--surface2); border-color: var(--border-hover); }
+.kp-btn:active { transform: translateY(1px); }
+.kp-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1408;
+  font-weight: 600;
+}
+.kp-btn.primary:hover { background: #d6b258; border-color: #d6b258; }
+.kp-btn.danger { background: var(--red-dim); border-color: rgba(232,84,84,.3); color: var(--red); }
+.kp-btn.danger:hover { background: rgba(232,84,84,.18); }
+.kp-btn.ghost { background: transparent; }
+.kp-btn.sm { padding: 6px 11px; font-size: 12px; }
+.kp-btn[disabled] { opacity: .4; cursor: not-allowed; }
+
+.kp-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.kp-img-uploader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.kp-img-preview {
+  width: 90px;
+  height: 110px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+}
+.kp-file-input { display: none; }
+
+.kp-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+}
+.kp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.kp-table thead th {
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+  font-size: 10.5px;
+  color: var(--muted);
+  padding: 10px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.kp-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.kp-table tbody tr:hover td { background: rgba(255,255,255,.02); }
+.kp-table tbody tr:last-child td { border-bottom: 0; }
+.kp-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kp-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+.kp-chip.green { background: var(--green-dim); color: var(--green); }
+.kp-chip.blue { background: var(--blue-dim); color: var(--blue); }
+.kp-chip.purple { background: var(--purple-dim); color: var(--purple); }
+.kp-chip.red { background: var(--red-dim); color: var(--red); }
+.kp-chip.muted { background: var(--surface3); color: var(--text-secondary); }
+
+.kp-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+.kp-filter-bar .kp-input, .kp-filter-bar .kp-select {
+  max-width: 220px;
+  font-size: 12.5px;
+  padding: 7px 10px;
+}
+
+.kp-modal-back {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.kp-modal-back.active { display: flex; }
+.kp-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 620px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.kp-modal-head {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.kp-modal-title { font-size: 14px; font-weight: 600; }
+.kp-modal-x {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.kp-modal-x:hover { color: var(--text); }
+.kp-modal-body { padding: 20px; }
+.kp-modal-foot {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.kp-toasts {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 200;
+  pointer-events: none;
+}
+.kp-toast {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: var(--text);
+  font-size: 12.5px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  max-width: 340px;
+  pointer-events: auto;
+}
+.kp-toast.ok { border-left: 3px solid var(--green); }
+.kp-toast.err { border-left: 3px solid var(--red); }
+.kp-toast.warn { border-left: 3px solid var(--accent); }
+
+.kp-bonocards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.kp-bonocard {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.kp-bonocard h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text);
+}
+.kp-bonocard .kp-bonocard-cat {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 10px;
+}
+.kp-bonocard-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.kp-bonocard-meta strong { color: var(--text); font-weight: 600; }
+.kp-bonocard-price {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.kp-bonocard-price .raw {
+  text-decoration: line-through;
+  color: var(--muted);
+  font-size: 11px;
+}
+.kp-bonocard-price .final {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.kp-campaign-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.kp-campaign-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.kp-campaign-img {
+  height: 140px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--surface3);
+  border-bottom: 1px solid var(--border);
+}
+.kp-campaign-body { padding: 12px 14px; flex: 1; }
+.kp-campaign-body h4 { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
+.kp-campaign-body .svc { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+.kp-campaign-body .desc { font-size: 12px; color: var(--text-secondary); margin-top: 8px; max-height: 48px; overflow: hidden; }
+.kp-campaign-foot {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.kp-campaign-foot .price-block { font-size: 12.5px; }
+.kp-campaign-foot .price-block .raw { text-decoration: line-through; color: var(--muted); margin-right: 6px; font-size: 11px; }
+.kp-campaign-foot .price-block .final { color: var(--accent); font-weight: 600; }
+.kp-campaign-foot .actions { display: flex; gap: 6px; }
+
+.kp-helper {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 6px;
+  line-height: 1.45;
+}
+.kp-helper a { color: var(--blue); text-decoration: none; }
+.kp-helper a:hover { text-decoration: underline; }
+
+@media (max-width: 700px) {
+  .kp-header { padding: 14px 16px 0 16px; }
+  .kp-main { padding: 18px 16px 60px 16px; }
+  .kp-tab { padding: 10px 12px; font-size: 11.5px; }
+  .kp-actions { flex-wrap: wrap; }
+}
+  </style>
+</head>
+<body>
+
+<div class="kp-header">
+  <div class="kp-title">
+    KAMISUITE · Editor de Productos
+    <small>PRIME · Bonos · Tarjetas Promocionales</small>
+  </div>
+  <div class="kp-tabs">
+    <button class="kp-tab active" data-tab="prime">Tarjeta PRIME</button>
+    <button class="kp-tab" data-tab="bonos">Bonos</button>
+    <button class="kp-tab" data-tab="promo">Tarjetas Promocionales</button>
+  </div>
+</div>
+
+<div class="kp-main">
+
+  <!-- PESTAÑA PRIME -->
+  <div class="kp-pane active" id="paneprime">
+
+    <div class="kp-section">
+      <div class="kp-section-title">
+        Configuración de la Tarjeta PRIME
+        <span class="kp-hint">Estos valores se aplican al producto en la web y en recepción</span>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field">
+          <label class="kp-toggle">
+            <input type="checkbox" id="primeActive">
+            <span class="kp-toggle-track"></span>
+            <span class="kp-toggle-label">Venta activa</span>
+          </label>
+          <div class="kp-helper">Si está apagado, el producto no se vende ni online ni en recepción</div>
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Precio anual <small>(€)</small></label>
+          <input type="number" min="0" step="0.01" class="kp-input" id="primeAnnualPrice" placeholder="0">
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Duración <small>(meses)</small></label>
+          <input type="number" min="1" max="120" step="1" class="kp-input" id="primeDurationMonths" placeholder="12">
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Recordatorio antes de vencer <small>(días)</small></label>
+          <input type="number" min="0" max="365" step="1" class="kp-input" id="primeReminderDays" placeholder="7">
+        </div>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field" style="grid-column: 1 / -1;">
+          <label class="kp-label">Beneficios <small>(texto comercial mostrado al cliente)</small></label>
+          <textarea class="kp-textarea" id="primeBenefits" placeholder="Descripción de qué incluye la tarjeta PRIME"></textarea>
+        </div>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field">
+          <label class="kp-label">Imagen de la tarjeta</label>
+          <div class="kp-img-uploader">
+            <div class="kp-img-preview" id="primeImagePreview">sin imagen</div>
+            <div>
+              <input type="file" accept="image/*" class="kp-file-input" id="primeImageFile">
+              <button type="button" class="kp-btn sm" id="primeImageBtn">Subir imagen</button>
+              <div class="kp-helper">JPG o PNG. Recomendado 800×1000</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kp-actions">
+        <button type="button" class="kp-btn primary" id="primeSaveBtn">Guardar configuración</button>
+      </div>
+    </div>
+
+    <div class="kp-section">
+      <div class="kp-section-title">
+        Tarjetas PRIME emitidas
+        <span class="kp-hint">Histórico de membresías vendidas</span>
+      </div>
+      <div class="kp-filter-bar">
+        <input type="text" class="kp-input" id="primeSearch" placeholder="Buscar por código, nombre o teléfono...">
+        <select class="kp-select" id="primeStatusFilter">
+          <option value="">Todos los estados</option>
+          <option value="ACTIVA">Activas</option>
+          <option value="VENCIDA">Vencidas</option>
+          <option value="CANCELADA">Canceladas</option>
+        </select>
+        <button type="button" class="kp-btn sm ghost" id="primeRefreshBtn">Refrescar</button>
+      </div>
+      <div id="primeListWrap"></div>
+    </div>
+  </div>
+
+  <!-- PESTAÑA BONOS -->
+  <div class="kp-pane" id="panebonos">
+
+    <div class="kp-section">
+      <div class="kp-section-title">
+        Configuración de Bonos
+        <span class="kp-hint">Aplica a todos los bonos que se vendan</span>
+      </div>
+      <div class="kp-row">
+        <div class="kp-field">
+          <label class="kp-toggle">
+            <input type="checkbox" id="vouchersActive">
+            <span class="kp-toggle-track"></span>
+            <span class="kp-toggle-label">Venta de bonos activa</span>
+          </label>
+          <div class="kp-helper">Si está apagado, no se pueden comprar bonos</div>
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Validez del bono <small>(meses desde la emisión)</small></label>
+          <input type="number" min="1" max="120" step="1" class="kp-input" id="voucherValidityMonths" placeholder="12">
+        </div>
+      </div>
+      <div class="kp-actions">
+        <button type="button" class="kp-btn primary" id="bonosConfigSaveBtn">Guardar configuración</button>
+      </div>
+    </div>
+
+    <div class="kp-section">
+      <div class="kp-section-title">
+        Servicios con bono activado
+        <span class="kp-hint">Solo lectura · edita los valores desde el Editor de Servicios</span>
+      </div>
+      <div id="bonoCardsWrap"></div>
+      <div class="kp-helper" style="margin-top:12px;">
+        Para activar o ajustar el bono de un servicio (toggle, número de usos, % descuento), ve a <strong>Edición de Servicios Internos</strong> y edita la ficha del servicio.
+      </div>
+    </div>
+
+    <div class="kp-section">
+      <div class="kp-section-title">
+        Bonos emitidos
+        <span class="kp-hint">Histórico de bonos vendidos</span>
+      </div>
+      <div class="kp-filter-bar">
+        <input type="text" class="kp-input" id="voucherSearch" placeholder="Buscar por código, cliente o servicio...">
+        <select class="kp-select" id="voucherStatusFilter">
+          <option value="">Todos los estados</option>
+          <option value="EMITIDO">Emitidos</option>
+          <option value="AGOTADO">Agotados</option>
+          <option value="CADUCADO">Caducados</option>
+          <option value="CANCELADA">Cancelados</option>
+        </select>
+        <button type="button" class="kp-btn sm ghost" id="voucherRefreshBtn">Refrescar</button>
+      </div>
+      <div id="voucherListWrap"></div>
+    </div>
+  </div>
+
+  <!-- PESTAÑA TARJETAS PROMOCIONALES
+       v1.0.1: ELIMINADA la sección de configuración global. Cada
+       campaña tiene su propio toggle activa/inactiva. -->
+  <div class="kp-pane" id="panepromo">
+
+    <div class="kp-section">
+      <div class="kp-section-title">
+        Campañas
+        <button type="button" class="kp-btn sm primary" id="campaignNewBtn">+ Nueva campaña</button>
+      </div>
+      <div class="kp-helper" style="margin-bottom:14px;">
+        Cada campaña se activa o desactiva individualmente. Los clientes solo verán las campañas marcadas como activas y dentro de su ventana de fechas.
+      </div>
+      <div id="campaignsWrap"></div>
+    </div>
+
+    <div class="kp-section">
+      <div class="kp-section-title">
+        Tarjetas emitidas
+        <span class="kp-hint">Histórico de tarjetas vendidas</span>
+      </div>
+      <div class="kp-filter-bar">
+        <input type="text" class="kp-input" id="cardSearch" placeholder="Buscar por código, comprador o beneficiario...">
+        <select class="kp-select" id="cardStatusFilter">
+          <option value="">Todos los estados</option>
+          <option value="EMITIDA">Emitidas</option>
+          <option value="CANJEADA">Canjeadas</option>
+          <option value="CADUCADA">Caducadas</option>
+          <option value="CANCELADA">Canceladas</option>
+        </select>
+        <button type="button" class="kp-btn sm ghost" id="cardRefreshBtn">Refrescar</button>
+      </div>
+      <div id="cardListWrap"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- MODAL CAMPAÑA -->
+<div class="kp-modal-back" id="campaignModalBack">
+  <div class="kp-modal">
+    <div class="kp-modal-head">
+      <div class="kp-modal-title" id="campaignModalTitle">Nueva campaña</div>
+      <button class="kp-modal-x" id="campaignModalCloseBtn">×</button>
+    </div>
+    <div class="kp-modal-body">
+      <input type="hidden" id="campaignEditId">
+
+      <div class="kp-row">
+        <div class="kp-field" style="grid-column: 1 / -1;">
+          <label class="kp-label">Nombre de la campaña</label>
+          <input type="text" class="kp-input" id="campaignLabel" placeholder="Ej. Tarjeta Botox San Valentín">
+        </div>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field" style="grid-column: 1 / -1;">
+          <label class="kp-label">Servicio</label>
+          <select class="kp-select" id="campaignService"></select>
+          <div class="kp-helper">Cualquier servicio activo del catálogo (agrupado por categoría)</div>
+        </div>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field">
+          <label class="kp-label">PVP <small>(€)</small></label>
+          <input type="number" min="0" step="0.01" class="kp-input" id="campaignRetail" placeholder="100">
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Precio promocional <small>(€)</small></label>
+          <input type="number" min="0" step="0.01" class="kp-input" id="campaignPromo" placeholder="85">
+        </div>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field">
+          <label class="kp-label">Fecha de inicio</label>
+          <input type="date" class="kp-input" id="campaignStart">
+        </div>
+        <div class="kp-field">
+          <label class="kp-label">Fecha de fin</label>
+          <input type="date" class="kp-input" id="campaignEnd">
+        </div>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field" style="grid-column: 1 / -1;">
+          <label class="kp-label">Descripción</label>
+          <textarea class="kp-textarea" id="campaignDescription" placeholder="Texto comercial mostrado al cliente"></textarea>
+        </div>
+      </div>
+
+      <div class="kp-row">
+        <div class="kp-field">
+          <label class="kp-label">Imagen de la campaña</label>
+          <div class="kp-img-uploader">
+            <div class="kp-img-preview" id="campaignImagePreview">sin imagen</div>
+            <div>
+              <input type="file" accept="image/*" class="kp-file-input" id="campaignImageFile">
+              <button type="button" class="kp-btn sm" id="campaignImageBtn">Subir imagen</button>
+              <div class="kp-helper">Disponible solo al editar (la campaña debe estar creada)</div>
+            </div>
+          </div>
+        </div>
+        <div class="kp-field">
+          <label class="kp-toggle" style="margin-top: 20px;">
+            <input type="checkbox" id="campaignActive">
+            <span class="kp-toggle-track"></span>
+            <span class="kp-toggle-label">Campaña activa</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="kp-modal-foot">
+      <button type="button" class="kp-btn ghost" id="campaignCancelBtn">Cancelar</button>
+      <button type="button" class="kp-btn danger" id="campaignDeleteBtn" style="display:none;">Eliminar campaña</button>
+      <button type="button" class="kp-btn primary" id="campaignSaveBtn">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="kp-toasts" id="toasts"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ═══════════════════════════════════════════════════
+  // ESTADO GLOBAL
+  // ═══════════════════════════════════════════════════
+  var state = {
+    config: null,
+    serviciosConBono: [],
+    todosServicios: [],   // v1.0.1: TODOS los servicios activos del catálogo
+    campaigns: [],
+    memberships: [],
+    vouchers: [],
+    cards: [],
+    bootstrapped: false
+  };
+
+  // ═══════════════════════════════════════════════════
+  // POST MESSAGE BRIDGE
+  // ═══════════════════════════════════════════════════
+  function send(type, payload) {
+    try {
+      window.parent.postMessage({ type: type, payload: payload || {} }, '*');
+    } catch (e) {
+      console.error('[GestorBP] postMessage error:', e);
+    }
+  }
+
+  var readyTimer = null;
+  function startReadyRetry() {
+    var fired = 0;
+    function ping() {
+      if (state.bootstrapped) {
+        if (readyTimer) clearInterval(readyTimer);
+        return;
+      }
+      fired++;
+      send('ready');
+      if (fired > 20) {
+        if (readyTimer) clearInterval(readyTimer);
+        toast('No se ha podido cargar el editor. Recarga la página.', 'err');
+      }
+    }
+    ping();
+    readyTimer = setInterval(ping, 700);
+  }
+
+  window.addEventListener('message', function (event) {
+    var msg = event.data;
+    if (!msg || typeof msg !== 'object' || !msg.type) return;
+    handleMessage(msg);
+  });
+
+  function handleMessage(msg) {
+    var p = msg.payload || {};
+    switch (msg.type) {
+      case 'bootstrap':
+        state.config = p.config || null;
+        state.serviciosConBono = p.serviciosConBono || [];
+        state.todosServicios = p.todosServicios || [];
+        state.campaigns = p.campaigns || [];
+        state.memberships = p.memberships || [];
+        state.vouchers = p.vouchers || [];
+        state.cards = p.cards || [];
+        state.bootstrapped = true;
+        renderAll();
+        break;
+
+      case 'config':
+        state.config = p.config || null;
+        renderConfigForms();
+        break;
+
+      case 'configSaved':
+        state.config = p.config || state.config;
+        renderConfigForms();
+        toast('Configuración guardada', 'ok');
+        break;
+
+      case 'configSaveError':
+        toast('Error al guardar: ' + (msg.message || ''), 'err');
+        break;
+
+      case 'imageUploaded':
+        if (p.target === 'config') {
+          state.config = state.config || {};
+          state.config[p.campo] = p.fileUrl;
+          state.config.primeImagePublicUrl = p.publicUrl;
+          updateImagePreview('primeImagePreview', p.publicUrl);
+          toast('Imagen subida', 'ok');
+        } else if (p.target === 'campaign') {
+          for (var i = 0; i < state.campaigns.length; i++) {
+            if (state.campaigns[i]._id === p.campaignId) {
+              state.campaigns[i].image = p.fileUrl;
+              state.campaigns[i].imagePublicUrl = p.publicUrl;
+              break;
+            }
+          }
+          updateImagePreview('campaignImagePreview', p.publicUrl);
+          renderCampaigns();
+          toast('Imagen subida', 'ok');
+        }
+        break;
+
+      case 'imageUploadError':
+        toast('Error subiendo imagen: ' + (msg.message || ''), 'err');
+        break;
+
+      case 'serviciosConBono':
+        state.serviciosConBono = p.servicios || [];
+        renderBonoCards();
+        break;
+
+      case 'todosServicios':
+        state.todosServicios = p.servicios || [];
+        renderCampaignServiceSelect();
+        break;
+
+      case 'campaigns':
+        state.campaigns = p.campaigns || [];
+        renderCampaigns();
+        break;
+
+      case 'campaignSaved':
+        var saved = p.campaign;
+        if (!saved) break;
+        var idx = -1;
+        for (var j = 0; j < state.campaigns.length; j++) {
+          if (state.campaigns[j]._id === saved._id) { idx = j; break; }
+        }
+        if (idx >= 0) state.campaigns[idx] = saved;
+        else state.campaigns.unshift(saved);
+        renderCampaigns();
+        closeCampaignModal();
+        toast('Campaña guardada', 'ok');
+        break;
+
+      case 'campaignDeleted':
+        state.campaigns = state.campaigns.filter(function (c) { return c._id !== p._id; });
+        renderCampaigns();
+        closeCampaignModal();
+        toast('Campaña eliminada', 'ok');
+        break;
+
+      case 'campaignError':
+        toast('Error en campaña: ' + (msg.message || ''), 'err');
+        break;
+
+      case 'memberships':
+        state.memberships = p.memberships || [];
+        renderMemberships();
+        break;
+
+      case 'vouchers':
+        state.vouchers = p.vouchers || [];
+        renderVouchers();
+        break;
+
+      case 'cards':
+        state.cards = p.cards || [];
+        renderCards();
+        break;
+
+      case 'revoked':
+        var kind = p.kind;
+        if (kind === 'prime') {
+          state.memberships = state.memberships.map(function (m) {
+            return m._id === p._id ? Object.assign({}, m, { status: p.status }) : m;
+          });
+          renderMemberships();
+        } else if (kind === 'voucher') {
+          state.vouchers = state.vouchers.map(function (v) {
+            return v._id === p._id ? Object.assign({}, v, { status: p.status }) : v;
+          });
+          renderVouchers();
+        } else if (kind === 'card') {
+          state.cards = state.cards.map(function (c) {
+            return c._id === p._id ? Object.assign({}, c, { status: p.status }) : c;
+          });
+          renderCards();
+        }
+        toast('Revocado correctamente', 'ok');
+        break;
+
+      case 'revokeError':
+        toast('Error revocando: ' + (msg.message || ''), 'err');
+        break;
+
+      case 'error':
+        toast('Error: ' + (msg.message || ''), 'err');
+        break;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  // UTILIDADES
+  // ═══════════════════════════════════════════════════
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function fmtMoney(n) {
+    if (n === null || n === undefined || isNaN(n)) return '—';
+    return Number(n).toFixed(2).replace('.', ',') + ' €';
+  }
+  function fmtDate(d) {
+    if (!d) return '—';
+    try {
+      var dt = new Date(d);
+      if (isNaN(dt.getTime())) return '—';
+      var dd = String(dt.getDate()).padStart(2, '0');
+      var mm = String(dt.getMonth() + 1).padStart(2, '0');
+      var yy = dt.getFullYear();
+      return dd + '/' + mm + '/' + yy;
+    } catch (e) { return '—'; }
+  }
+  function fmtDateInput(d) {
+    if (!d) return '';
+    try {
+      var dt = new Date(d);
+      if (isNaN(dt.getTime())) return '';
+      var dd = String(dt.getDate()).padStart(2, '0');
+      var mm = String(dt.getMonth() + 1).padStart(2, '0');
+      var yy = dt.getFullYear();
+      return yy + '-' + mm + '-' + dd;
+    } catch (e) { return ''; }
+  }
+  function statusChip(status) {
+    if (!status) return '<span class="kp-chip muted">—</span>';
+    var s = String(status).toUpperCase();
+    var cls = 'muted';
+    if (s === 'ACTIVA' || s === 'EMITIDO' || s === 'EMITIDA') cls = 'green';
+    else if (s === 'CANJEADA' || s === 'AGOTADO') cls = 'blue';
+    else if (s === 'VENCIDA' || s === 'CADUCADA' || s === 'CADUCADO') cls = 'purple';
+    else if (s === 'CANCELADA') cls = 'red';
+    return '<span class="kp-chip ' + cls + '">' + esc(s) + '</span>';
+  }
+  function toast(text, type) {
+    var t = document.createElement('div');
+    t.className = 'kp-toast ' + (type || 'ok');
+    t.textContent = text;
+    $('toasts').appendChild(t);
+    setTimeout(function () {
+      t.style.transition = 'opacity .3s';
+      t.style.opacity = '0';
+      setTimeout(function () {
+        if (t.parentNode) t.parentNode.removeChild(t);
+      }, 320);
+    }, 3200);
+  }
+  function updateImagePreview(elId, url) {
+    var el = $(elId);
+    if (!el) return;
+    if (url) {
+      el.style.backgroundImage = 'url(' + url + ')';
+      el.textContent = '';
+    } else {
+      el.style.backgroundImage = '';
+      el.textContent = 'sin imagen';
+    }
+  }
+  function readFileAsBase64(file, cb) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var dataUrl = reader.result;
+      var comma = dataUrl.indexOf(',');
+      var base64 = comma >= 0 ? dataUrl.substring(comma + 1) : dataUrl;
+      cb(null, { base64: base64, fileName: file.name, mimeType: file.type });
+    };
+    reader.onerror = function () { cb(new Error('No se pudo leer el archivo')); };
+    reader.readAsDataURL(file);
+  }
+
+  // ═══════════════════════════════════════════════════
+  // TABS
+  // ═══════════════════════════════════════════════════
+  document.querySelectorAll('.kp-tab').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var tab = btn.getAttribute('data-tab');
+      document.querySelectorAll('.kp-tab').forEach(function (b) { b.classList.remove('active'); });
+      document.querySelectorAll('.kp-pane').forEach(function (p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      var pane = $('pane' + tab);
+      if (pane) pane.classList.add('active');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════
+  // RENDER GLOBAL
+  // ═══════════════════════════════════════════════════
+  function renderAll() {
+    renderConfigForms();
+    renderBonoCards();
+    renderCampaigns();
+    renderCampaignServiceSelect();
+    renderMemberships();
+    renderVouchers();
+    renderCards();
+  }
+
+  function renderConfigForms() {
+    var c = state.config || {};
+    $('primeActive').checked = !!c.primeActive;
+    $('primeAnnualPrice').value = c.primeAnnualPrice != null ? c.primeAnnualPrice : '';
+    $('primeDurationMonths').value = c.primeDurationMonths != null ? c.primeDurationMonths : 12;
+    $('primeReminderDays').value = c.primeReminderDays != null ? c.primeReminderDays : 7;
+    $('primeBenefits').value = c.primeBenefits || '';
+    updateImagePreview('primeImagePreview', c.primeImagePublicUrl || c.primeImage || '');
+
+    $('vouchersActive').checked = !!c.vouchersActive;
+    $('voucherValidityMonths').value = c.voucherValidityMonths != null ? c.voucherValidityMonths : 12;
+
+    // v1.0.1: ya no se pinta promoCardsActive — el campo se ignora en
+    // la UI del editor. Cada campaña controla su propia activación.
+  }
+
+  // ─── Servicios con bono (read-only) ───
+  function renderBonoCards() {
+    var wrap = $('bonoCardsWrap');
+    if (!state.serviciosConBono.length) {
+      wrap.innerHTML = '<div class="kp-empty">Aún no hay servicios con bono activado. Ve al <strong>Editor de Servicios</strong>, abre un servicio y activa "Bonos" en su ficha.</div>';
+      return;
+    }
+    var html = '<div class="kp-bonocards">';
+    state.serviciosConBono.forEach(function (s) {
+      html += '<div class="kp-bonocard">'
+        + '<h4>' + esc(s.label) + '</h4>'
+        + '<div class="kp-bonocard-cat">' + esc(s.category || '') + '</div>'
+        + '<div class="kp-bonocard-meta">'
+          + '<div>Usos del bono: <strong>' + s.bonoNumero + '</strong></div>'
+          + '<div>Descuento: <strong>' + s.bonoDescuento + ' %</strong></div>'
+          + '<div>Precio servicio: <strong>' + fmtMoney(s.price) + '</strong></div>'
+          + '<div>PVP bruto: <strong>' + fmtMoney(s.precioBrutoCalculado) + '</strong></div>'
+        + '</div>'
+        + '<div class="kp-bonocard-price">'
+          + '<span class="raw">' + fmtMoney(s.precioBrutoCalculado) + '</span>'
+          + '<span class="final">' + fmtMoney(s.precioBonoCalculado) + '</span>'
+        + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+    wrap.innerHTML = html;
+  }
+
+  // ─── Selector de servicio del modal de campaña ───
+  // v1.0.1: usa state.todosServicios, NO state.serviciosConBono.
+  // Agrupa por categoría con optgroup para que sea navegable.
+  function renderCampaignServiceSelect() {
+    var sel = $('campaignService');
+    if (!sel) return;
+
+    if (!state.todosServicios.length) {
+      sel.innerHTML = '<option value="">— No hay servicios activos en el catálogo —</option>';
+      return;
+    }
+
+    // Agrupar por categoría manteniendo el orden ya recibido del backend
+    // (que viene ordenado por categoría y luego por label).
+    var grupos = {};
+    var ordenCategorias = [];
+    state.todosServicios.forEach(function (s) {
+      var cat = s.category || 'Otros';
+      if (!grupos[cat]) {
+        grupos[cat] = [];
+        ordenCategorias.push(cat);
+      }
+      grupos[cat].push(s);
+    });
+
+    var html = '<option value="">— Selecciona un servicio —</option>';
+    ordenCategorias.forEach(function (cat) {
+      html += '<optgroup label="' + esc(cat) + '">';
+      grupos[cat].forEach(function (s) {
+        var precio = (s.price != null && !isNaN(s.price)) ? (' · ' + fmtMoney(s.price)) : '';
+        html += '<option value="' + esc(s.setupUid) + '" data-label="' + esc(s.label) + '" data-price="' + (s.price || 0) + '">'
+          + esc(s.label) + precio
+          + '</option>';
+      });
+      html += '</optgroup>';
+    });
+    sel.innerHTML = html;
+  }
+
+  // ─── Campañas ───
+  function renderCampaigns() {
+    var wrap = $('campaignsWrap');
+    if (!state.campaigns.length) {
+      wrap.innerHTML = '<div class="kp-empty">Aún no hay campañas. Pulsa "+ Nueva campaña" para crear la primera.</div>';
+      return;
+    }
+    var html = '<div class="kp-campaign-list">';
+    state.campaigns.forEach(function (c) {
+      var imgUrl = c.imagePublicUrl || c.image || '';
+      html += '<div class="kp-campaign-card">'
+        + '<div class="kp-campaign-img"' + (imgUrl ? ' style="background-image:url(' + esc(imgUrl) + ')"' : '') + '></div>'
+        + '<div class="kp-campaign-body">'
+          + '<h4>' + esc(c.label) + ' ' + (c.active ? '<span class="kp-chip green">activa</span>' : '<span class="kp-chip muted">inactiva</span>') + '</h4>'
+          + '<div class="svc">' + esc(c.serviceLabel || c.serviceSetupUid || '') + '</div>'
+          + '<div class="desc">' + esc(c.description || '') + '</div>'
+        + '</div>'
+        + '<div class="kp-campaign-foot">'
+          + '<div class="price-block"><span class="raw">' + fmtMoney(c.retailPrice) + '</span><span class="final">' + fmtMoney(c.promoPrice) + '</span></div>'
+          + '<div class="actions"><button type="button" class="kp-btn sm" data-edit-campaign="' + esc(c._id) + '">Editar</button></div>'
+        + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+    wrap.innerHTML = html;
+
+    wrap.querySelectorAll('[data-edit-campaign]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        openCampaignModal(b.getAttribute('data-edit-campaign'));
+      });
+    });
+  }
+
+  // ─── Listado tabular de PRIME ───
+  function renderMemberships() {
+    var wrap = $('primeListWrap');
+    var q = ($('primeSearch').value || '').toLowerCase().trim();
+    var status = $('primeStatusFilter').value;
+    var items = state.memberships.filter(function (m) {
+      if (status && (m.status || '').toUpperCase() !== status) return false;
+      if (q) {
+        var hay = (m.code + ' ' + m.buyerName + ' ' + m.buyerEmail + ' ' + m.buyerPhone).toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+    if (!items.length) {
+      wrap.innerHTML = '<div class="kp-empty">No hay tarjetas PRIME que cumplan los filtros.</div>';
+      return;
+    }
+    var html = '<div class="kp-table-wrap"><table class="kp-table"><thead><tr>'
+      + '<th>Código</th><th>Cliente</th><th>Emitida</th><th>Vence</th><th>Importe</th><th>Pago</th><th>Estado</th><th></th>'
+      + '</tr></thead><tbody>';
+    items.forEach(function (m) {
+      html += '<tr>'
+        + '<td>' + esc(m.code) + '</td>'
+        + '<td>' + esc(m.buyerName) + '<br><small style="color:var(--muted)">' + esc(m.buyerPhone || m.buyerEmail || '') + '</small></td>'
+        + '<td>' + fmtDate(m.issueDate) + '</td>'
+        + '<td>' + fmtDate(m.expirationDate) + '</td>'
+        + '<td>' + fmtMoney(m.paidPrice) + '</td>'
+        + '<td>' + esc(m.paymentMethod || '—') + '</td>'
+        + '<td>' + statusChip(m.status) + '</td>'
+        + '<td style="text-align:right;">'
+          + (m.status === 'CANCELADA' ? '' : '<button type="button" class="kp-btn sm danger" data-revoke-prime="' + esc(m._id) + '">Revocar</button>')
+        + '</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('[data-revoke-prime]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.getAttribute('data-revoke-prime');
+        if (!confirm('¿Revocar esta tarjeta PRIME? La acción no se puede deshacer.')) return;
+        send('revocarPrimeMembership', { _id: id });
+      });
+    });
+  }
+
+  // ─── Listado tabular de Bonos ───
+  function renderVouchers() {
+    var wrap = $('voucherListWrap');
+    var q = ($('voucherSearch').value || '').toLowerCase().trim();
+    var status = $('voucherStatusFilter').value;
+    var items = state.vouchers.filter(function (v) {
+      if (status && (v.status || '').toUpperCase() !== status) return false;
+      if (q) {
+        var hay = (v.code + ' ' + v.contactId + ' ' + v.serviceLabel).toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+    if (!items.length) {
+      wrap.innerHTML = '<div class="kp-empty">No hay bonos que cumplan los filtros.</div>';
+      return;
+    }
+    var html = '<div class="kp-table-wrap"><table class="kp-table"><thead><tr>'
+      + '<th>Código</th><th>Servicio</th><th>Cliente</th><th>Usos</th><th>Emitido</th><th>Caduca</th><th>Importe</th><th>Estado</th><th></th>'
+      + '</tr></thead><tbody>';
+    items.forEach(function (v) {
+      var usos = v.remainingUses + ' / ' + v.totalUses;
+      html += '<tr>'
+        + '<td>' + esc(v.code) + '</td>'
+        + '<td>' + esc(v.serviceLabel) + '</td>'
+        + '<td><small style="color:var(--muted)">' + esc(v.contactId) + '</small></td>'
+        + '<td><strong>' + usos + '</strong></td>'
+        + '<td>' + fmtDate(v.issueDate) + '</td>'
+        + '<td>' + fmtDate(v.expirationDate) + '</td>'
+        + '<td>' + fmtMoney(v.paidPrice) + '</td>'
+        + '<td>' + statusChip(v.status) + '</td>'
+        + '<td style="text-align:right;">'
+          + (v.status === 'CANCELADA' ? '' : '<button type="button" class="kp-btn sm danger" data-revoke-voucher="' + esc(v._id) + '">Revocar</button>')
+        + '</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('[data-revoke-voucher]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.getAttribute('data-revoke-voucher');
+        if (!confirm('¿Revocar este bono? Los usos restantes se perderán.')) return;
+        send('revocarVoucher', { _id: id });
+      });
+    });
+  }
+
+  // ─── Listado tabular de Tarjetas Promocionales ───
+  function renderCards() {
+    var wrap = $('cardListWrap');
+    var q = ($('cardSearch').value || '').toLowerCase().trim();
+    var status = $('cardStatusFilter').value;
+    var items = state.cards.filter(function (c) {
+      if (status && (c.status || '').toUpperCase() !== status) return false;
+      if (q) {
+        var hay = (c.code + ' ' + c.buyerName + ' ' + c.recipientName + ' ' + c.serviceLabel).toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+    if (!items.length) {
+      wrap.innerHTML = '<div class="kp-empty">No hay tarjetas que cumplan los filtros.</div>';
+      return;
+    }
+    var html = '<div class="kp-table-wrap"><table class="kp-table"><thead><tr>'
+      + '<th>Código</th><th>Servicio</th><th>Comprador</th><th>Beneficiario</th><th>Emitida</th><th>Importe</th><th>Estado</th><th></th>'
+      + '</tr></thead><tbody>';
+    items.forEach(function (c) {
+      html += '<tr>'
+        + '<td>' + esc(c.code) + '</td>'
+        + '<td>' + esc(c.serviceLabel) + '</td>'
+        + '<td>' + esc(c.buyerName) + '<br><small style="color:var(--muted)">' + esc(c.buyerPhone || c.buyerEmail || '') + '</small></td>'
+        + '<td>' + (c.isGift ? esc(c.recipientName || '(regalo)') : '<span style="color:var(--muted)">—</span>') + '</td>'
+        + '<td>' + fmtDate(c.issueDate) + '</td>'
+        + '<td>' + fmtMoney(c.paidPrice) + '</td>'
+        + '<td>' + statusChip(c.status) + '</td>'
+        + '<td style="text-align:right;">'
+          + (c.status === 'CANCELADA' || c.status === 'CANJEADA' ? '' : '<button type="button" class="kp-btn sm danger" data-revoke-card="' + esc(c._id) + '">Revocar</button>')
+        + '</td>'
+        + '</tr>';
+    });
+    html += '</tbody></table></div>';
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('[data-revoke-card]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.getAttribute('data-revoke-card');
+        if (!confirm('¿Revocar esta tarjeta promocional?')) return;
+        send('revocarPromoCard', { _id: id });
+      });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════
+  // CONFIG SAVE HANDLERS
+  // v1.0.1: eliminado el handler de Tarjetas Promocionales — ya no
+  // existe ese formulario en la pestaña.
+  // ═══════════════════════════════════════════════════
+  $('primeSaveBtn').addEventListener('click', function () {
+    send('saveConfig', {
+      primeActive: $('primeActive').checked,
+      primeAnnualPrice: Number($('primeAnnualPrice').value || 0),
+      primeDurationMonths: Number($('primeDurationMonths').value || 12),
+      primeReminderDays: Number($('primeReminderDays').value || 7),
+      primeBenefits: $('primeBenefits').value
+    });
+  });
+
+  $('bonosConfigSaveBtn').addEventListener('click', function () {
+    send('saveConfig', {
+      vouchersActive: $('vouchersActive').checked,
+      voucherValidityMonths: Number($('voucherValidityMonths').value || 12)
+    });
+  });
+
+  // ═══════════════════════════════════════════════════
+  // UPLOAD HANDLERS
+  // ═══════════════════════════════════════════════════
+  $('primeImageBtn').addEventListener('click', function () {
+    $('primeImageFile').click();
+  });
+  $('primeImageFile').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    readFileAsBase64(file, function (err, data) {
+      if (err) { toast('Error leyendo archivo', 'err'); return; }
+      send('uploadConfigImage', {
+        base64Data: data.base64,
+        fileName: data.fileName,
+        mimeType: data.mimeType,
+        campo: 'primeImage'
+      });
+    });
+    e.target.value = '';
+  });
+
+  $('campaignImageBtn').addEventListener('click', function () {
+    var id = $('campaignEditId').value;
+    if (!id) {
+      toast('Guarda la campaña primero, luego sube la imagen', 'warn');
+      return;
+    }
+    $('campaignImageFile').click();
+  });
+  $('campaignImageFile').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var campaignId = $('campaignEditId').value;
+    if (!campaignId) { toast('Guarda la campaña primero', 'warn'); return; }
+    readFileAsBase64(file, function (err, data) {
+      if (err) { toast('Error leyendo archivo', 'err'); return; }
+      send('uploadCampaignImage', {
+        campaignId: campaignId,
+        base64Data: data.base64,
+        fileName: data.fileName,
+        mimeType: data.mimeType
+      });
+    });
+    e.target.value = '';
+  });
+
+  // ═══════════════════════════════════════════════════
+  // MODAL DE CAMPAÑA
+  // ═══════════════════════════════════════════════════
+  function openCampaignModal(id) {
+    var c = null;
+    if (id) {
+      for (var i = 0; i < state.campaigns.length; i++) {
+        if (state.campaigns[i]._id === id) { c = state.campaigns[i]; break; }
+      }
+    }
+    $('campaignModalTitle').textContent = c ? 'Editar campaña' : 'Nueva campaña';
+    $('campaignEditId').value = c ? c._id : '';
+    $('campaignLabel').value = c ? (c.label || '') : '';
+    $('campaignService').value = c ? (c.serviceSetupUid || '') : '';
+    $('campaignRetail').value = c && c.retailPrice != null ? c.retailPrice : '';
+    $('campaignPromo').value = c && c.promoPrice != null ? c.promoPrice : '';
+    $('campaignStart').value = c ? fmtDateInput(c.startDate) : '';
+    $('campaignEnd').value = c ? fmtDateInput(c.endDate) : '';
+    $('campaignDescription').value = c ? (c.description || '') : '';
+    $('campaignActive').checked = c ? !!c.active : false;
+    updateImagePreview('campaignImagePreview', c ? (c.imagePublicUrl || c.image || '') : '');
+    $('campaignDeleteBtn').style.display = c ? '' : 'none';
+    $('campaignModalBack').classList.add('active');
+  }
+  function closeCampaignModal() {
+    $('campaignModalBack').classList.remove('active');
+  }
+
+  $('campaignNewBtn').addEventListener('click', function () { openCampaignModal(null); });
+  $('campaignModalCloseBtn').addEventListener('click', closeCampaignModal);
+  $('campaignCancelBtn').addEventListener('click', closeCampaignModal);
+
+  // v1.0.2 — Al cambiar el servicio en el dropdown, autocompletar PVP
+  // con el precio del catálogo (data-price). Solo se ejecuta con
+  // interacción manual del usuario (asignar .value programáticamente
+  // no dispara 'change' en HTML, así que al abrir el modal en modo
+  // editar no se pisa el PVP guardado de la campaña).
+  $('campaignService').addEventListener('change', function () {
+    var sel = $('campaignService');
+    if (sel.selectedIndex < 0) return;
+    var opt = sel.options[sel.selectedIndex];
+    if (!opt) return;
+    var price = opt.getAttribute('data-price');
+    if (price === null || price === undefined || price === '') return;
+    var n = Number(price);
+    if (isNaN(n)) return;
+    $('campaignRetail').value = n;
+  });
+
+  $('campaignSaveBtn').addEventListener('click', function () {
+    var id = $('campaignEditId').value;
+    var sel = $('campaignService');
+    var serviceLabel = '';
+    if (sel.selectedIndex >= 0) {
+      var opt = sel.options[sel.selectedIndex];
+      serviceLabel = opt ? (opt.getAttribute('data-label') || opt.text || '') : '';
+    }
+    var payload = {
+      label: $('campaignLabel').value.trim(),
+      serviceSetupUid: $('campaignService').value,
+      serviceLabel: serviceLabel,
+      retailPrice: Number($('campaignRetail').value || 0),
+      promoPrice: Number($('campaignPromo').value || 0),
+      description: $('campaignDescription').value,
+      startDate: $('campaignStart').value || null,
+      endDate: $('campaignEnd').value || null,
+      active: $('campaignActive').checked
+    };
+    if (!payload.label) { toast('Falta el nombre de la campaña', 'err'); return; }
+    if (!payload.serviceSetupUid) { toast('Selecciona un servicio', 'err'); return; }
+
+    if (id) {
+      payload._id = id;
+      send('actualizarPromoCampaign', payload);
+    } else {
+      send('crearPromoCampaign', payload);
+    }
+  });
+
+  $('campaignDeleteBtn').addEventListener('click', function () {
+    var id = $('campaignEditId').value;
+    if (!id) return;
+    if (!confirm('¿Eliminar esta campaña? Las tarjetas ya emitidas no se ven afectadas.')) return;
+    send('eliminarPromoCampaign', { _id: id });
+  });
+
+  // ═══════════════════════════════════════════════════
+  // FILTROS / BUSCADORES / REFRESCO
+  // ═══════════════════════════════════════════════════
+  $('primeSearch').addEventListener('input', renderMemberships);
+  $('primeStatusFilter').addEventListener('change', renderMemberships);
+  $('primeRefreshBtn').addEventListener('click', function () { send('listarPrimeMemberships'); });
+
+  $('voucherSearch').addEventListener('input', renderVouchers);
+  $('voucherStatusFilter').addEventListener('change', renderVouchers);
+  $('voucherRefreshBtn').addEventListener('click', function () { send('listarVouchers'); });
+
+  $('cardSearch').addEventListener('input', renderCards);
+  $('cardStatusFilter').addEventListener('change', renderCards);
+  $('cardRefreshBtn').addEventListener('click', function () { send('listarPromoCards'); });
+
+  // ═══════════════════════════════════════════════════
+  // ARRANQUE
+  // ═══════════════════════════════════════════════════
+  startReadyRetry();
+
+})();
+</script>
+
+</body>
+</html>
