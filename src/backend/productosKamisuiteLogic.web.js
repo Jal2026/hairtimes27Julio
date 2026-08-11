@@ -1,8 +1,8 @@
 // =====================================================
 // KAMISUITE - Editor de Productos Custom Backend
 // =====================================================
-// VERSION: 1.0.3
-// FECHA: 22 de junio de 2026 (v1.0.2: 30 de julio de 2026)
+// VERSION: 1.0.4
+// FECHA: 22 de junio de 2026 (v1.0.4: 11 de agosto de 2026)
 //
 // MÓDULO: PRIME + Bonos + Tarjetas Promocionales.
 // PANTALLA: /gestorbonosypromociones (interna, backoffice).
@@ -51,6 +51,29 @@
 //   getProductosConfig por retrocompatibilidad.
 //
 // CHANGELOG
+// v1.0.4 - · NUEVO campo de configuración vouchersSkipPrime (Booleano).
+//            Interruptor global que desliga la COMPRA de bonos de la
+//            posesión de una Tarjeta PRIME activa. Polaridad de APERTURA:
+//              · vacío / false → se exige PRIME activo (comportamiento
+//                histórico, intacto en todas las filas ya existentes).
+//              · true          → la venta de bonos queda libre, sin
+//                requisito de PRIME.
+//            La polaridad es deliberada: un Booleano nuevo llega vacío en
+//            las filas existentes del CMS, y el patrón `=== true` del
+//            proyecto lo resuelve a false → el candado NO se cae solo el
+//            día del despliegue.
+//          · Tres puntos tocados, clon literal del tratamiento que ya
+//            recibe vouchersActive: configDefaults(), el shape devuelto
+//            por getProductosConfig y el setter de
+//            actualizarProductosConfig (que sigue aceptando payload
+//            parcial: el editor puede enviar solo los campos de su
+//            pestaña).
+//          · LO CONSUMEN: voucherPublicLogic.web.js v1.3.0 (guard de
+//            createVoucherCheckout + flag al widget público vía
+//            getVoucherCatalog) y especialesVentaLogic.web.js v1.1.0
+//            (guard de emitirBonoManual, venta presencial ESPECIALES).
+//          · Sin cambios en ninguna otra función, ni en el CRUD de
+//            campañas, ni en listados, ni en uploads.
 //   v1.0.3 - editar emitidos (usos/caducidad) + prepararAvisoCaducidad
 //              (aviso WhatsApp/email cliente-side con tokens desde SalonConfig):
 // v1.0.2 - · listarVouchersEmitidos ahora devuelve clientName (nombre
@@ -82,7 +105,7 @@ import wixData from 'wix-data';
 import { cargarTodosContactos } from 'backend/recepcionLogic.web'; // v1.0.3 — resolver tel/email para el aviso
 import { getSalonConfig } from 'backend/salonConfigLogic.web';      // v1.0.3 — leer textVoucherAlert/textPrimeAlert/textCardAlert
 
-const TAG = '[ProductosKamisuite][1.0.3]';
+const TAG = '[ProductosKamisuite][1.0.4]';
 
 const CMS_CONFIG = 'KamisuiteProductsConfig';
 const CMS_CAMPAIGNS = 'KamisuitePromoCampaigns';
@@ -147,6 +170,8 @@ function configDefaults() {
     primeReminderDays: 7,
     promoCardsActive: false,
     vouchersActive: false,
+    // v1.0.4 — false = se exige PRIME activo para comprar bonos.
+    vouchersSkipPrime: false,
     voucherValidityMonths: 12
   };
 }
@@ -197,6 +222,8 @@ export const getProductosConfig = webMethod(
           primeReminderDays: (typeof row.primeReminderDays === 'number') ? row.primeReminderDays : 7,
           promoCardsActive: row.promoCardsActive === true,
           vouchersActive: row.vouchersActive === true,
+          // v1.0.4 — true = la compra de bonos NO exige PRIME activo.
+          vouchersSkipPrime: row.vouchersSkipPrime === true,
           voucherValidityMonths: (typeof row.voucherValidityMonths === 'number') ? row.voucherValidityMonths : 12
         }
       };
@@ -220,6 +247,7 @@ export const actualizarProductosConfig = webMethod(
       primeReminderDays,
       promoCardsActive,
       vouchersActive,
+      vouchersSkipPrime,   // v1.0.4
       voucherValidityMonths
     } = payload || {};
 
@@ -254,6 +282,9 @@ export const actualizarProductosConfig = webMethod(
       }
       if (promoCardsActive !== undefined) row.promoCardsActive = !!promoCardsActive;
       if (vouchersActive !== undefined) row.vouchersActive = !!vouchersActive;
+      // v1.0.4 — interruptor de apertura: true libera la compra de bonos
+      // del requisito de Tarjeta PRIME activa.
+      if (vouchersSkipPrime !== undefined) row.vouchersSkipPrime = !!vouchersSkipPrime;
       if (voucherValidityMonths !== undefined) {
         const n = toNumber(voucherValidityMonths, 1, 120);
         row.voucherValidityMonths = (n === null) ? 12 : n;
@@ -275,6 +306,9 @@ export const actualizarProductosConfig = webMethod(
           primeReminderDays: (typeof updated.primeReminderDays === 'number') ? updated.primeReminderDays : 7,
           promoCardsActive: updated.promoCardsActive === true,
           vouchersActive: updated.vouchersActive === true,
+          // v1.0.4 — se devuelve para que el editor refleje el estado
+          // guardado en local sin refrescar la página.
+          vouchersSkipPrime: updated.vouchersSkipPrime === true,
           voucherValidityMonths: (typeof updated.voucherValidityMonths === 'number') ? updated.voucherValidityMonths : 12
         }
       };
