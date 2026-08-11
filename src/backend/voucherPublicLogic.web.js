@@ -1,8 +1,36 @@
 // =====================================================
 // KAMISUITE - Bonos (Página Pública) Backend
 // =====================================================
-// VERSION: 1.2.0
-// FECHA: 2 de agosto de 2026
+// VERSION: 1.3.0
+// FECHA: 11 de agosto de 2026
+//
+// v1.3.0: 🔓 INTERRUPTOR GLOBAL "BONOS SIN PRIME".
+//   · Nuevo campo KamisuiteProductsConfig.vouchersSkipPrime (Booleano).
+//     Polaridad de APERTURA: false/vacío = se exige PRIME activo para
+//     comprar un bono (decisión A, comportamiento histórico); true = la
+//     venta queda libre. La polaridad es deliberada: un Booleano nuevo
+//     llega vacío en las filas existentes del CMS y el patrón `=== true`
+//     lo resuelve a false, de modo que el candado NO se cae solo al
+//     desplegar.
+//   · createVoucherCheckout: el guard de PRIME pasa a ser CONDICIONAL.
+//     Se sigue ejecutando buscarPrimeActiva en ambos casos, porque su
+//     _id alimenta primeMembershipId; con el interruptor abierto deja
+//     de ser bloqueante y, si el comprador no tiene PRIME, el bono se
+//     emite con primeMembershipId ''.
+//   · getVoucherCatalog: devuelve vouchersSkipPrime a nivel RAÍZ de la
+//     respuesta (no dentro de cada voucher: es configuración global del
+//     salón). Se lee dentro de la query a KamisuiteProductsConfig que
+//     esa función YA hacía para globalValidityMonths → cero queries
+//     nuevas. El page code lo transporta al bootstrap y el widget lo usa
+//     para no pintar el banner #primeGate.
+//   · CERO cambios en: getCurrentMemberVoucherStatus (sigue devolviendo
+//     isPrime, que el widget usa como dato), confirmVoucherPayment,
+//     cancelVoucherPayment, getVoucherSalonInfo, F7 (email), variantes,
+//     precios, códigos, caducidades y frecuencias.
+//   · El CANJE no se toca ni se ve afectado: nunca comprobó PRIME
+//     (decisión D-2, los bonos sobreviven al vencimiento de la PRIME).
+//   · Pareja backend presencial: especialesVentaLogic.web.js v1.1.0.
+//   · Pareja config: productosKamisuiteLogic.web.js v1.0.4.
 //
 // v1.2.0: 🏷️ PLAZO DE USO Y FRECUENCIA EN EL DETALLE DEL BONO (widget).
 //   · getVoucherCatalog AÑADE al objeto de cada bono tres campos de solo
@@ -195,7 +223,7 @@ import { currentMember } from 'wix-members-backend';
 // v1.0.1 — F7: email triggered de confirmación de compra
 import { triggeredEmails } from 'wix-crm-backend';
 
-const TAG = '[VoucherPublic][1.2.0]';
+const TAG = '[VoucherPublic][1.3.0]';
 
 const CMS_CATALOG = 'ServiceCatalog';
 const CMS_CONFIG = 'KamisuiteProductsConfig';
@@ -452,10 +480,17 @@ export const getVoucherCatalog = webMethod(
       // plazo de uso cuando el servicio no define bonusValidityDays. Mismo
       // origen que confirmVoucherPayment (KamisuiteProductsConfig).
       let globalValidityMonths = 12;
+      // v1.3.0 — Interruptor global "bonos sin PRIME". Se lee en ESTA MISMA
+      // query (cero queries nuevas). Polaridad de apertura: false/vacío =
+      // se exige PRIME (comportamiento histórico).
+      let vouchersSkipPrime = false;
       try {
         const cfgRes = await wixData.query(CMS_CONFIG).limit(1).find({ suppressAuth: true });
         if (cfgRes.items.length > 0 && typeof cfgRes.items[0].voucherValidityMonths === 'number') {
           globalValidityMonths = cfgRes.items[0].voucherValidityMonths;
+        }
+        if (cfgRes.items.length > 0) {
+          vouchersSkipPrime = cfgRes.items[0].vouchersSkipPrime === true;
         }
       } catch (_) {}
 
@@ -533,11 +568,15 @@ export const getVoucherCatalog = webMethod(
         };
       });
 
-      return { success: true, vouchers };
+      // v1.3.0 — vouchersSkipPrime viaja junto al catálogo. El page code lo
+      // transporta al bootstrap y el widget decide si pinta el banner
+      // #primeGate. Nivel raíz de la respuesta, NO dentro de cada voucher:
+      // es configuración global del salón, no propiedad del bono.
+      return { success: true, vouchers, vouchersSkipPrime };
 
     } catch (error) {
       console.error(`${TAG} ❌ getVoucherCatalog:`, error);
-      return { success: false, vouchers: [], error: error.message };
+      return { success: false, vouchers: [], vouchersSkipPrime: false, error: error.message };
     }
   }
 );
@@ -647,13 +686,34 @@ export const createVoucherCheckout = webMethod(
       }
 
       // Decisión A: requiere PRIME activo.
+      //
+      // v1.3.0 — El candado es ahora CONDICIONAL al interruptor global
+      // KamisuiteProductsConfig.vouchersSkipPrime:
+      //   · false / vacío → se exige PRIME activo (comportamiento
+      //     histórico literal, sin cambios).
+      //   · true          → la venta queda libre. Se sigue BUSCANDO la
+      //     PRIME (no se salta la query) porque su _id alimenta
+      //     primeMembershipId en el registro del bono; simplemente deja
+      //     de ser bloqueante. Si el comprador no tiene PRIME, el bono
+      //     se emite con primeMembershipId vacío.
+      let skipPrime = false;
+      try {
+        const cfgResSkip = await wixData.query(CMS_CONFIG).limit(1).find({ suppressAuth: true });
+        if (cfgResSkip.items.length > 0) {
+          skipPrime = cfgResSkip.items[0].vouchersSkipPrime === true;
+        }
+      } catch (_) {}
+
       const prime = await buscarPrimeActiva(buyerContactId);
-      if (!prime) {
+      if (!prime && !skipPrime) {
         return {
           success: false,
           needsPrime: true,
           error: 'Los bonos están reservados a miembros PRIME. Hazte PRIME primero.'
         };
+      }
+      if (!prime) {
+        console.log(`${TAG} 🔓 vouchersSkipPrime activo — venta sin PRIME para contacto ${buyerContactId}`);
       }
 
       // 2) Cargar el servicio del catálogo.
@@ -771,7 +831,11 @@ export const createVoucherCheckout = webMethod(
         paymentMethod: 'Wix Pay',
         paymentId: '',
         paymentReservationId: '',
-        primeMembershipId: prime._id,
+        // v1.3.0 — Con vouchersSkipPrime activo el comprador puede no tener
+        // PRIME: en ese caso el vínculo queda vacío. Con el candado puesto,
+        // prime SIEMPRE existe aquí (el guard ya habría cortado antes) y el
+        // valor es idéntico al histórico.
+        primeMembershipId: prime ? prime._id : '',
         status: 'PENDING',
         salonId: ''
       };
