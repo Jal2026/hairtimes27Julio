@@ -4,13 +4,27 @@
 // PÁGINA: /bonos (pública, frontend)
 // WIDGET: #htmlBonos (HTML embed con bonos.html)
 //
-// VERSIÓN: 1.0.1
-// FECHA: 27 de junio de 2026
+// VERSIÓN: 1.0.2
+// FECHA: 11 de agosto de 2026
 //
-// Bridge entre el widget HTML público y voucherPublicLogic.web.js v1.0.0.
+// Bridge entre el widget HTML público y voucherPublicLogic.web.js v1.3.0.
 //
 // PATRÓN WIX PAY + WIX MEMBERS + SKIN: idéntico a F2.2 (PRIME)
 // y F2.1 (Tarjetas Promocionales).
+//
+// v1.0.2 (11 ago 2026):
+//   · 🔓 Transporte del interruptor global "bonos sin PRIME".
+//     voucherPublicLogic v1.3.0 devuelve vouchersSkipPrime a nivel raíz
+//     de getVoucherCatalog (configuración global del salón, leída desde
+//     KamisuiteProductsConfig). Este page code lo añade al payload del
+//     bootstrap para que el widget v1.0.7 decida si pinta el banner
+//     #primeGate.
+//   · Cambio ADITIVO de una sola clave en el objeto del bootstrap. Si el
+//     backend no la envía (despliegue parcial), cae a false → banner
+//     visible → comportamiento actual. Sin riesgo de apertura accidental.
+//   · Cero cambios en el flujo de compra, en Wix Pay, en el manejo de
+//     needsPrime (que sigue existiendo: es la respuesta del backend
+//     cuando el candado SÍ está puesto) ni en el resto de cases.
 //
 // v1.0.1 (27 jun 2026):
 //   · 🩹 FIX navegación a /tarjetaprime desde el banner primeGate del
@@ -32,7 +46,8 @@
 //   navigate  { url }     v1.0.1 — Navegar el sitio padre a una URL interna.
 //
 // MENSAJES SALIENTES (page code → widget):
-//   bootstrap         { vouchers, member, brandName, skin, termsConditionsUrl }
+//   bootstrap         { vouchers, member, brandName, skin, termsConditionsUrl,
+//                       vouchersSkipPrime }
 //   loginRequired     { }
 //   needsPrime        { message }
 //   alreadyHasVoucher { voucher, message }
@@ -59,7 +74,7 @@ import { authentication, currentMember } from 'wix-members-frontend';
 // v1.0.1 — Navegación al sitio padre desde mensajes del widget
 import wixLocation from 'wix-location';
 
-const TAG = '[Bonos v1.0.1]';
+const TAG = '[Bonos v1.0.2]';
 const WIDGET_ID = '#htmlBonos';
 
 $w.onReady(function () {
@@ -133,6 +148,10 @@ async function enviarBootstrap(widget) {
     type: 'bootstrap',
     payload: {
       vouchers: (rCatalog && rCatalog.success) ? rCatalog.vouchers : [],
+      // v1.0.2 — Interruptor global: true = la compra de bonos NO exige
+      // Tarjeta PRIME. Si el backend no lo envía, false → banner visible
+      // (comportamiento histórico).
+      vouchersSkipPrime: !!(rCatalog && rCatalog.vouchersSkipPrime),
       skin: info.widgetSkin || 'niebla',
       brandName: info.brandName || '',
       salonName: info.salonName || '',
