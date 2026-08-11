@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>KAMISUITE · CRM Móvil v1.1.2</title>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* =====================================================
+   KAMISUITE — Ficha Cliente CRM Móvil
+   VERSION: 1.1.2
+   FECHA: 6 de julio de 2026
+
+   v1.1.2 — HOTFIX modal Nuevo contacto (paridad desktop v1.7.4):
+     · 'contactoCreado' invoca seleccionarCliente(id, nombre) para
+       reset visual + state.contactId = id + carga de ficha por
+       el flujo probado.
+     · 'contactoDuplicadoEmail' → 'contactoDuplicadoTelefono' con
+       texto fijo español "Ese número de teléfono lo tiene otro
+       contacto"; ignora cualquier d.message que llegue.
+     · Nuevo case 'contactoError' con aviso español y botón
+       "Crear" reactivado.
+     · 'Infantil' → 'Indefinido' en #modalNuevoSexo (v1.1.1
+       propio) y #modalSexoSelect (v1.1.0 existente — cambio
+       autorizado por instrucción explícita del arquitecto).
+     Sin CSS nuevo.
+
+   v1.1.1 — Botón "+ NUEVO CONTACTO" en la tarjeta de búsqueda +
+     modal de alta con nombre, apellido, email, teléfono, fecha
+     nacimiento, sexo. Validación mínima nombre + (email O tel).
+     Duplicados por email detectados por el backend (v1.9.10);
+     el modal muestra aviso .warn-bar y permite "Crear igualmente".
+     Al éxito, la ficha del nuevo contacto se abre sola (page code
+     v1.9.2 llama a cargarDatosCliente). Sin CSS nuevo: reutiliza
+     .modal-overlay, .modal, .modal-title, .modal-sub, .modal-input,
+     .modal-select, .modal-actions, .btn, .btn.primary, .btn.ghost,
+     .warn-bar. Sin tocar el resto del widget.
+
+   v1.1.0 — Paridad con desktop v1.7.2.
+   - Bloque "CLUB KALONICE" → "TARJETA PRIME" informativo
+     (pill no clicable, verde si tiene PRIME activa, azul si no).
+   - Nuevo campo Fecha de nacimiento (nativo Wix, contact.info.birthdate)
+     con modal date-picker.
+   - Nueva pestaña "Bonos" con 3 sub-tarjetas (Tarjeta PRIME + Bonos
+     Descuento + Tarjetas Promocionales) usando la paleta azul del móvil.
+   - Retirado toggleClub(); setClubToggleVisual queda como shim vacío.
+   - Backend sirve v1.9.9, page code v1.9.1 (compartidos con desktop).
+   - Aesthetics existente preservada: paleta azul clarito de fondo,
+     radios 18/12, cards con sombra suave, mobile-first.
+
+   v1.0.0 — Rama móvil aislada del widget CRM desktop v1.7.1.
+   - No toca backend.
+   - No toca Page Code si se conserva el mismo protocolo postMessage.
+   - Misma entrada/salida de eventos que el widget desktop.
+   - UI mobile-first: una columna, cards, chips, modales adaptados.
+   ===================================================== */
+:root{
+  --bg:#eef8fc;
+  --surface:#ffffff;
+  --surface2:#f7fbfd;
+  --soft:#e7f6ff;
+  --border:#cfe8f4;
+  --border2:#e2e2e8;
+  --text:#062947;
+  --text2:#4c657a;
+  --text3:#8aa0b3;
+  --orange:#e87722;
+  --orange-lt:#fff4ec;
+  --blue:#0077c8;
+  --blue-lt:#e8f5ff;
+  --green:#059669;
+  --green-lt:#ecfdf5;
+  --purple:#7c3aed;
+  --purple-lt:#f3effe;
+  --pink:#db2777;
+  --pink-lt:#fdf2f8;
+  --gold:#d97706;
+  --gold-lt:#fffbeb;
+  --red:#dc2626;
+  --red-lt:#fef2f2;
+  --amber:#b45309;
+  --amber-lt:#fef3c7;
+  --radius:18px;
+  --radius-sm:12px;
+  --shadow:0 8px 24px rgba(3,42,71,.08);
+  --shadow-sm:0 2px 10px rgba(3,42,71,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{min-height:100%;font-family:'Bai Jamjuree',sans-serif;background:var(--bg);color:var(--text);font-size:14px;overflow:auto;-webkit-text-size-adjust:100%}
+body{padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);}
+button,input,textarea,select{font-family:'Bai Jamjuree',sans-serif}
+button{touch-action:manipulation}
+.app{min-height:100vh;display:flex;flex-direction:column;background:linear-gradient(180deg,#f8fdff 0%,#eef8fc 100%)}
+.topbar{position:sticky;top:0;z-index:40;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid var(--border);padding:10px 12px;display:flex;align-items:center;gap:8px}
+.logo{font-size:15px;font-weight:800;letter-spacing:.08em;color:var(--orange)}
+.page-title{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar-spacer{flex:1}
+.icon-btn,.btn-icon{border:1px solid var(--border);background:#fff;color:var(--text2);border-radius:12px;min-width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;box-shadow:var(--shadow-sm)}
+.btn-msg{border:1px solid var(--border);background:#fff;color:var(--text2);border-radius:12px;height:38px;padding:0 10px;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;cursor:pointer;box-shadow:var(--shadow-sm)}
+.btn-msg:disabled{opacity:.45;cursor:default}
+.main{display:block;min-height:0;overflow:visible}
+.mobile-shell{padding:12px;display:flex;flex-direction:column;gap:12px}
+.search-card,.client-card,.panel,.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+.search-card{padding:12px;position:relative;z-index:20}
+.search-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text3);margin-bottom:7px}
+.search-wrap{position:relative}
+.search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:13px;color:var(--text3)}
+.search-input{width:100%;height:42px;padding:0 12px 0 34px;border:1px solid var(--border);border-radius:14px;background:var(--surface2);outline:none;font-size:15px;color:var(--text)}
+.search-input:focus{background:#fff;border-color:var(--orange)}
+.search-count{font-size:11px;color:var(--text3);text-align:right;margin-top:6px}
+.search-results{position:absolute;left:12px;right:12px;top:calc(100% - 8px);background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);max-height:280px;overflow:auto;display:none;z-index:60}
+.search-results.visible{display:block}
+.result-item{padding:12px;border-bottom:1px solid var(--border);cursor:pointer}
+.result-item:last-child{border-bottom:none}
+.result-name{font-weight:800;color:var(--text);font-size:14px}
+.result-sub{font-size:12px;color:var(--text2);margin-top:3px}
+.no-client{padding:28px 16px;text-align:center;color:var(--text3)}
+.no-client-icon{font-size:38px;opacity:.5;margin-bottom:8px}
+.client-card{display:none;padding:14px;gap:12px}
+.client-top{display:flex;gap:12px;align-items:center}
+.avatar{width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#e87722,#f5a623);display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;font-weight:800;box-shadow:var(--shadow-sm);overflow:hidden;flex-shrink:0;position:relative;cursor:pointer}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.avatar-overlay{position:absolute;inset:0;background:rgba(0,0,0,.38);display:flex;align-items:center;justify-content:center;opacity:0;color:#fff;font-size:18px}
+.avatar:active .avatar-overlay{opacity:1}
+.avatar-upload-input{display:none}
+.client-main{min-width:0;flex:1}
+.client-name{font-size:18px;font-weight:800;line-height:1.2;color:var(--text)}
+.client-sub{font-size:12px;color:var(--text3);margin-top:3px}
+.badges-row{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.badge{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:3px 8px;font-size:10.5px;font-weight:800}
+.badge-tag{background:var(--purple-lt);color:var(--purple)}
+.badge-nota{background:var(--orange-lt);color:var(--orange)}
+.badge-exp{background:var(--pink-lt);color:var(--pink)}
+.badge-ambiguo{background:var(--amber-lt);color:var(--amber)}
+.quick-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.quick-actions .btn{height:38px}
+.btn{border:1px solid var(--border);background:#fff;color:var(--text2);border-radius:14px;padding:0 12px;font-size:13px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;min-height:38px}
+.btn.primary{background:var(--orange);border-color:var(--orange);color:#fff}
+.btn.blue{background:var(--blue-lt);border-color:#bfe4ff;color:var(--blue)}
+.btn.green{background:var(--green-lt);border-color:#bbf7d0;color:var(--green)}
+.btn.danger{background:var(--red);border-color:var(--red);color:#fff}
+.btn.ghost{background:#fff;color:var(--text2)}
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
+.stat{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:10px 6px;text-align:center;min-width:0}
+.stat-num{font-size:16px;font-weight:900;line-height:1;color:var(--orange);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat-label{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-top:4px}
+.details-grid{display:grid;grid-template-columns:1fr;gap:7px;margin-top:12px}
+.detail-row{display:flex;align-items:center;gap:9px;background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:9px}
+.detail-icon{width:30px;height:30px;border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.detail-label{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--text3)}
+.detail-value{font-size:13px;font-weight:700;color:var(--text);word-break:break-word}
+.club-toggle,.insignia-pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:900;border:1px solid}
+.club-toggle.activo{background:var(--green-lt);color:var(--green);border-color:var(--green)}
+.club-toggle.inactivo{background:var(--purple-lt);color:var(--purple);border-color:var(--purple)}
+.insignia-pill{background:#33cfc5;color:#fff;border-color:#33cfc5}
+.insignia-pill.empty{background:var(--purple-lt);color:var(--purple);border-color:var(--purple-lt)}
+.nav-tabs{position:sticky;top:59px;z-index:35;background:rgba(238,248,252,.96);backdrop-filter:blur(8px);display:flex;gap:8px;overflow-x:auto;padding:8px 12px;border-bottom:1px solid var(--border)}
+.nav-tabs::-webkit-scrollbar{display:none}
+.tab{flex:0 0 auto;background:#fff;border:1px solid var(--border);border-radius:999px;padding:9px 12px;font-size:12px;font-weight:900;color:var(--text2);cursor:pointer;white-space:nowrap;box-shadow:var(--shadow-sm)}
+.tab.active{background:var(--orange);border-color:var(--orange);color:#fff}
+.tab.no-cliente{opacity:.45;pointer-events:none}
+.tab-badge{background:rgba(0,0,0,.06);padding:1px 6px;border-radius:999px;margin-left:3px;font-size:10px}
+.tab.active .tab-badge{background:rgba(255,255,255,.25);color:#fff}
+.tab-content{padding:0 12px 18px}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+.section-title{font-size:11px;font-weight:900;letter-spacing:.08em;color:var(--text3);text-transform:uppercase;margin:4px 2px 10px}
+.panel{padding:14px;margin-bottom:12px}
+.panel-title{font-size:15px;font-weight:900;color:var(--text);margin-bottom:6px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.panel-sub{font-size:12px;color:var(--text2);line-height:1.45;margin-bottom:10px}
+.panel-badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:900;text-transform:uppercase;background:var(--blue-lt);color:var(--blue)}
+.panel-badge.private{background:var(--purple-lt);color:var(--purple)}
+.panel-badge.client{background:var(--green-lt);color:var(--green)}
+.textarea{width:100%;min-height:118px;border:1px solid var(--border);border-radius:14px;background:var(--surface2);padding:12px;font-size:14px;color:var(--text);line-height:1.5;outline:none;resize:vertical}
+.textarea:focus{background:#fff;border-color:var(--orange)}
+.textarea.readonly{background:#fff;color:var(--text);border-color:var(--border2)}
+.actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}
+.actions .btn{flex:1 1 auto}
+.card-list{display:flex;flex-direction:column;gap:10px}
+.item-card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:13px}
+.item-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:8px;align-items:flex-start}
+.item-title{font-size:14px;font-weight:900;color:var(--text);line-height:1.3}
+.item-sub{font-size:12px;color:var(--text2);line-height:1.4}
+.item-price{font-size:15px;font-weight:900;color:var(--orange);white-space:nowrap}
+.pill{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:900;background:var(--blue-lt);color:var(--blue);margin:2px 2px 0 0}
+.pill.green{background:var(--green-lt);color:var(--green)}
+.pill.purple{background:var(--purple-lt);color:var(--purple)}
+.pill.orange{background:var(--orange-lt);color:var(--orange)}
+.pill.red{background:var(--red-lt);color:var(--red)}
+.product-card{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:12px}
+.product-img{width:54px;height:54px;border-radius:14px;background:var(--surface2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:22px;overflow:hidden;flex-shrink:0}
+.product-img img{width:100%;height:100%;object-fit:cover}
+.empty-state{background:#fff;border:1px dashed var(--border);border-radius:var(--radius);padding:28px 14px;text-align:center;color:var(--text3)}
+.empty-icon{font-size:32px;margin-bottom:8px;opacity:.55}
+.warn-bar{background:var(--red-lt);border:1px solid #fecaca;border-radius:14px;color:var(--red);font-size:12px;font-weight:700;padding:10px;margin-top:10px}
+.loading-bar{height:3px;background:linear-gradient(90deg,var(--orange),#f5a623);position:fixed;top:0;left:0;width:0%;z-index:100;transition:width .3s}
+.loading-bar.active{width:70%}.loading-bar.done{width:100%;opacity:0;transition:width .2s,opacity .3s .1s}
+.toast{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:120;border-radius:16px;padding:13px 16px;color:#fff;font-weight:900;font-size:13px;text-align:center;opacity:0;transform:translateY(30px);pointer-events:none;transition:all .25s;box-shadow:var(--shadow)}
+.toast.visible{opacity:1;transform:translateY(0)}.toast.ok{background:var(--green)}.toast.error{background:var(--red)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:none;align-items:flex-end;justify-content:center;padding:12px}.modal-overlay.visible{display:flex}
+.modal{width:100%;max-height:92vh;overflow:auto;padding:16px;border-bottom-left-radius:0;border-bottom-right-radius:0}
+.modal-title{font-size:17px;font-weight:900;margin-bottom:12px}.modal-sub{font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.45}
+.modal-input,.modal-textarea,.modal-select{width:100%;border:1px solid var(--border);border-radius:14px;background:var(--surface2);font-size:15px;color:var(--text);outline:none;padding:12px;margin-bottom:10px;min-height:44px}
+.modal-textarea{min-height:120px;resize:vertical}.modal-input:focus,.modal-textarea:focus,.modal-select:focus{border-color:var(--orange);background:#fff}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.modal-actions .btn{flex:1 1 auto}
+.modal-row{display:grid;grid-template-columns:1fr;gap:8px}.modal-label{font-size:10px;font-weight:900;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin:3px 0 5px;display:block}
+.radio-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.radio-btn{height:42px;border:1px solid var(--border);background:#fff;border-radius:14px;font-weight:900;color:var(--text2)}.radio-btn.active{background:var(--orange);border-color:var(--orange);color:#fff}.check-row{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);margin:8px 0}.check-row input{width:18px;height:18px;accent-color:var(--orange)}
+.coupon-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}.coupon-actions .btn{padding:0;font-size:13px}
+@media (min-width:720px){.mobile-shell{max-width:680px;margin:0 auto}.tab-content{max-width:680px;margin:0 auto}.nav-tabs{justify-content:center}.modal{max-width:560px;border-radius:var(--radius)}}
+
+/* ══════════════════════════════════════════════════════
+   v1.1.0 — Pill Tarjeta PRIME (informativo, no clicable)
+   Paleta azul del móvil. Verde si activa, azul suave si no.
+   ══════════════════════════════════════════════════════ */
+.prime-pill{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;font-size:11.5px;font-weight:800;border:1px solid;user-select:none;letter-spacing:.02em}
+.prime-pill.activo{background:var(--green-lt);color:var(--green);border-color:var(--green)}
+.prime-pill.inactivo{background:var(--blue-lt);color:var(--blue);border-color:var(--blue)}
+
+/* ══════════════════════════════════════════════════════
+   v1.1.0 — Sub-tarjetas Bonos y Promociones (kb-*)
+   Adoptan la estética mobile: radios 18/12, cards con sombra
+   suave, paleta azul, botones primary del móvil.
+   ══════════════════════════════════════════════════════ */
+.kb-cards-wrap{display:flex;flex-direction:column;gap:14px}
+.kb-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.kb-title{padding:12px 16px;font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--text3);border-bottom:1px solid var(--border);background:var(--surface2)}
+.kb-cover-prime{width:100%;aspect-ratio:1.585/1;background:var(--surface2);background-size:cover;background-position:center;background-repeat:no-repeat;border-bottom:1px solid var(--border)}
+.kb-body{padding:14px 16px}
+.kb-copy{font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:14px}
+.kb-rows{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.kb-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--text);gap:10px}
+.kb-row-label{color:var(--text3);font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.kb-row-value{color:var(--text);font-weight:700}
+.kb-badge{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;font-size:10.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+.kb-badge-ok{background:var(--green-lt);color:var(--green)}
+.kb-list{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
+.kb-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px}
+.kb-item-title{font-size:13.5px;font-weight:700;color:var(--text);margin-bottom:4px}
+.kb-item-meta{font-size:11.5px;color:var(--text2)}
+.kb-item-code{font-family:'Bai Jamjuree',monospace;font-size:11.5px;font-weight:800;color:var(--orange);letter-spacing:.05em;margin-top:5px}
+.kb-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:13px 14px;border-radius:var(--radius-sm);border:1px solid var(--orange);background:var(--orange);color:#fff;font-family:'Bai Jamjuree',sans-serif;font-size:13px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;text-decoration:none;cursor:pointer;-webkit-appearance:none;touch-action:manipulation}
+.kb-btn:active{background:#d06a1a}
+.kb-btn-soft{background:#fff;color:var(--text3);border-color:var(--border);cursor:default;pointer-events:none;opacity:.55}
+</style>
+</head>
+<body>
+<div class="loading-bar" id="loadingBar"></div>
+<div class="app">
+  <div class="topbar">
+    <div>
+      <div class="logo">KAMISUITE</div>
+      <div class="page-title">CRM móvil</div>
+    </div>
+    <div class="topbar-spacer"></div>
+    <button class="btn-msg" id="btnMensaje" disabled onclick="abrirModalMensaje()">✉</button>
+    <button class="icon-btn" title="Actualizar" onclick="sincronizarFicha()">↻</button>
+  </div>
+
+  <div class="mobile-shell">
+    <div class="search-card">
+      <div class="search-label">Buscar cliente</div>
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="search-input" id="searchInput" type="text" placeholder="Nombre, teléfono o email..." autocomplete="off" oninput="onSearchInput(this.value)">
+      </div>
+      <div class="search-count" id="searchCount">Cargando clientes...</div>
+      <div class="search-results" id="searchResults"></div>
+      <!-- v1.1.1 — Alta de contacto desde el CRM -->
+      <button class="btn primary" style="width:100%;margin-top:10px" onclick="abrirModalNuevoContacto()">+ NUEVO CONTACTO</button>
+    </div>
+
+    <div class="no-client" id="noClient">
+      <div class="no-client-icon">👤</div>
+      <div>Busca un cliente para ver su ficha móvil</div>
+    </div>
+
+    <div class="client-card" id="clientCard">
+      <div id="warnBar"></div>
+      <div class="client-top">
+        <div class="avatar" onclick="triggerFotoUpload()">
+          <span id="avatarInitials">?</span>
+          <img id="avatarImg" style="display:none">
+          <div class="avatar-overlay">📷</div>
+        </div>
+        <input type="file" class="avatar-upload-input" id="fotoInput" accept="image/*" onchange="onFotoSelected(this)">
+        <div class="client-main">
+          <div class="client-name" id="clientName">—</div>
+          <div class="client-sub" id="clientSince"></div>
+          <div class="badges-row" id="badgesRow"></div>
+        </div>
+      </div>
+      <div class="quick-actions">
+        <button class="btn blue" onclick="abrirModalMensaje()">✉ Mensaje</button>
+        <button class="btn ghost" onclick="sincronizarFicha()">↻ Actualizar</button>
+      </div>
+      <div class="stats-grid">
+        <div class="stat"><div class="stat-num" id="statVisitas">0</div><div class="stat-label">Visitas</div></div>
+        <div class="stat"><div class="stat-num" id="statFacturado">0€</div><div class="stat-label">Fact.</div></div>
+        <div class="stat"><div class="stat-num" id="statProductos">0</div><div class="stat-label">Prod.</div></div>
+        <div class="stat"><div class="stat-num" id="loyaltyPts">0</div><div class="stat-label">Pts</div></div>
+      </div>
+      <div class="details-grid">
+        <div class="detail-row"><div class="detail-icon">📞</div><div><div class="detail-label">Teléfono</div><div class="detail-value" id="fieldTel">—</div></div></div>
+        <div class="detail-row"><div class="detail-icon">✉</div><div><div class="detail-label">Email</div><div class="detail-value" id="fieldEmail">—</div></div></div>
+        <div class="detail-row"><div class="detail-icon">⚧</div><div><div class="detail-label">Sexo</div><div class="detail-value" id="fieldSexo">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarSexo()">Editar</button></div>
+        <div class="detail-row"><div class="detail-icon">🎂</div><div><div class="detail-label">Fecha de nacimiento</div><div class="detail-value" id="fieldFechaNacimiento">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarFechaNacimiento()">Editar</button></div>
+        <div class="detail-row"><div class="detail-icon">🗓</div><div><div class="detail-label">Última visita manual</div><div class="detail-value" id="fieldUltimaVisita">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarUltimaVisita()">Editar</button></div>
+        <div class="detail-row"><div class="detail-icon">💎</div><div><div class="detail-label">Tarjeta PRIME</div><span class="prime-pill inactivo" id="primePill">✓ Sin tarjeta</span></div></div>
+        <div class="detail-row"><div class="detail-icon">🏅</div><div><div class="detail-label">Insignia</div><div id="fieldInsigniaWrap"><span class="insignia-pill empty">Sin insignia</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="nav-tabs" id="tabsBar">
+    <button class="tab cliente-required active" data-tab="resumen" onclick="switchTab('resumen',this)">Resumen</button>
+    <button class="tab cliente-required" data-tab="proximas-citas" onclick="switchTab('proximas-citas',this)">Citas <span class="tab-badge" id="badgeProximas">0</span></button>
+    <button class="tab cliente-required" data-tab="historial" onclick="switchTab('historial',this)">Hist. <span class="tab-badge" id="badgeHistorial">0</span></button>
+    <button class="tab cliente-required" data-tab="productos" onclick="switchTab('productos',this)">Prod. <span class="tab-badge" id="badgeProductos">0</span></button>
+    <button class="tab cliente-required" data-tab="informacion" onclick="switchTab('informacion',this)">Info</button>
+    <button class="tab cliente-required" data-tab="notas-historial" onclick="switchTab('notas-historial',this)">Notas</button>
+    <button class="tab cliente-required" data-tab="expediente" onclick="switchTab('expediente',this)">Exp.</button>
+    <button class="tab cliente-required" data-tab="bonos" onclick="switchTab('bonos',this)">Bonos</button>
+    <button class="tab" data-tab="cupones" onclick="switchTab('cupones',this)">Cupones</button>
+  </div>
+
+  <div class="tab-content">
+    <div class="tab-panel active" id="tab-resumen">
+      <div class="section-title">Resumen operativo</div>
+      <div id="resumenBody" class="empty-state"><div class="empty-icon">👤</div><div>Selecciona un cliente</div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-proximas-citas">
+      <div class="section-title">Próximas citas</div>
+      <div class="card-list" id="proximasCitasBody"><div class="empty-state"><div class="empty-icon">📅</div><div>Selecciona un cliente</div></div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-historial">
+      <div class="section-title">Historial de servicios</div>
+      <div id="ambiguoInfo" style="display:none;margin-bottom:8px"><span class="pill orange">⚠ visitas dudosas</span></div>
+      <div class="card-list" id="historialBody"><div class="empty-state"><div class="empty-icon">📋</div><div>Selecciona un cliente</div></div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-productos">
+      <div class="section-title">Productos comprados</div>
+      <div class="card-list" id="productosGrid"><div class="empty-state"><div class="empty-icon">🛍</div><div>Selecciona un cliente</div></div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-informacion">
+      <div class="section-title">Información y anotaciones</div>
+      <div id="informacionBody" style="display:none">
+        <div class="panel">
+          <div class="panel-title">Notas públicas <span class="panel-badge">El cliente las lee</span></div>
+          <div class="panel-sub">Anotaciones que el cliente verá en su Área Cliente.</div>
+          <textarea class="textarea" id="infoNotasPublicas" placeholder="Notas públicas para el cliente..."></textarea>
+          <div class="actions"><button class="btn ghost" onclick="resetNotasPublicas()">Descartar</button><button class="btn primary" onclick="guardarNotasPublicas()">Guardar</button></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Notas del cliente para el salón <span class="panel-badge client">El cliente las escribe</span></div>
+          <div class="panel-sub">Mensajes que el cliente deja desde su Área Cliente. Bloque de solo lectura para el salón.</div>
+          <textarea class="textarea readonly" id="infoNotasClienteSalon" readonly placeholder="Sin notas del cliente todavía."></textarea>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Anotaciones de Color <span class="panel-badge private">Solo salón</span></div>
+          <div class="panel-sub">Fórmulas, tonos, marcas y tiempos.</div>
+          <textarea class="textarea" id="infoNotasColor" placeholder="Fórmula última visita, base, oxidante..."></textarea>
+          <div class="actions"><button class="btn ghost" onclick="resetNotasColor()">Descartar</button><button class="btn primary" onclick="guardarNotasColor()">Guardar</button></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Anotaciones de Tratamientos <span class="panel-badge private">Solo salón</span></div>
+          <div class="panel-sub">Diagnóstico capilar, productos aplicados, alergias, sensibilidades, marcas.</div>
+          <textarea class="textarea" id="infoNotasTratamientos" placeholder="Diagnóstico, productos, alergias..."></textarea>
+          <div class="actions"><button class="btn ghost" onclick="resetNotasTratamientos()">Descartar</button><button class="btn primary" onclick="guardarNotasTratamientos()">Guardar</button></div>
+        </div>
+      </div>
+      <div id="informacionEmpty" class="empty-state"><div class="empty-icon">📝</div><div>Selecciona un cliente</div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-notas-historial">
+      <div class="section-title">Notas internas del salón</div>
+      <div class="actions" style="margin-bottom:10px"><button class="btn primary" onclick="abrirModalNota()">+ Nueva nota</button></div>
+      <div class="card-list" id="notasHistorialBody"><div class="empty-state"><div class="empty-icon">🗒</div><div>Selecciona un cliente</div></div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-expediente">
+      <div class="section-title">Expediente Cuidado</div>
+      <div id="expedienteBody"><div class="empty-state"><div class="empty-icon">💚</div><div>Selecciona un cliente</div></div></div>
+    </div>
+
+    <div class="tab-panel" id="tab-bonos">
+      <div class="section-title">Bonos y Promociones del cliente</div>
+      <div id="bonosEmpty" class="empty-state"><div class="empty-icon">🎁</div><div>Selecciona un cliente para ver sus bonos y promociones</div></div>
+      <div id="bonosBody" class="kb-cards-wrap" style="display:none"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-cupones">
+      <div class="section-title">Cupones Wix</div>
+      <div class="panel">
+        <div class="actions">
+          <input class="modal-input" id="cuponSearch" type="text" placeholder="Buscar cupón..." oninput="onCuponSearchChange()" style="margin:0;flex:1 1 100%">
+          <select class="modal-select" id="cuponFilterEstado" onchange="cargarCupones()" style="margin:0;flex:1"><option value="">Estados</option><option value="activos">Activos</option><option value="inactivos">Inactivos</option><option value="expirados">Expirados</option><option value="sin_fin">Sin fecha final</option></select>
+          <select class="modal-select" id="cuponFilterTipo" onchange="cargarCupones()" style="margin:0;flex:1"><option value="">Tipos</option><option value="percent">%</option><option value="money">€</option></select>
+          <button class="btn primary" onclick="abrirModalCuponCrear()">+ Nuevo</button>
+          <button class="btn ghost" onclick="cargarCupones()">↻</button>
+        </div>
+      </div>
+      <div class="card-list" id="cuponesBody"><div class="empty-state"><div class="empty-icon">🎟</div><div>Abre la pestaña para cargar cupones</div></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- MODAL NOTA INTERNA -->
+<!-- v1.1.1 — MODAL NUEVO CONTACTO -->
+<div class="modal-overlay" id="modalNuevoContacto">
+  <div class="modal">
+    <div class="modal-title">🆕 Nuevo contacto</div>
+    <div class="modal-sub">Alta directa en Wix Contacts. Obligatorio nombre y al menos email o teléfono.</div>
+    <div id="modalNuevoContactoWarn" style="display:none;margin-bottom:10px"></div>
+    <input class="modal-input" id="modalNuevoNombre" placeholder="Nombre *">
+    <input class="modal-input" id="modalNuevoApellido" placeholder="Apellido">
+    <input class="modal-input" id="modalNuevoEmail" placeholder="Email" type="email">
+    <input class="modal-input" id="modalNuevoTelefono" placeholder="Teléfono" type="tel">
+    <input class="modal-input" id="modalNuevoFechaNacimiento" type="date">
+    <select class="modal-select" id="modalNuevoSexo">
+      <option value="">— Sexo (opcional) —</option>
+      <option value="Hombre">Hombre</option>
+      <option value="Mujer">Mujer</option>
+      <option value="Indefinido">Indefinido</option>
+    </select>
+    <div class="modal-actions">
+      <button class="btn ghost" onclick="cerrarModalNuevoContacto()">Cancelar</button>
+      <button class="btn primary" id="btnGuardarNuevoContacto" onclick="guardarNuevoContacto()">Crear</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modalNota">
+  <div class="modal">
+    <div class="modal-title">📝 Nueva nota interna</div>
+    <textarea class="modal-textarea" id="modalNotaTexto" placeholder="Escribe la nota..."></textarea>
+    <input class="modal-input" id="modalNotaAutor" placeholder="Tu nombre (autor)">
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalNota()">Cancelar</button><button class="btn primary" onclick="guardarNota()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- MODAL EDITAR CONTACTO -->
+<div class="modal-overlay" id="modalEdit">
+  <div class="modal">
+    <div class="modal-title" id="modalEditTitle">Editar contacto</div>
+    <input class="modal-input" id="modalEditNombre" placeholder="Nombre">
+    <input class="modal-input" id="modalEditApellido" placeholder="Apellido">
+    <input class="modal-input" id="modalEditEmail" placeholder="Email" type="email">
+    <input class="modal-input" id="modalEditTel" placeholder="Teléfono" type="tel">
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalEdit()">Cancelar</button><button class="btn primary" onclick="guardarEdicion()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- MODAL MENSAJE -->
+<div class="modal-overlay" id="modalMensaje">
+  <div class="modal">
+    <div class="modal-title">✉ Mensaje a <span id="msgClienteNombre"></span></div>
+    <div class="radio-row"><button class="radio-btn active" id="chCorreo" onclick="selCanal('correo')">Correo</button><button class="radio-btn" id="chWhatsapp" onclick="selCanal('whatsapp')">WhatsApp</button></div>
+    <textarea class="modal-textarea" id="msgTexto" placeholder="Escribe tu mensaje..."></textarea>
+    <div id="msgWarn" style="display:none"></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalMensaje()">Cancelar</button><button class="btn primary" onclick="enviarMensaje()">Enviar</button></div>
+  </div>
+</div>
+
+<!-- MODAL SEXO -->
+<div class="modal-overlay" id="modalSexo">
+  <div class="modal">
+    <div class="modal-title">⚧ Editar sexo</div>
+    <select class="modal-select" id="modalSexoSelect"><option value="">— No especificado —</option><option value="Hombre">Hombre</option><option value="Mujer">Mujer</option><option value="Indefinido">Indefinido</option></select>
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalSexo()">Cancelar</button><button class="btn primary" onclick="guardarSexo()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- MODAL ÚLTIMA VISITA -->
+<div class="modal-overlay" id="modalUltimaVisita">
+  <div class="modal">
+    <div class="modal-title">🗓 Última visita manual</div>
+    <div class="modal-sub">Campo manual de Wix Contacts. Independiente de la última visita calculada por historial.</div>
+    <input class="modal-input" id="modalUltimaVisitaInput" type="date">
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalUltimaVisita()">Cancelar</button><button class="btn ghost" onclick="limpiarUltimaVisita()">Quitar</button><button class="btn primary" onclick="guardarUltimaVisita()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- MODAL FECHA NACIMIENTO (v1.1.0) -->
+<div class="modal-overlay" id="modalFechaNacimiento">
+  <div class="modal">
+    <div class="modal-title">🎂 Fecha de nacimiento</div>
+    <div class="modal-sub">Se guarda como campo nativo del contacto (formato AAAA-MM-DD).</div>
+    <input class="modal-input" id="modalFechaNacimientoInput" type="date">
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalFechaNacimiento()">Cancelar</button><button class="btn ghost" onclick="limpiarFechaNacimiento()">Quitar</button><button class="btn primary" onclick="guardarFechaNacimiento()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- MODAL CUPÓN -->
+<div class="modal-overlay" id="modalCupon">
+  <div class="modal">
+    <div class="modal-title" id="modalCuponTitle">🎟 Nuevo cupón</div>
+    <div id="modalCuponWarn" style="display:none"></div>
+    <label class="modal-label">Código</label><input class="modal-input" id="cuponCode" type="text" placeholder="KALONICE10">
+    <label class="modal-label">Nombre</label><input class="modal-input" id="cuponName" type="text" placeholder="Nombre del cupón">
+    <label class="modal-label">Tipo de descuento</label><div class="radio-row"><button class="radio-btn active" id="cuponTipoPercent" onclick="selectCuponTipo('percent')">% Porcentaje</button><button class="radio-btn" id="cuponTipoMoney" onclick="selectCuponTipo('money')">€ Importe</button></div>
+    <label class="modal-label">Valor</label><input class="modal-input" id="cuponValor" type="number" min="1" step="any" placeholder="0">
+    <label class="modal-label">Subtotal mínimo</label><input class="modal-input" id="cuponMinSubtotal" type="number" min="0" step="any" placeholder="0">
+    <label class="modal-label">Fecha inicio</label><input class="modal-input" id="cuponStart" type="date">
+    <label class="modal-label">Fecha fin</label><input class="modal-input" id="cuponEnd" type="date">
+    <label class="check-row"><input type="checkbox" id="cuponSinFin" onchange="onSinFinChange(this.checked)"> Sin fecha final</label>
+    <label class="modal-label">Límite total de usos</label><input class="modal-input" id="cuponUsageLimit" type="number" min="1" step="1" placeholder="Sin límite">
+    <label class="modal-label">Límite por cliente</label><input class="modal-input" id="cuponLimitPerCust" type="number" min="1" step="1" placeholder="Sin límite">
+    <label class="check-row"><input type="checkbox" id="cuponActive" checked> Cupón activo</label>
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalCupon()">Cancelar</button><button class="btn primary" id="btnGuardarCupon" onclick="guardarCupon()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- MODAL ELIMINAR CUPÓN -->
+<div class="modal-overlay" id="modalConfirmDel">
+  <div class="modal">
+    <div class="modal-title">🗑 Eliminar cupón</div>
+    <div class="panel-sub" id="modalConfirmDelMsg">¿Seguro que quieres eliminar este cupón?</div>
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalConfirmDel()">Cancelar</button><button class="btn ghost" onclick="confirmarDesactivarCupon()">Desactivar</button><button class="btn danger" onclick="confirmarEliminarCupon()">Eliminar</button></div>
+  </div>
+</div>
+
+<script>
+// =====================================================
+// KAMISUITE — Ficha Cliente CRM Móvil v1.0.0
+// Mismo protocolo postMessage que el widget desktop v1.7.x.
+// =====================================================
+const TAG = '[FichaCliente][WidgetMobile][1.1.2]';
+let state = {
+  contactId:null, cliente:null, profile:null, notasHistorial:[], ventasTienda:[], productosVistos:new Set(), proximasCitas:[], careVisits:[], canalMensaje:'correo', cupones:[], cuponEditandoId:null, cuponEliminandoId:null, cuponDuplicandoDe:null, cuponSearchDebounce:null, cuponTipoActual:'percent',
+  // v1.1.1 — flag para el reintento "Crear igualmente" tras aviso duplicado
+  nuevoContactoDuplicadoConfirmado:false
+};
+let searchDebounce=null;
+
+function sendToPage(t,d){try{window.parent.postMessage({type:t,...(d||{})},'*')}catch(e){}}
+window.addEventListener('message',ev=>{const {type,...d}=ev?.data||{}; if(!type)return; switch(type){
+  case 'cacheReady':document.getElementById('searchCount').textContent=`${d.total||0} clientes en CRM`;break;
+  case 'clientesEncontrados':renderSearchResults(d.clientes||[]);break;
+  case 'fichaContactData':renderContactData(d.cliente,d.profile,d.warnings);break;
+  case 'fichaHistorial':renderHistorial(d.visitas||[],d.total||0);break;
+  case 'fichaTienda':state.ventasTienda=d.ventas||[];renderProductosTienda(state.ventasTienda);break;
+  case 'fichaProductos':renderProductosEcom(d.productos||[]);break;
+  case 'fichaExternos':renderExternos(d.externos||[]);break;
+  case 'fichaProximasCitas':renderProximasCitas(d.proximas||[]);break;
+  case 'fichaExpediente':renderExpediente(d.profile,d.visits,d.media);break;
+  case 'fichaLoading':setLoading(true);break;
+  case 'fichaOk':setLoading(false);showToast(d.message||'OK','ok');break;
+  case 'fichaError':setLoading(false);showToast(d.message||'Error','error');break;
+  case 'cuponesListados':setLoading(false);state.cupones=d.cupones||[];renderCuponesTable(state.cupones);break;
+  case 'cuponCreado':setLoading(false);cerrarModalCupon();showToast('Cupón creado','ok');cargarCupones();break;
+  case 'cuponObtenido':setLoading(false);rellenarModalCuponEdicion(d.cupon);break;
+  case 'cuponActualizado':setLoading(false);cerrarModalCupon();showToast('Cupón actualizado','ok');cargarCupones();break;
+  case 'cuponToggled':setLoading(false);if(d.cupon){const i=state.cupones.findIndex(c=>c.id===d.cupon.id);if(i>=0)state.cupones[i]=d.cupon;renderCuponesTable(state.cupones)}showToast(d.active?'Cupón activado':'Cupón desactivado','ok');break;
+  case 'cuponEliminado':setLoading(false);cerrarModalConfirmDel();state.cupones=state.cupones.filter(c=>c.id!==d.couponId);renderCuponesTable(state.cupones);showToast('Cupón eliminado','ok');break;
+  case 'cuponesError':setLoading(false);showToast(d.message||'Error en cupones','error');break;
+  // v1.1.2 — Alta de contacto desde CRM
+  case 'contactoCreado':cerrarModalNuevoContacto();showToast('Contacto creado','ok');seleccionarCliente(d.contactId,(d.cliente&&d.cliente.nombreCompleto)||'');break;
+  case 'contactoDuplicadoTelefono':{
+    mostrarWarnNuevoContacto('Ese número de teléfono lo tiene otro contacto.');
+    state.nuevoContactoDuplicadoConfirmado=true;
+    const btn=document.getElementById('btnGuardarNuevoContacto');
+    if(btn){btn.disabled=false;btn.textContent='Crear igualmente'}
+    break;
+  }
+  case 'contactoError':{
+    mostrarWarnNuevoContacto('No se ha podido crear el contacto. Revisa los datos e inténtalo de nuevo.');
+    const btn=document.getElementById('btnGuardarNuevoContacto');
+    if(btn){btn.disabled=false;btn.textContent='Crear'}
+    break;
+  }
+}});
+document.addEventListener('DOMContentLoaded',()=>{sendToPage('fichaReady',{});document.querySelectorAll('.tab.cliente-required').forEach(t=>t.classList.add('no-cliente'))});
+
+function setLoading(on){const b=document.getElementById('loadingBar');b.className=on?'loading-bar active':'loading-bar done';if(!on)setTimeout(()=>{b.className='loading-bar'},500)}
+function showToast(m,t){const el=document.getElementById('toast');el.textContent=m;el.className=`toast ${t} visible`;setTimeout(()=>{el.className='toast'},3000)}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function normalizarDedup(nombre){return String(nombre||'').toLowerCase().replace(/\s*\(\d+[\.,]?\d*€?\)/g,'').replace(/🛒\s*/g,'').trim()}
+function formatearFechaCorta(s){if(!s)return '—';let d;try{d=new Date(String(s).length===10?s+'T12:00:00Z':s);if(isNaN(d))return s}catch(_){return s}return d.toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'})}
+function formatearImporte(n){const v=Number(n||0);return Number.isFinite(v)?`${v}€`:'—'}
+
+function onSearchInput(v){clearTimeout(searchDebounce);if(v.length<2){document.getElementById('searchResults').classList.remove('visible');return}searchDebounce=setTimeout(()=>sendToPage('buscarCliente',{query:v}),300)}
+function renderSearchResults(cs){const el=document.getElementById('searchResults');el.innerHTML=cs.length?cs.map(c=>`<div class="result-item" onclick="seleccionarCliente('${esc(c.contactId)}','${esc(c.nombreCompleto)}')"><div class="result-name">${esc(c.nombreCompleto||'—')}</div><div class="result-sub">${esc(c.telefono||'')}${c.email?' · '+esc(c.email):''}</div></div>`).join(''):'<div class="result-item"><div class="result-name">Sin resultados</div></div>';el.classList.add('visible')}
+function seleccionarCliente(id,n){document.getElementById('searchInput').value=n;document.getElementById('searchResults').classList.remove('visible');state.contactId=id;state.ventasTienda=[];state.notasHistorial=[];state.proximasCitas=[];state.productosVistos=new Set();resetPanelsForLoading();setLoading(true);sendToPage('clienteSeleccionado',{contactId:id})}
+document.addEventListener('click',e=>{if(!e.target.closest('.search-card'))document.getElementById('searchResults').classList.remove('visible')});
+function resetPanelsForLoading(){document.getElementById('historialBody').innerHTML=empty('📋','Cargando historial...');document.getElementById('productosGrid').innerHTML='';document.getElementById('proximasCitasBody').innerHTML=empty('📅','Cargando citas...');document.getElementById('notasHistorialBody').innerHTML=empty('🗒','Cargando notas...');document.getElementById('expedienteBody').innerHTML=empty('💚','Cargando expediente...');['infoNotasPublicas','infoNotasColor','infoNotasTratamientos','infoNotasClienteSalon'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});document.getElementById('fieldFechaNacimiento').textContent='—';setTarjetaPrimeVisual({tiene:false});const be=document.getElementById('bonosEmpty');const bb=document.getElementById('bonosBody');if(be)be.style.display='block';if(bb){bb.style.display='none';bb.innerHTML=''}document.getElementById('badgeProximas').textContent='0';document.getElementById('badgeHistorial').textContent='0';document.getElementById('badgeProductos').textContent='0'}
+function empty(icon,text){return `<div class="empty-state"><div class="empty-icon">${icon}</div><div>${esc(text)}</div></div>`}
+
+function renderContactData(cl,pr,w){if(!cl)return;setLoading(false);state.cliente=cl;state.profile=pr||{};document.getElementById('noClient').style.display='none';document.getElementById('clientCard').style.display='block';document.getElementById('btnMensaje').disabled=false;document.querySelectorAll('.tab.cliente-required').forEach(t=>t.classList.remove('no-cliente'));switchTab('resumen',document.querySelector('[data-tab=resumen]'));
+  sendToPage('cargarProximasCitas',{contactId:cl.contactId||state.contactId,nombre:cl.nombreCompleto||'',email:cl.email||''});
+  const init=((cl.nombre?.[0]||'')+(cl.apellido?.[0]||'')).toUpperCase()||'?';document.getElementById('avatarInitials').textContent=init;const foto=pr?.fotoUrl||null;document.getElementById('avatarImg').style.display=foto?'block':'none';document.getElementById('avatarInitials').style.display=foto?'none':'block';if(foto)document.getElementById('avatarImg').src=foto;
+  document.getElementById('clientName').textContent=cl.nombreCompleto||'—';document.getElementById('clientSince').textContent=cl.createdDate?`Cliente desde ${new Date(cl.createdDate).toLocaleDateString('es-ES',{month:'short',year:'numeric'})}`:'';
+  const tags=pr?.labelKeys||cl.tags||[];const cidAmb=pr?.cidAmbiguos||0;const hasExp=!!pr?.hasExpediente;const hasNotas=!!pr?.notasSalon;let badges=tags.slice(0,2).map(t=>`<span class="badge badge-tag">${esc(t)}</span>`).join('');if(hasExp)badges+=`<span class="badge badge-exp">💚 Expediente</span>`;if(hasNotas)badges+=`<span class="badge badge-nota">📝 Notas</span>`;if(pr?.notasClienteSalonRaw)badges+=`<span class="badge badge-nota">👤 Nota cliente</span>`;if(cidAmb>0)badges+=`<span class="badge badge-ambiguo">⚠ ${cidAmb}</span>`;document.getElementById('badgesRow').innerHTML=badges;
+  document.getElementById('warnBar').innerHTML=w?.includes('SIN_EMAIL')?'<div class="warn-bar">⚠ Sin email personal — no se enviarán recordatorios</div>':'';
+  const tel=cl.telefono||'';const email=cl.email||'';const eG=email.includes('hair-times.com');document.getElementById('fieldTel').textContent=tel||'—';document.getElementById('fieldEmail').textContent=eG?'⚠ Sin email personal':(email||'—');renderDatosPersonales(pr||{});renderInformacion(pr||{});renderBonosPromosTab(pr||{});renderResumen(cl,pr||{});
+  document.getElementById('statVisitas').textContent=pr?.totalVisitas??0;document.getElementById('statFacturado').textContent=pr?.totalFacturado!=null?`${Number(pr.totalFacturado).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})}€`:'0,00€';document.getElementById('loyaltyPts').textContent=pr?.loyaltyPoints||0;
+  state.notasHistorial=(cl.notasSalonHistorial||'').split(' | ').map(n=>n.trim()).filter(Boolean);renderNotasHistorial();
+}
+function renderResumen(cl,pr){const notaSalon=pr?.notasSalon||'';const ultima=pr?.ultimaVisita?formatearFechaCorta(pr.ultimaVisita):'Sin visitas registradas';document.getElementById('resumenBody').innerHTML=`<div class="panel"><div class="panel-title">${esc(cl.nombreCompleto||'Cliente')}</div><div class="card-list"><div class="item-card"><div class="item-title">Contacto</div><div class="item-sub">📞 ${esc(cl.telefono||'—')}<br>✉ ${esc(cl.email||'—')}</div></div><div class="item-card"><div class="item-title">Última visita</div><div class="item-sub">${esc(ultima)}</div></div><div class="item-card"><div class="item-title">Nota rápida del salón</div><div class="item-sub">${notaSalon?esc(notaSalon):'Sin nota interna del salón.'}</div></div></div><div class="actions"><button class="btn ghost" onclick="editarCampo('nombre')">Editar contacto</button><button class="btn primary" onclick="abrirModalNota()">+ Nota interna</button></div></div>`}
+function renderDatosPersonales(pr){document.getElementById('fieldSexo').textContent=pr.sexo||'—';const uv=pr.ultimaVisitaCustom||'';document.getElementById('fieldUltimaVisita').textContent=uv?formatearFechaCorta(uv):'—';const fn=pr.fechaNacimiento||'';document.getElementById('fieldFechaNacimiento').textContent=fn?formatearFechaCorta(fn):'—';setTarjetaPrimeVisual(pr.prime||{tiene:false});renderInsignia(pr.badges||[])}
+function setTarjetaPrimeVisual(prime){const el=document.getElementById('primePill');if(!el)return;const tiene=!!(prime?.tiene);if(tiene){const exp=prime?.membresia?.expirationDate||'';const expShort=exp?formatearFechaCorta(exp):'';el.className='prime-pill activo';el.textContent=expShort?`✓ Activa hasta ${expShort}`:'✓ Activa'}else{el.className='prime-pill inactivo';el.textContent='✓ Sin tarjeta'}}
+function setClubToggleVisual(_activo){/* v1.1.0 shim vacío por compatibilidad */}
+function renderInsignia(badges){const wrap=document.getElementById('fieldInsigniaWrap');if(!badges?.length){wrap.innerHTML='<span class="insignia-pill empty">Sin insignia</span>';return}wrap.innerHTML=badges.map(b=>`<span class="insignia-pill" style="background:${esc(b.backgroundColor||'#33cfc5')};color:${esc(b.textColor||'#fff')};border-color:${esc(b.backgroundColor||'#33cfc5')}">${esc(b.title||'—')}</span>`).join(' ')}
+function renderInformacion(pr){document.getElementById('informacionEmpty').style.display='none';document.getElementById('informacionBody').style.display='block';document.getElementById('infoNotasPublicas').value=pr.notasPublicas||'';document.getElementById('infoNotasColor').value=pr.notasColor||'';document.getElementById('infoNotasTratamientos').value=pr.notasTratamientos||'';document.getElementById('infoNotasClienteSalon').value=formatNotasClienteSalon(pr)}
+function formatNotasClienteSalon(pr){if(pr.notasClienteSalonHistorico?.length){return pr.notasClienteSalonHistorico.map(n=>`[${n.fecha||'Sin fecha'}] ${n.texto||''}`).join('\n\n')}return pr.notasClienteSalonRaw||''}
+function resetNotasPublicas(){document.getElementById('infoNotasPublicas').value=state.profile?.notasPublicas||''}function resetNotasColor(){document.getElementById('infoNotasColor').value=state.profile?.notasColor||''}function resetNotasTratamientos(){document.getElementById('infoNotasTratamientos').value=state.profile?.notasTratamientos||''}
+function guardarNotasPublicas(){if(!state.contactId){showToast('Selecciona un cliente','error');return}const v=document.getElementById('infoNotasPublicas').value;setLoading(true);sendToPage('guardarNotasPublicas',{contactId:state.contactId,valor:v});if(state.profile)state.profile.notasPublicas=v}
+function guardarNotasColor(){if(!state.contactId){showToast('Selecciona un cliente','error');return}const v=document.getElementById('infoNotasColor').value;setLoading(true);sendToPage('guardarNotasColor',{contactId:state.contactId,valor:v});if(state.profile)state.profile.notasColor=v}
+function guardarNotasTratamientos(){if(!state.contactId){showToast('Selecciona un cliente','error');return}const v=document.getElementById('infoNotasTratamientos').value;setLoading(true);sendToPage('guardarNotasTratamientos',{contactId:state.contactId,valor:v});if(state.profile)state.profile.notasTratamientos=v}
+
+function switchTab(n,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));if(el)el.classList.add('active');document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));const p=document.getElementById(`tab-${n}`);if(p)p.classList.add('active');if(n==='cupones'&&state.cupones.length===0)cargarCupones()}
+function renderHistorial(vs,total){document.getElementById('badgeHistorial').textContent=total;document.getElementById('ambiguoInfo').style.display=vs.some(v=>v.ambiguo)?'block':'none';const b=document.getElementById('historialBody');if(!vs.length){b.innerHTML=empty('📋','Sin historial');return}b.innerHTML=vs.map(v=>{const f=v.fecha?formatearFechaCorta(v.fecha):'—';return `<div class="item-card"><div class="item-head"><div><div class="item-title">${esc(f)}</div><div class="item-sub">${staffChipText(v.staff)} ${v.tipoPago?'· '+esc(v.tipoPago):''}</div></div><div class="item-price">${v.importeTotal!=null?v.importeTotal+'€':'—'}</div></div><div>${clasificar(v.descripcion)}</div><div style="margin-top:8px">${v.ambiguo?'<span class="pill orange">⚠ Dudoso</span>':'<span class="pill green">✓ Cobrado</span>'}</div></div>`}).join('')}
+function renderProximasCitas(proximas){document.getElementById('badgeProximas').textContent=proximas.length;state.proximasCitas=proximas;const b=document.getElementById('proximasCitasBody');if(!proximas.length){b.innerHTML=empty('📅','Sin citas próximas');return}b.innerHTML=proximas.map((c,idx)=>`<div class="item-card"><div class="item-head"><div><div class="item-title">${esc(c.fecha||'Cita')}</div><div class="item-sub">${esc(c.titulo||'Servicio')}</div></div><div class="item-price">${esc(c.horaInicio||'')}${c.horaFin?' — '+esc(c.horaFin):''}</div></div><div class="item-sub">${staffChipText(c.staff||'')} ${c.tipo==='externo'?'· Externo':'· Salón'}</div><div class="actions"><button class="btn ghost" onclick="copiarCita(${idx})">📋 Copiar</button></div></div>`).join('')}
+function renderProductosTienda(vs){state.productosVistos=new Set();const g=document.getElementById('productosGrid');if(!vs.length){g.innerHTML=empty('🛍','Sin compras');updateProdBadge();return}g.innerHTML=vs.map(v=>{const f=v.fecha?new Date(v.fecha).toLocaleDateString('es-ES',{month:'short',year:'numeric'}):'';const n=String(v.descripcion||'').replace(/\s*\(\d+[\.,]?\d*€?\)/g,'').replace(/🛒\s*/g,'').trim()||'Producto';state.productosVistos.add(normalizarDedup(n)+'|'+f);return `<div class="product-card"><div class="product-img">🛍</div><div style="flex:1"><div class="item-title">${esc(n)}</div><div class="item-sub">${esc(f)}</div><div class="item-price">${v.importeTotal!=null?v.importeTotal+'€':'—'}</div></div></div>`}).join('');updateProdBadge()}
+function renderProductosEcom(ps){if(!ps.length)return;const g=document.getElementById('productosGrid');const nuevos=ps.filter(p=>{const nombre=normalizarDedup(p.name||'');const fecha=p.date?new Date(p.date).toLocaleDateString('es-ES',{month:'short',year:'numeric'}):'';const k=nombre+'|'+fecha;if(state.productosVistos.has(k))return false;state.productosVistos.add(k);return true});if(!nuevos.length){updateProdBadge();return}const html=nuevos.map(p=>`<div class="product-card"><div class="product-img">${p.imageUrl?`<img src="${esc(p.imageUrl)}">`:'🧴'}</div><div style="flex:1"><div class="item-title">${esc(p.name||'—')}</div><div class="item-sub">x${p.quantity||1}${p.date?' · '+new Date(p.date).toLocaleDateString('es-ES',{month:'short',year:'numeric'}):''}</div><div class="item-price">${esc(p.price||'—')}</div></div></div>`).join('');if(state.ventasTienda.length)g.insertAdjacentHTML('beforeend',html);else g.innerHTML=html;updateProdBadge()}
+function updateProdBadge(){const total=document.querySelectorAll('#productosGrid .product-card').length;document.getElementById('badgeProductos').textContent=total;document.getElementById('statProductos').textContent=total}
+function renderExternos(es){if(!es.length)return;document.getElementById('historialBody').insertAdjacentHTML('afterbegin',es.map(e=>`<div class="item-card"><div class="item-head"><div><div class="item-title">${esc(e.fecha?formatearFechaCorta(e.fecha):'—')}</div><div class="item-sub">Servicio externo</div></div><div class="item-price">${e.precio!=null?e.precio+'€':'—'}</div></div><span class="pill purple">${esc(e.servicio||'Externo')}</span></div>`).join(''))}
+function renderNotasHistorial(){const b=document.getElementById('notasHistorialBody');if(!state.notasHistorial.length){b.innerHTML=empty('🗒','Sin notas internas del salón');return}b.innerHTML=[...state.notasHistorial].reverse().map(n=>{const m=n.match(/^\[(.+?)\]\s*(.+?):\s*(.+)$/);return m?`<div class="item-card"><div class="item-title">${esc(m[3])}</div><div class="item-sub">${esc(m[2])} · ${esc(m[1])}</div></div>`:`<div class="item-card"><div class="item-title">${esc(n)}</div></div>`}).join('')}
+function renderExpediente(p,vs,m){const b=document.getElementById('expedienteBody');if(!p&&(!vs||!vs.length)){b.innerHTML=empty('💚','Sin expediente activo');return}let h='';if(p?.notes)h+=`<div class="item-card"><div class="item-title">Notas generales</div><div class="item-sub">${esc(p.notes)}</div></div>`;state.careVisits=vs||[];if(vs?.length)h+=vs.map((v,i)=>`<div class="item-card"><div class="item-title">${esc(v.zone||'General')}</div><div class="item-sub" style="white-space:pre-wrap">${esc(v.clientSummary||'Este diagnóstico no tiene resumen para cliente.')}</div><div class="actions"><button class="btn ghost" onclick="copiarResumen(${i})">Copiar</button><button class="btn ghost" onclick="enviarResumenEmail(${i})">Email</button><button class="btn ghost" onclick="enviarResumenWA(${i})">WhatsApp</button></div></div>`).join('');b.innerHTML=h||empty('💚','Sin visitas de cuidado')}
+function clasificar(desc){return String(desc||'').toLowerCase().split(',').slice(0,5).map(k=>{k=k.replace(/\(.*?\)/g,'').replace(/🛒\s*/g,'').trim();if(!k)return'';let c='';if(/tinte|mech|color|vegetal|matiz/.test(k))c=' purple';else if(/kerastase|tratamiento|botox|nano|olaplex/.test(k))c=' green';else if(/manicura|pedicura|pestaña|uña/.test(k))c=' orange';return `<span class="pill${c}">${esc(k)}</span>`}).join('')}
+function staffChipText(s){return s&&s!=='—'?`Profesional: ${esc(s)}`:'Profesional: —'}
+
+function copiarCita(idx){const c=state.proximasCitas?.[idx];if(!c)return;const texto=[`📅 ${c.fecha||''}`,`⏰ ${c.horaInicio||''}${c.horaFin?' — '+c.horaFin:''}`,`💇 ${c.titulo||'Cita'}`,c.staff?`👩‍🦰 ${c.staff}`:'',state.cliente?.nombreCompleto?`👤 ${state.cliente.nombreCompleto}`:''].filter(Boolean).join('\n');copyText(texto,'Cita copiada')}
+function copyText(texto,msg){navigator.clipboard?.writeText(texto).then(()=>showToast(msg,'ok')).catch(()=>{const ta=document.createElement('textarea');ta.value=texto;ta.style.position='fixed';ta.style.left='-9999px';document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showToast(msg,'ok')})}
+
+function editarCampo(c){if(!state.cliente)return;const cl=state.cliente;document.getElementById('modalEditNombre').value=cl.nombre||'';document.getElementById('modalEditApellido').value=cl.apellido||'';document.getElementById('modalEditEmail').value=(cl.email&&!cl.email.includes('hair-times.com'))?cl.email:'';document.getElementById('modalEditTel').value=cl.telefono||'';document.getElementById('modalEditTitle').textContent={nombre:'Editar nombre',email:'Editar email',telefono:'Editar teléfono'}[c]||'Editar contacto';document.getElementById('modalEdit').classList.add('visible')}
+function cerrarModalEdit(){document.getElementById('modalEdit').classList.remove('visible')}
+function guardarEdicion(){const n=document.getElementById('modalEditNombre').value.trim();const a=document.getElementById('modalEditApellido').value.trim();const e=document.getElementById('modalEditEmail').value.trim();const t=document.getElementById('modalEditTel').value.trim();if(!n){showToast('Nombre obligatorio','error');return}cerrarModalEdit();setLoading(true);sendToPage('actualizarContacto',{contactId:state.contactId,nombre:n,apellido:a,email:e,telefono:t})}
+function abrirModalNota(){if(!state.contactId)return;document.getElementById('modalNotaTexto').value='';document.getElementById('modalNotaAutor').value='';document.getElementById('modalNota').classList.add('visible')}
+function cerrarModalNota(){document.getElementById('modalNota').classList.remove('visible')}
+function guardarNota(){const n=document.getElementById('modalNotaTexto').value.trim();const a=document.getElementById('modalNotaAutor').value.trim()||'Recepción';if(!n){showToast('Escribe una nota','error');return}cerrarModalNota();setLoading(true);sendToPage('guardarNota',{contactId:state.contactId,nota:n,autor:a});const ts=new Date().toLocaleString('es-ES',{timeZone:'Europe/Madrid'});state.notasHistorial.push(`[${ts}] ${a}: ${n}`);renderNotasHistorial()}
+function triggerFotoUpload(){if(!state.contactId)return;document.getElementById('fotoInput').click()}
+function onFotoSelected(input){const f=input.files?.[0];if(!f)return;const r=new FileReader();r.onload=e=>{document.getElementById('avatarImg').src=e.target.result;document.getElementById('avatarImg').style.display='block';document.getElementById('avatarInitials').style.display='none'};r.readAsDataURL(f);const r2=new FileReader();r2.onload=e=>sendToPage('subirFoto',{contactId:state.contactId,base64Data:e.target.result,base64:e.target.result,fileName:f.name,mimeType:f.type});r2.readAsDataURL(f)}
+function sincronizarFicha(){if(!state.contactId)return;setLoading(true);sendToPage('sincronizar',{contactId:state.contactId})}
+
+function editarSexo(){if(!state.contactId){showToast('Selecciona un cliente','error');return}document.getElementById('modalSexoSelect').value=state.profile?.sexo||'';document.getElementById('modalSexo').classList.add('visible')}
+function cerrarModalSexo(){document.getElementById('modalSexo').classList.remove('visible')}
+function guardarSexo(){const v=document.getElementById('modalSexoSelect').value;cerrarModalSexo();setLoading(true);sendToPage('guardarSexo',{contactId:state.contactId,valor:v});if(state.profile)state.profile.sexo=v;document.getElementById('fieldSexo').textContent=v||'—'}
+function editarUltimaVisita(){if(!state.contactId){showToast('Selecciona un cliente','error');return}document.getElementById('modalUltimaVisitaInput').value=state.profile?.ultimaVisitaCustom||'';document.getElementById('modalUltimaVisita').classList.add('visible')}
+function cerrarModalUltimaVisita(){document.getElementById('modalUltimaVisita').classList.remove('visible')}
+function limpiarUltimaVisita(){document.getElementById('modalUltimaVisitaInput').value='';guardarUltimaVisita()}
+function guardarUltimaVisita(){const v=document.getElementById('modalUltimaVisitaInput').value||'';cerrarModalUltimaVisita();setLoading(true);sendToPage('guardarUltimaVisita',{contactId:state.contactId,valor:v});if(state.profile)state.profile.ultimaVisitaCustom=v;document.getElementById('fieldUltimaVisita').textContent=v?formatearFechaCorta(v):'—'}
+function toggleClub(){/* v1.1.0 retirada — se conserva el nombre por si algo lo invoca */}
+
+// v1.1.0 — Fecha de nacimiento (nativa Wix Contacts)
+function editarFechaNacimiento(){if(!state.contactId){showToast('Selecciona un cliente','error');return}document.getElementById('modalFechaNacimientoInput').value=state.profile?.fechaNacimiento||'';document.getElementById('modalFechaNacimiento').classList.add('visible')}
+function cerrarModalFechaNacimiento(){document.getElementById('modalFechaNacimiento').classList.remove('visible')}
+function limpiarFechaNacimiento(){document.getElementById('modalFechaNacimientoInput').value='';guardarFechaNacimiento()}
+function guardarFechaNacimiento(){const v=document.getElementById('modalFechaNacimientoInput').value||'';cerrarModalFechaNacimiento();setLoading(true);sendToPage('guardarFechaNacimiento',{contactId:state.contactId,valor:v});if(state.profile)state.profile.fechaNacimiento=v;document.getElementById('fieldFechaNacimiento').textContent=v?formatearFechaCorta(v):'—'}
+
+// v1.1.0 — Sub-tarjetas Bonos y Promociones (PRIME + Bonos + Tarjetas)
+function renderBonosPromosTab(pr){const empty=document.getElementById('bonosEmpty');const body=document.getElementById('bonosBody');if(!empty||!body)return;if(!pr||(!pr.prime&&!pr.bonos&&!pr.tarjetas)){empty.style.display='block';body.style.display='none';body.innerHTML='';return}empty.style.display='none';body.style.display='flex';body.innerHTML=renderKbPrimeCard(pr.prime||{})+renderKbBonosCard(pr.bonos||{})+renderKbTarjetasCard(pr.tarjetas||{})}
+function renderKbBtn(urlAdquirir,label){const url=String(urlAdquirir||'').trim();if(!url)return `<span class="kb-btn kb-btn-soft" aria-disabled="true">${esc(label)}</span>`;return `<a class="kb-btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`}
+function renderKbPrimeCard(prime){const tiene=!!prime?.tiene;const cover=prime?.imagen?`<div class="kb-cover-prime" style="background-image:url('${esc(prime.imagen)}')"></div>`:'';let bodyHtml;if(tiene&&prime.membresia){const exp=prime.membresia.expirationDate?formatearFechaCorta(prime.membresia.expirationDate):'—';bodyHtml=`<div class="kb-rows"><div class="kb-row"><span class="kb-row-label">Estado</span><span class="kb-badge kb-badge-ok">Membresía activa</span></div><div class="kb-row"><span class="kb-row-label">Vencimiento</span><span class="kb-row-value">${esc(exp)}</span></div><div class="kb-row"><span class="kb-row-label">Código</span><span class="kb-row-value" style="font-family:monospace">${esc(prime.membresia.code||'—')}</span></div></div>`}else{bodyHtml=`<div class="kb-copy">El cliente aún no tiene tarjeta PRIME. Al adquirirla obtiene descuentos, ventajas exclusivas y prioridad de reserva.</div>${renderKbBtn(prime?.urlAdquirir,'Adquirir tarjeta PRIME')}`}return `<div class="kb-card"><div class="kb-title">Tarjeta PRIME</div>${cover}<div class="kb-body">${bodyHtml}</div></div>`}
+function renderKbBonosCard(bonos){const tiene=!!bonos?.tiene;const items=Array.isArray(bonos?.items)?bonos.items:[];let bodyHtml;if(tiene&&items.length){const list=items.map(v=>{const exp=v.expirationDate?formatearFechaCorta(v.expirationDate):'sin caducidad';return `<div class="kb-item"><div class="kb-item-title">${esc(v.serviceLabel||'Bono')}</div><div class="kb-item-meta">${Number(v.remainingUses||0)} de ${Number(v.totalUses||0)} usos · caduca ${esc(exp)}</div><div class="kb-item-code">${esc(v.code||'')}</div></div>`}).join('');bodyHtml=`<div class="kb-list">${list}</div>${renderKbBtn(bonos?.urlAdquirir,'Adquirir más bonos')}`}else{bodyHtml=`<div class="kb-copy">El cliente aún no tiene bonos activos. Los bonos son paquetes de sesiones prepagadas con precio ventajoso por servicio.</div>${renderKbBtn(bonos?.urlAdquirir,'Adquirir bonos')}`}return `<div class="kb-card"><div class="kb-title">Mis bonos descuento</div><div class="kb-body">${bodyHtml}</div></div>`}
+function renderKbTarjetasCard(tarjetas){const tiene=!!tarjetas?.tiene;const items=Array.isArray(tarjetas?.items)?tarjetas.items:[];let bodyHtml;if(tiene&&items.length){const list=items.map(v=>{const exp=v.expirationDate?formatearFechaCorta(v.expirationDate):'sin caducidad';return `<div class="kb-item"><div class="kb-item-title">${esc(v.serviceLabel||'Tarjeta promocional')}</div><div class="kb-item-meta">Caduca ${esc(exp)}</div><div class="kb-item-code">${esc(v.code||'')}</div></div>`}).join('');bodyHtml=`<div class="kb-list">${list}</div>${renderKbBtn(tarjetas?.urlAdquirir,'Adquirir más tarjetas')}`}else{bodyHtml=`<div class="kb-copy">El cliente aún no tiene tarjetas promocionales activas. Son descuentos de servicio con vigencia limitada.</div>${renderKbBtn(tarjetas?.urlAdquirir,'Adquirir tarjetas promocionales')}`}return `<div class="kb-card"><div class="kb-title">Mis tarjetas promocionales</div><div class="kb-body">${bodyHtml}</div></div>`}
+
+function abrirModalMensaje(){if(!state.contactId||!state.cliente)return;document.getElementById('msgClienteNombre').textContent=state.cliente.nombreCompleto||'—';document.getElementById('msgTexto').value='';document.getElementById('msgWarn').style.display='none';state.canalMensaje='correo';document.querySelectorAll('#modalMensaje .radio-btn').forEach(b=>b.classList.remove('active'));document.getElementById('chCorreo').classList.add('active');const cl=state.cliente;const email=cl.email&&!cl.email.includes('hair-times.com')?cl.email:'';const tel=cl.telefono||'';document.getElementById('chCorreo').disabled=!email;document.getElementById('chWhatsapp').disabled=!tel;if(!email&&!tel){document.getElementById('msgWarn').innerHTML='<div class="warn-bar">⚠ Este cliente no tiene email ni teléfono</div>';document.getElementById('msgWarn').style.display='block'}document.getElementById('modalMensaje').classList.add('visible')}
+function cerrarModalMensaje(){document.getElementById('modalMensaje').classList.remove('visible')}
+function selCanal(c){state.canalMensaje=c;document.querySelectorAll('#modalMensaje .radio-btn').forEach(b=>b.classList.remove('active'));document.getElementById(c==='correo'?'chCorreo':'chWhatsapp').classList.add('active')}
+function enviarMensaje(){const texto=document.getElementById('msgTexto').value.trim();if(!texto){showToast('Escribe un mensaje','error');return}const cl=state.cliente;const email=cl.email&&!cl.email.includes('hair-times.com')?cl.email:'';const tel=cl.telefono||'';cerrarModalMensaje();if(state.canalMensaje==='correo'){if(!email){showToast('Este cliente no tiene email','error');return}window.open(`mailto:${email}?subject=${encodeURIComponent('Tienes un mensaje')}&body=${encodeURIComponent(texto)}`,'_blank');showToast('Correo abierto','ok')}else{if(!tel){showToast('Este cliente no tiene teléfono','error');return}let telWa=tel.replace(/[\s\-\(\)]/g,'');if(!telWa.startsWith('+')&&!telWa.startsWith('34'))telWa='34'+telWa;if(telWa.startsWith('+'))telWa=telWa.substring(1);window.open(`https://wa.me/${telWa}?text=${encodeURIComponent(texto)}`,'_blank');showToast('WhatsApp abierto','ok')}}
+function copiarResumen(idx){const texto=state.careVisits?.[idx]?.clientSummary||'';if(!texto){showToast('Sin resumen disponible','error');return}copyText(texto,'Resumen copiado')}
+function enviarResumenEmail(idx){const texto=state.careVisits?.[idx]?.clientSummary||'';if(!texto){showToast('Sin resumen disponible','error');return}const email=state.cliente?.email&&!state.cliente.email.includes('hair-times.com')?state.cliente.email:'';if(!email){showToast('Cliente sin email personal','error');return}window.open(`mailto:${email}?subject=${encodeURIComponent('Tu informe de cuidado')}&body=${encodeURIComponent(texto)}`,'_blank')}
+function enviarResumenWA(idx){const texto=state.careVisits?.[idx]?.clientSummary||'';if(!texto){showToast('Sin resumen disponible','error');return}const tel=state.cliente?.telefono||'';if(!tel){showToast('Cliente sin teléfono','error');return}let telWa=tel.replace(/[\s\-\(\)]/g,'');if(!telWa.startsWith('+')&&!telWa.startsWith('34'))telWa='34'+telWa;if(telWa.startsWith('+'))telWa=telWa.substring(1);window.open(`https://wa.me/${telWa}?text=${encodeURIComponent(texto)}`,'_blank')}
+
+function cargarCupones(){const filtros={buscar:document.getElementById('cuponSearch')?.value||'',estado:document.getElementById('cuponFilterEstado')?.value||'',tipo:document.getElementById('cuponFilterTipo')?.value||''};document.getElementById('cuponesBody').innerHTML=empty('🎟','Cargando cupones...');sendToPage('cargarCupones',{limit:200,filtros})}
+function onCuponSearchChange(){clearTimeout(state.cuponSearchDebounce);state.cuponSearchDebounce=setTimeout(cargarCupones,250)}
+function estadoCupon(c){const ahora=Date.now();if(c.expirationTime){const e=new Date(c.expirationTime).getTime();if(!isNaN(e)&&e<ahora)return{txt:'Expirado',cls:'red'}}if(c.active===false)return{txt:'Inactivo',cls:'purple'};return{txt:'Activo',cls:'green'}}
+function renderCuponesTable(cupones){const b=document.getElementById('cuponesBody');if(!cupones?.length){b.innerHTML=empty('🎟','Sin cupones que mostrar');return}b.innerHTML=cupones.map(c=>{const est=estadoCupon(c);const desc=c.tipo==='percent'?`${c.valorDescuento||0}%`:`${c.valorDescuento||0}€`;const fechas=`${c.startTime?formatearFechaCorta(c.startTime):'—'} · ${c.expirationTime?formatearFechaCorta(c.expirationTime):'Sin fin'}`;const usos=`${c.numberOfUsages||0}${c.usageLimit?'/'+c.usageLimit:''}`;return `<div class="item-card"><div class="item-head"><div><div class="item-title">${esc(c.code)}</div><div class="item-sub">${esc(c.name||'')}</div></div><div class="item-price">${esc(desc)}</div></div><div><span class="pill ${est.cls}">${est.txt}</span><span class="pill">${c.tipo==='percent'?'Porcentaje':'Importe fijo'}</span><span class="pill orange">Usos ${esc(usos)}</span></div><div class="item-sub" style="margin-top:8px">${esc(fechas)} · Mín. ${c.minimumSubtotal!=null?c.minimumSubtotal+'€':'—'}</div><div class="coupon-actions"><button class="btn ghost" onclick="abrirModalCuponEditar('${esc(c.id)}')">✏</button><button class="btn ghost" onclick="duplicarCupon('${esc(c.id)}')">⎘</button><button class="btn ghost" onclick="toggleCupon('${esc(c.id)}',${!c.active})">${c.active?'⏸':'▶'}</button><button class="btn danger" onclick="abrirModalConfirmDel('${esc(c.id)}','${esc(c.code)}','${esc(c.name)}')">🗑</button></div></div>`}).join('')}
+function toggleCupon(couponId,active){setLoading(true);sendToPage('toggleCupon',{couponId,active})}
+function resetModalCupon(){document.getElementById('cuponCode').value='';document.getElementById('cuponCode').readOnly=false;document.getElementById('cuponName').value='';selectCuponTipo('percent');document.getElementById('cuponTipoPercent').disabled=false;document.getElementById('cuponTipoMoney').disabled=false;document.getElementById('cuponValor').value='';document.getElementById('cuponMinSubtotal').value='';document.getElementById('cuponStart').value=new Date().toISOString().substring(0,10);document.getElementById('cuponEnd').value='';document.getElementById('cuponSinFin').checked=false;document.getElementById('cuponUsageLimit').value='';document.getElementById('cuponLimitPerCust').value='';document.getElementById('cuponActive').checked=true;document.getElementById('modalCuponWarn').style.display='none';document.getElementById('modalCuponWarn').innerHTML='';state.cuponEditandoId=null;state.cuponDuplicandoDe=null}
+function abrirModalCuponCrear(){resetModalCupon();document.getElementById('modalCuponTitle').textContent='🎟 Nuevo cupón';document.getElementById('btnGuardarCupon').textContent='Crear';document.getElementById('modalCupon').classList.add('visible')}
+function abrirModalCuponEditar(couponId){resetModalCupon();document.getElementById('modalCuponTitle').textContent='🎟 Editar cupón';document.getElementById('btnGuardarCupon').textContent='Guardar cambios';state.cuponEditandoId=couponId;setLoading(true);sendToPage('obtenerCupon',{couponId});document.getElementById('modalCupon').classList.add('visible')}
+function rellenarModalCuponEdicion(c){if(!c)return;document.getElementById('cuponCode').value=c.code||'';document.getElementById('cuponCode').readOnly=true;document.getElementById('cuponName').value=c.name||'';selectCuponTipo(c.tipo||'percent');document.getElementById('cuponTipoPercent').disabled=true;document.getElementById('cuponTipoMoney').disabled=true;document.getElementById('cuponValor').value=c.valorDescuento??'';document.getElementById('cuponMinSubtotal').value=c.minimumSubtotal??'';document.getElementById('cuponStart').value=c.startTime?c.startTime.substring(0,10):'';document.getElementById('cuponEnd').value=c.expirationTime?c.expirationTime.substring(0,10):'';document.getElementById('cuponSinFin').checked=!c.expirationTime;onSinFinChange(!c.expirationTime);document.getElementById('cuponUsageLimit').value=c.usageLimit??'';document.getElementById('cuponLimitPerCust').value=c.limitPerCustomer??'';document.getElementById('cuponActive').checked=c.active!==false}
+function duplicarCupon(couponId){const c=state.cupones.find(x=>x.id===couponId);if(!c){showToast('Cupón no encontrado','error');return}resetModalCupon();document.getElementById('modalCuponTitle').textContent='🎟 Duplicar cupón';document.getElementById('btnGuardarCupon').textContent='Crear duplicado';state.cuponDuplicandoDe=couponId;document.getElementById('cuponName').value=c.name?c.name+' (copia)':'';selectCuponTipo(c.tipo||'percent');document.getElementById('cuponValor').value=c.valorDescuento??'';document.getElementById('cuponMinSubtotal').value=c.minimumSubtotal??'';document.getElementById('cuponStart').value=new Date().toISOString().substring(0,10);document.getElementById('cuponEnd').value=c.expirationTime?c.expirationTime.substring(0,10):'';document.getElementById('cuponSinFin').checked=!c.expirationTime;onSinFinChange(!c.expirationTime);document.getElementById('cuponUsageLimit').value=c.usageLimit??'';document.getElementById('cuponLimitPerCust').value=c.limitPerCustomer??'';document.getElementById('modalCupon').classList.add('visible')}
+function cerrarModalCupon(){document.getElementById('modalCupon').classList.remove('visible')}
+function selectCuponTipo(tipo){state.cuponTipoActual=tipo;document.getElementById('cuponTipoPercent').classList.toggle('active',tipo==='percent');document.getElementById('cuponTipoMoney').classList.toggle('active',tipo==='money')}
+function onSinFinChange(sinFin){const inp=document.getElementById('cuponEnd');if(sinFin){inp.value='';inp.disabled=true}else inp.disabled=false}
+function showCuponWarn(msg){const el=document.getElementById('modalCuponWarn');el.innerHTML=`<div class="warn-bar">${esc(msg)}</div>`;el.style.display='block'}
+function leerSpecDeModal(){const code=document.getElementById('cuponCode').value.trim();const name=document.getElementById('cuponName').value.trim();const tipo=state.cuponTipoActual||'percent';const valorStr=document.getElementById('cuponValor').value;const minStr=document.getElementById('cuponMinSubtotal').value;const start=document.getElementById('cuponStart').value;const end=document.getElementById('cuponEnd').value;const sinFin=document.getElementById('cuponSinFin').checked;const usageLimit=document.getElementById('cuponUsageLimit').value;const limitPerCustomer=document.getElementById('cuponLimitPerCust').value;const active=document.getElementById('cuponActive').checked;if(!code)return{error:'El código es obligatorio.'};if(!name)return{error:'El nombre es obligatorio.'};if(!valorStr)return{error:'El valor del descuento es obligatorio.'};const valorN=Number(valorStr);if(!Number.isFinite(valorN))return{error:'El valor debe ser numérico.'};if(tipo==='percent'&&(valorN<1||valorN>100))return{error:'El porcentaje debe estar entre 1 y 100.'};if(tipo==='money'&&valorN<=0)return{error:'El importe debe ser mayor que 0.'};if(minStr===''||minStr==null)return{error:'El subtotal mínimo es obligatorio.'};const minN=Number(minStr);if(!Number.isFinite(minN)||minN<0)return{error:'El subtotal mínimo debe ser >= 0.'};if(!start)return{error:'La fecha de inicio es obligatoria.'};if(!sinFin&&end&&new Date(end).getTime()<=new Date(start).getTime())return{error:'La fecha final debe ser posterior a la de inicio.'};const spec={code,name,minimumSubtotal:minN,startTime:start,active};if(tipo==='percent')spec.percentOffRate=valorN;else spec.moneyOffAmount=valorN;if(!sinFin&&end)spec.expirationTime=end;if(usageLimit)spec.usageLimit=Number(usageLimit);if(limitPerCustomer)spec.limitPerCustomer=Number(limitPerCustomer);return{spec}}
+function guardarCupon(){const r=leerSpecDeModal();if(r.error){showCuponWarn(r.error);return}document.getElementById('modalCuponWarn').style.display='none';if(state.cuponEditandoId){const spec=r.spec;const cambios={name:spec.name,minimumSubtotal:spec.minimumSubtotal,active:spec.active};if(spec.percentOffRate!==undefined)cambios.percentOffRate=spec.percentOffRate;if(spec.moneyOffAmount!==undefined)cambios.moneyOffAmount=spec.moneyOffAmount;cambios.expirationTime=spec.expirationTime||'';if(spec.usageLimit!==undefined)cambios.usageLimit=spec.usageLimit;if(spec.limitPerCustomer!==undefined)cambios.limitPerCustomer=spec.limitPerCustomer;setLoading(true);sendToPage('editarCupon',{couponId:state.cuponEditandoId,cambios})}else{setLoading(true);sendToPage('crearCupon',{spec:r.spec})}}
+function abrirModalConfirmDel(couponId,code,name){state.cuponEliminandoId=couponId;document.getElementById('modalConfirmDelMsg').innerHTML=`¿Seguro que quieres eliminar el cupón <strong>${esc(code)}</strong> (${esc(name)})?`;document.getElementById('modalConfirmDel').classList.add('visible')}
+function cerrarModalConfirmDel(){document.getElementById('modalConfirmDel').classList.remove('visible');state.cuponEliminandoId=null}
+function confirmarEliminarCupon(){const id=state.cuponEliminandoId;if(!id)return;setLoading(true);sendToPage('eliminarCupon',{couponId:id})}
+function confirmarDesactivarCupon(){const id=state.cuponEliminandoId;if(!id)return;cerrarModalConfirmDel();setLoading(true);sendToPage('toggleCupon',{couponId:id,active:false})}
+
+// ═════════════════════════════════════════════════════════════
+// v1.1.1 — Alta de contacto desde el CRM (mobile)
+// ═════════════════════════════════════════════════════════════
+function abrirModalNuevoContacto(){resetModalNuevoContacto();document.getElementById('modalNuevoContacto').classList.add('visible');setTimeout(()=>{const el=document.getElementById('modalNuevoNombre');if(el)el.focus()},60)}
+function cerrarModalNuevoContacto(){document.getElementById('modalNuevoContacto').classList.remove('visible');resetModalNuevoContacto()}
+function resetModalNuevoContacto(){['modalNuevoNombre','modalNuevoApellido','modalNuevoEmail','modalNuevoTelefono','modalNuevoFechaNacimiento'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});const sel=document.getElementById('modalNuevoSexo');if(sel)sel.value='';const w=document.getElementById('modalNuevoContactoWarn');if(w){w.style.display='none';w.innerHTML=''}const btn=document.getElementById('btnGuardarNuevoContacto');if(btn){btn.disabled=false;btn.textContent='Crear'}state.nuevoContactoDuplicadoConfirmado=false}
+function mostrarWarnNuevoContacto(msg){const w=document.getElementById('modalNuevoContactoWarn');if(!w)return;w.innerHTML=`<div class="warn-bar">${esc(msg)}</div>`;w.style.display='block'}
+function ocultarWarnNuevoContacto(){const w=document.getElementById('modalNuevoContactoWarn');if(!w)return;w.style.display='none';w.innerHTML=''}
+function guardarNuevoContacto(){
+  const nombre=(document.getElementById('modalNuevoNombre').value||'').trim();
+  const apellido=(document.getElementById('modalNuevoApellido').value||'').trim();
+  const email=(document.getElementById('modalNuevoEmail').value||'').trim();
+  const telefono=(document.getElementById('modalNuevoTelefono').value||'').trim();
+  const fecha=(document.getElementById('modalNuevoFechaNacimiento').value||'').trim();
+  const sexo=(document.getElementById('modalNuevoSexo').value||'').trim();
+  if(!nombre){mostrarWarnNuevoContacto('El nombre es obligatorio.');return}
+  if(!email&&!telefono){mostrarWarnNuevoContacto('Indica al menos un email o un teléfono.');return}
+  const btn=document.getElementById('btnGuardarNuevoContacto');
+  if(btn){btn.disabled=true;btn.textContent='Creando…'}
+  ocultarWarnNuevoContacto();
+  const payload={nombre,apellido,email,telefono};
+  if(fecha)payload.fechaNacimiento=fecha;
+  if(sexo)payload.sexo=sexo;
+  if(state.nuevoContactoDuplicadoConfirmado)payload.allowDuplicates=true;
+  sendToPage('crearContacto',payload);
+}
+</script>
+</body>
+</html>
