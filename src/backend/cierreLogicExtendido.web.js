@@ -1,6 +1,37 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.2.0
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.2.1
 // =====================================================
+// v1.2.1 (12 ago 2026): EL COBRO DE LAS CITAS EXTERNAS SÍ SE SABE.
+//      Una cita de profesional externo cobrada aparecía en Rendimiento
+//      Productivo con `metodoPago` VACÍO, como si no constara con qué
+//      se había cobrado. No era cierto: el operador había pulsado su
+//      botón y el dato estaba guardado.
+//
+//      CAUSA. marcarPagadoReserva (recepcionProLogic, rama esExterno)
+//      escribe el cobro en PagoreservasExternos con bookingId
+//      'EXT_<reservaId>', NO en PaymentReservations. La Q2.5 que cruza
+//      pagos con las reservas del día solo buscaba el prefijo 'KRI_',
+//      así que nunca encontraba el cobro externo y dejaba el método en
+//      blanco. El dato existía; no se iba a buscar.
+//
+//      ARREGLO. Q2.6 nueva: mismo patrón de lotes que Q2.5 sobre
+//      PagoreservasExternos con prefijo 'EXT_'. procesarRendimiento
+//      recibe ese mapa y lo usa SOLO para resolver el método de cobro
+//      cuando no lo ha encontrado por la vía interna.
+//
+//      ALCANCE DELIBERADAMENTE MÍNIMO. El importe de la cita NO cambia:
+//      se sigue calculando desde serviciosDetail exactamente igual que
+//      antes. Solo se rellena un campo que estaba vacío por un fallo de
+//      búsqueda.
+//
+//      ADEMÁS, `clientesLista` incorpora `esExterno` (de
+//      StaffConfig.isExternal, ya disponible en el bucle) para que el
+//      widget pueda etiquetar esos cobros como EXTERNO: es dinero que
+//      pasa por el calendario del salón pero que el salón no ingresa.
+//
+//      NO se toca: procesarCierre, procesarReconciliación, el
+//      Observatorio semanal, el IVA, ni ninguna cifra existente.
+//
 // v1.2.0 (12 ago 2026): REPARTO POR CANAL FÍSICO DE COBRO.
 //      Se elimina la cesta "Otros" del Observatorio semanal y la cesta
 //      "Mixto" del Cierre Financiero. Ambas eran cajones de sastre en
@@ -254,9 +285,10 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.2.0]';
+const TAG = '[CierreExt v1.2.1]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
+const COLECCION_PAGOS_EXT = 'PagoreservasExternos';   // v1.2.1 - ledger de externos
 const COLECCION_STAFF    = 'StaffConfig';
 const COLECCION_CONFIG   = 'SalonConfig';
 
@@ -497,7 +529,7 @@ function repartirLineasPorStaff(reserva, servicios, staffPorResourceId) {
 // =====================================================
 // Q1 — RENDIMIENTO PRODUCTIVO
 // =====================================================
-function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
+function procesarRendimiento(reservas, staffList, pagosPorReserva = {}, pagosExtPorReserva = {}) {
   const staffMap = {};
   // v1.1.6 — wixResourceId → nombre. Es el identificador que guardan las
   // fases en `staffId` (recepcionProLogic resuelve el nombre por este mismo
@@ -554,6 +586,22 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
         descInfo = parsearDescuentoEnDescripcion(pago.descripcion);
         metodoPago = String(pago.tipoPago || '').trim();   // v1.1.6
         cobradoPor = String(pago.soldBy || '').trim();     // v1.1.7 — quién cobró
+      }
+
+      // v1.2.1 — CITAS DE PROFESIONAL EXTERNO.
+      // Su cobro NO vive en PaymentReservations: marcarPagadoReserva lo
+      // manda a PagoreservasExternos con bookingId 'EXT_<reservaId>'
+      // (rama esExterno). Como Q2.5 solo miraba el prefijo 'KRI_', estas
+      // citas llegaban aquí con metodoPago vacío aunque el operador SÍ
+      // hubiese pulsado un botón — y el informe las pintaba como
+      // "sin método". El dato existía; simplemente no se iba a buscar.
+      //
+      // Se usa EXCLUSIVAMENTE para resolver el método de cobro. El
+      // cálculo del importe NO se toca: sigue saliendo de serviciosDetail
+      // como hasta ahora, para no mover cifras que nadie ha pedido mover.
+      if (!metodoPago) {
+        const pagoExt = pagosExtPorReserva[r._id];
+        if (pagoExt) metodoPago = String(pagoExt.tipoPago || '').trim();
       }
     }
 
@@ -684,6 +732,7 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
       descLabel: descInfo?.label || '',                // "-50%" o "-25€" o ""
       metodoPago,                                      // v1.1.6
       cobradoPor,                                      // v1.1.7
+      esExterno: !!staffInfo.isExternal,                // v1.2.1
       status: r.status
     });
   }
@@ -1392,8 +1441,34 @@ export const obtenerDatosCierreExtendidos = webMethod(
       }
       console.log(`${TAG} Q2.5 pagosPorReserva: ${Object.keys(pagosPorReserva).length} pagos cruzados`);
 
+      // v1.2.1 — Q2.6: cobros de citas de profesional EXTERNO.
+      // Viven en PagoreservasExternos con bookingId 'EXT_<reservaId>'.
+      // Mismo patrón de lotes que Q2.5. Solo se usa para resolver el
+      // método de cobro en Rendimiento Productivo: sin esto, una cita
+      // externa cobrada aparecía sin método en el informe.
+      const pagosExtPorReserva = {};
+      if (reservaIds.length) {
+        const targetExt = reservaIds.map(id => `EXT_${id}`);
+        for (let i = 0; i < targetExt.length; i += 100) {
+          const batch = targetExt.slice(i, i + 100);
+          try {
+            const rx = await wixData.query(COLECCION_PAGOS_EXT)
+              .hasSome('bookingId', batch)
+              .limit(500)
+              .find({ suppressAuth: true });
+            for (const pagoExt of (rx.items || [])) {
+              const reservaId = String(pagoExt.bookingId || '').slice(4);
+              if (reservaId) pagosExtPorReserva[reservaId] = pagoExt;
+            }
+          } catch (e) {
+            console.warn(`${TAG} Error cargando pagosExtPorReserva:`, e.message);
+          }
+        }
+      }
+      console.log(`${TAG} Q2.6 pagosExtPorReserva: ${Object.keys(pagosExtPorReserva).length} cobros externos cruzados`);
+
       const vatRate = await leerVatRate();
-      const rendimiento = procesarRendimiento(reservas, staffList, pagosPorReserva);
+      const rendimiento = procesarRendimiento(reservas, staffList, pagosPorReserva, pagosExtPorReserva);
       const cierre = procesarCierre(pagos, staffList, vatRate);
       const reconciliacion = await procesarReconciliacion(reservas, pagos, fechaISO, startOfDay, endOfDay, pagosPorReserva);
 
