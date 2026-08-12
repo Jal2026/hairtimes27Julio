@@ -9,12 +9,27 @@
 //   - Nuevo handler 'loadComparativa': recibe dos periodos, llama al backend en paralelo
 //   - Devuelve { type: 'comparativa', periodoA, periodoB } al widget
 //
-// v2.3: EWCM (Export Without Cash Mode)
+// v2.3: EWCM (Export Without Cash Mode)  — ❌ ELIMINADO EN v2.6
+// =====================================================
+
+// v2.6 (12 ago 2026): EWCM ELIMINADO.
+//   - Este page code dejaba pasar `excludeEfectivo` desde el widget
+//     hasta el backend en los tres handlers ('ready', 'load' y
+//     'loadComparativa'), permitiendo generar el informe sin los cobros
+//     en efectivo.
+//   - Se retira por incompatibilidad con Verifactu (obligación enero
+//     2027): el principio es registro íntegro de todas las operaciones,
+//     no exportación selectiva. Backend asociado: estadisticas.web.js
+//     v2.6.2, que ya ignora el parámetro aunque le llegue.
+//   - El widget HTML todavía pinta el interruptor: si el operador lo
+//     activa, este page code ya no lo reenvía y el informe sale
+//     completo. PENDIENTE retirar el interruptor del widget.
+//   - No se toca ningún otro handler ni el contrato postMessage.
 // =====================================================
 
 import { obtenerEstadisticas, obtenerMediaDiaSemanaAnio } from 'backend/estadisticas.web';
 
-const TAG = '[StatsBridge v2.5]';
+const TAG = '[StatsBridge v2.6]';
 
 $w.onReady(function () {
 
@@ -33,17 +48,18 @@ $w.onReady(function () {
         const fechaDesde = toISODate(primerDia);
         const fechaHasta = toISODate(ultimoDia);
 
-        const res = await obtenerEstadisticas({ fechaDesde, fechaHasta, excludeEfectivo: false });
+        const res = await obtenerEstadisticas({ fechaDesde, fechaHasta });
         $w('#htmlStats').postMessage({ type: 'stats', payload: res });
         return;
       }
 
       // ── Carga periodo simple ──
       if (msg.type === 'load') {
-        const { fechaDesde, fechaHasta, excludeEfectivo } = msg;
-        console.log(TAG, 'Cargando stats:', fechaDesde, '-', fechaHasta, excludeEfectivo ? '(EWCM)' : '');
+        const { fechaDesde, fechaHasta } = msg;
+        console.log(TAG, 'Cargando stats:', fechaDesde, '-', fechaHasta);
 
-        const res = await obtenerEstadisticas({ fechaDesde, fechaHasta, excludeEfectivo: !!excludeEfectivo });
+        // v2.6 — msg.excludeEfectivo se ignora deliberadamente.
+        const res = await obtenerEstadisticas({ fechaDesde, fechaHasta });
 
         if (!res?.ok) {
           $w('#htmlStats').postMessage({ type: 'error', message: res?.error || 'Error obteniendo datos' });
@@ -56,13 +72,13 @@ $w.onReady(function () {
 
       // ── v2.4: Carga comparativa — dos periodos en paralelo ──
       if (msg.type === 'loadComparativa') {
-        const { periodoA, periodoB, excludeEfectivo } = msg;
+        const { periodoA, periodoB } = msg;
 
+        // v2.6 — msg.excludeEfectivo se ignora deliberadamente.
         console.log(TAG, 'Comparativa:',
           periodoA.fechaDesde, '-', periodoA.fechaHasta,
           'VS',
-          periodoB.fechaDesde, '-', periodoB.fechaHasta,
-          excludeEfectivo ? '(EWCM)' : ''
+          periodoB.fechaDesde, '-', periodoB.fechaHasta
         );
 
         $w('#htmlStats').postMessage({ type: 'loading', message: 'Cargando comparativa...' });
@@ -70,13 +86,11 @@ $w.onReady(function () {
         const [resA, resB] = await Promise.all([
           obtenerEstadisticas({
             fechaDesde: periodoA.fechaDesde,
-            fechaHasta: periodoA.fechaHasta,
-            excludeEfectivo: !!excludeEfectivo
+            fechaHasta: periodoA.fechaHasta
           }),
           obtenerEstadisticas({
             fechaDesde: periodoB.fechaDesde,
-            fechaHasta: periodoB.fechaHasta,
-            excludeEfectivo: !!excludeEfectivo
+            fechaHasta: periodoB.fechaHasta
           })
         ]);
 
