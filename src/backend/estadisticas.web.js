@@ -1,6 +1,40 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.6.2
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.6.3
 // =====================================================
+// v2.6.3: MEDIOS DE PAGO — DOS VISTAS + CANJES DE BONO (12 ago 2026)
+//   Tres salidas nuevas en obtenerEstadisticas. Ninguna existente cambia.
+//
+//   1) `porBotonPago` — RECUENTO POR BOTÓN PULSADO.
+//      Agrupación en crudo por `tipoPago`, con NÚMERO de pulsaciones
+//      además del importe: [{ metodo, n, importe }]. Aquí 'Mixto' SÍ es
+//      una cesta propia, porque fue UN botón. Responde a "¿se pulsó el
+//      botón correcto en cada cita?". Se acompaña de `botonTotales`
+//      { n, importe }. Un cobro sin `tipoPago` sale en su propia línea
+//      "Sin método registrado": no se reparte ni se omite.
+//
+//   2) `porMetodoPago` — IMPORTES REALES POR CANAL (ya existía desde
+//      v2.6.1, se mantiene sin cambios). Tarjeta = tarjeta pura + parte
+//      tarjeta de los mixtos; ídem Efectivo y Bizum. Responde a
+//      "¿cuánto hay en el datáfono, en el cajón y en la cuenta?".
+//
+//      LAS DOS VISTAS CONVIVEN A PROPÓSITO y no dan la misma cifra por
+//      canal cuando hay mixtos. No es un descuadre: son dos preguntas
+//      distintas. El TOTAL de ambas sí coincide.
+//
+//   3) `canjesBono` — { n, valorConsumido, disponible }.
+//      Fuente: KamisuiteVoucherRedemptions filtrada por `redeemDate`,
+//      sumando `amountSaved`. Patrón de consulta copiado de
+//      akiraLogic.web.js → consultarBonos. NO se parsea la descripción
+//      del pago: el dato está de primera mano en esa colección.
+//      Va SEPARADO de los medios de pago porque un canje no es caja
+//      nueva — ese dinero entró el día que se compró el bono — y por
+//      tanto NO se suma a ventas ni a ningún canal. Si la colección no
+//      existe en el tenant, `disponible:false` y el widget no pinta la
+//      sección; nunca se devuelve un 0 inventado.
+//
+//   NO se toca: totales, IVA, propinas, servicios, staff, externos,
+//   productos POS, comparativa ni ninguna otra sección.
+//
 // v2.6.2: EWCM ELIMINADO (12 ago 2026)
 //   - Se retira por completo el modo "Export Without Cash Mode"
 //     (parámetro `excludeEfectivo`, introducido en v2.3), que permitía
@@ -213,13 +247,14 @@ function _repartirCanales(p) {
 
 const CANALES_FISICOS = ['Tarjeta', 'Efectivo', 'Bizum'];
 
-const TAG = '[Stats v2.6.2]';
+const TAG = '[Stats v2.6.3]';
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
 const CMS_EXTERNAL_RECORDS = 'SvExternalRecords';
 const CMS_PAGOS_EXTERNOS = 'PagoreservasExternos';   // v2.6.0 — ledger V2 de cobros externos
 const CMS_STAFF = 'StaffConfig';                      // v2.6.0 — puente staffResourceId → displayName
 const CMS_SALON_CONFIG = 'SalonConfig';
+const CMS_VOUCHER_REDEMPTIONS = 'KamisuiteVoucherRedemptions';   // v2.6.3 - canjes de bono
 const TIMEZONE_MADRID = 'Europe/Madrid';
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DEFAULT_VAT_RATE = 21;
@@ -485,6 +520,7 @@ export const obtenerEstadisticas = webMethod(
       const ingresosPorDiaSemana = {};
       const diasUnicosPorDiaSemana = {};
       const porMetodo = {};
+      const porBoton = {};        // v2.6.3 - pulsaciones de boton (tipoPago en crudo)
       const porStaff = {};
       const porServicioTop = {};
       const desglosePorCat = {};
@@ -531,6 +567,17 @@ export const obtenerEstadisticas = webMethod(
           if (!diasUnicosPorDiaSemana[diaSemana]) diasUnicosPorDiaSemana[diaSemana] = new Set();
           diasUnicosPorDiaSemana[diaSemana].add(dia);
         }
+
+        // v2.6.3 — RECUENTO POR BOTÓN PULSADO. Agrupación en crudo por
+        // `tipoPago`, con número de pulsaciones además del importe. Aquí
+        // 'Mixto' SÍ es una cesta propia: fue UN botón. Responde a
+        // "¿se pulsó el botón correcto?", no a "¿cuánto hay en el
+        // datáfono?". Es la vista de auditoría, paralela y distinta al
+        // reparto por canal de más abajo. Las dos conviven a propósito.
+        const _boton = String(p.tipoPago || '').trim() || 'Sin método registrado';
+        if (!porBoton[_boton]) porBoton[_boton] = { metodo: _boton, n: 0, importe: 0 };
+        porBoton[_boton].n += 1;
+        porBoton[_boton].importe += importe;
 
         // v2.6.1 — reparto por canal físico. La parte tarjeta / efectivo /
         // bizum de un cobro Mixto suma en su canal; ya no hay cesta "Mixto"
@@ -646,6 +693,52 @@ export const obtenerEstadisticas = webMethod(
       //          + 4.B histórico V1 (SvExternalRecords) sin duplicar
       //   v2.4   — legacy: solo status PAGADO
       // ══════════════════════════════════════════════════════════════
+      // ════════════════════════════════════════════════════════════
+      // v2.6.3 — CANJES DE BONO DEL PERIODO
+      // ════════════════════════════════════════════════════════════
+      // Fuente: KamisuiteVoucherRedemptions, filtrada por `redeemDate`.
+      // Es el registro que escribe recepcionProLogic → confirmarCanjeProducto
+      // en el momento del canje, con el `amountSaved` ya calculado. No se
+      // parsea la descripción del pago: el dato está aquí de primera mano.
+      // Patrón de consulta copiado de akiraLogic.web.js → consultarBonos.
+      //
+      // POR QUÉ VA APARTE Y NO EN LOS MÉTODOS DE PAGO. Un canje NO es caja
+      // nueva: ese dinero entró el día que el cliente compró el bono.
+      // `valorConsumido` es valor de tarifa consumido en el periodo, y por
+      // eso NO debe sumarse a las ventas ni a ningún canal de cobro.
+      let canjesBono = { n: 0, valorConsumido: 0, disponible: true };
+      try {
+        let canjes = [];
+        let canjesOffset = 0;
+        let canjesHasMore = true;
+        while (canjesHasMore) {
+          let qc = wixData.query(CMS_VOUCHER_REDEMPTIONS);
+          if (fechaDesde) qc = qc.ge('redeemDate', new Date(fechaDesde));
+          if (fechaHasta) {
+            const hastaC = new Date(fechaHasta);
+            hastaC.setDate(hastaC.getDate() + 1);
+            qc = qc.lt('redeemDate', hastaC);
+          }
+          const rc = await qc.skip(canjesOffset).limit(1000).find({ suppressAuth: true });
+          const itemsC = rc.items || [];
+          canjes = canjes.concat(itemsC);
+          canjesHasMore = itemsC.length === 1000;
+          canjesOffset += 1000;
+          if (canjesOffset > 50000) break;
+        }
+        canjesBono = {
+          n: canjes.length,
+          valorConsumido: Math.round(canjes.reduce((a, r) => a + (Number(r.amountSaved) || 0), 0) * 100) / 100,
+          disponible: true
+        };
+        console.log(`${TAG} Canjes de bono: ${canjesBono.n} | valor consumido ${canjesBono.valorConsumido}€`);
+      } catch (eCanjes) {
+        // Si la colección no existe en este tenant, no se inventa un 0:
+        // se marca como no disponible y el widget no pinta la sección.
+        canjesBono = { n: 0, valorConsumido: 0, disponible: false };
+        console.warn(`${TAG} Canjes de bono no disponibles: ${eCanjes.message}`);
+      }
+
       let externosResult = { citas: 0, ventaBruta: 0, comisionTotal: 0, desglose: [] };
 
       // Acumuladores comunes a las dos fuentes.
@@ -1022,6 +1115,20 @@ export const obtenerEstadisticas = webMethod(
         valores: _labelsMetodo.map(k => Math.round(porMetodo[k] * 100) / 100)
       };
 
+      // v2.6.3 — recuento por botón pulsado, en orden fijo de presentación.
+      const ORDEN_BOTONES = ['Tarjeta', 'Efectivo', 'Bizum', 'Mixto', 'Canje'];
+      const _clavesBoton = ORDEN_BOTONES.filter(k => porBoton[k])
+        .concat(Object.keys(porBoton).filter(k => !ORDEN_BOTONES.includes(k)));
+      const datosBotonPago = _clavesBoton.map(k => ({
+        metodo: k,
+        n: porBoton[k].n,
+        importe: Math.round(porBoton[k].importe * 100) / 100
+      }));
+      const datosBotonTotales = {
+        n: datosBotonPago.reduce((a, b) => a + b.n, 0),
+        importe: Math.round(datosBotonPago.reduce((a, b) => a + b.importe, 0) * 100) / 100
+      };
+
       // ── Staff (sin IVA) ──
       const staffOrdenado = Object.entries(porStaff).sort((a, b) => b[1] - a[1]);
       const datosStaff = { labels: staffOrdenado.map(s => s[0]), valores: staffOrdenado.map(s => s[1]) };
@@ -1174,6 +1281,9 @@ export const obtenerEstadisticas = webMethod(
         tablaDesglose,
         porDiaSemana: datosDiaSemana,
         porMetodoPago: datosMetodoPago,
+        porBotonPago: datosBotonPago,               // v2.6.3
+        botonTotales: datosBotonTotales,            // v2.6.3
+        canjesBono,                                 // v2.6.3
         porStaff: datosStaff,
         extras: extrasData,
         propinas: propinasData,
