@@ -1,7 +1,45 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.101  ·  Un botón, todo lo escrito se guarda
+ * VERSION: 1.1.102  ·  Cobros por botón pulsado en Rendimiento productivo
+ *
+ * v1.1.102 (12 ago 2026) — RECUENTO POR BOTÓN DE COBRO en el bloque
+ *   📈 Rendimiento productivo del informe del día.
+ *
+ *   QUÉ ES. Una sección nueva, "🔢 Cobros por botón pulsado", justo
+ *   debajo de "Clientes del día". Lista cuántos cobros se pasaron con
+ *   cada botón del modal (Tarjeta / Efectivo / Bizum / Mixto / Canje) y
+ *   el importe que suma cada uno.
+ *
+ *   PARA QUÉ. Auditoría. Ante una duda o un descuadre, el staff abre
+ *   cita por cita, mira el chip "Cobrado con" de cada modal y comprueba
+ *   si en su momento se pulsó el botón correcto. Esta sección es el
+ *   total contra el que contrastar ese repaso.
+ *
+ *   POR QUÉ 'MIXTO' SIGUE SIENDO UNA CESTA PROPIA AQUÍ. Porque esto
+ *   cuenta PULSACIONES, no dinero por canal. Un cobro mixto fue UN
+ *   botón. El reparto del mixto entre tarjeta / efectivo / bizum es otra
+ *   pregunta — la del cuadre contra datáfono, cajón y extracto — y vive
+ *   en el bloque 💰 Cierre financiero, alimentado por
+ *   cierreLogicExtendido v1.2.0. Las dos vistas responden a preguntas
+ *   distintas y por eso no dan la misma cifra: no es un descuadre.
+ *
+ *   DE DÓNDE SALEN LOS DATOS. De `rendimiento.clientes`, la misma lista
+ *   que se acaba de pintar arriba — campos `status`, `metodoPago` y
+ *   `total`, que el backend ya enviaba desde v1.1.7. NO hay cambio de
+ *   backend ni de page code: es agregación en el propio widget, de modo
+ *   que la sección cuadra al céntimo con las filas de arriba por
+ *   construcción.
+ *
+ *   NADA SE ESCONDE. Una cita PAGADA sin método registrado no se
+ *   reparte ni se omite: sale en su propia línea "⚠️ Sin método
+ *   registrado".
+ *
+ *   El botón 📋 COPIAR del bloque incluye el recuento con el mismo
+ *   formato.
+ *
+ *   NO se toca: calendario, modal de cita, cobro, arqueo, ficha técnica,
+ *   Cierre financiero, reconciliación, ni ninguna otra sección.
  *
  * v1.1.101 (11 ago 2026) — FIX: el botón de FICHA TÉCNICA solo guardaba
  *   la pestaña visible.
@@ -1770,7 +1808,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.101]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.102]';
 
   // ─── helpers ───
   function esc(s) {
@@ -8502,6 +8540,35 @@ button { font-family: inherit; cursor: pointer; }
         return `<div class="cierre-row cierre-row-ind"><span class="cierre-nombre"><b>${esc(c.hora || '')}</b> · <b>${esc(c.nombre)}</b>${svcs ? ' — ' + svcs : ''}${compart}${_chipEstado(c.status)}${_chipMetodo(c.metodoPago)}${_chipCobrador(c)}</span><span class="cierre-importe">${_importeCli(c)}</span></div>`;
       };
 
+
+      // v1.1.102 — RECUENTO POR BOTÓN DE COBRO.
+      // Agrega EXACTAMENTE las mismas filas de "Clientes del día" que
+      // acaban de pintarse arriba, agrupadas por el botón que se pulsó
+      // en el modal de cada cita. Sirve para auditar: si hay dudas o
+      // descuadre, el staff recorre cita por cita y compara.
+      // OJO: es un recuento de PULSACIONES, no un cuadre de caja. Por
+      // eso 'Mixto' es una cesta propia (fue un botón) y NO se reparte
+      // entre Tarjeta/Efectivo/Bizum — ese reparto vive en el Cierre
+      // financiero, que es otra pregunta distinta.
+      // Nada se esconde: una cita PAGADA sin método registrado sale en
+      // su propia línea marcada, no se mezcla con las demás.
+      const _recuentoBotones = (clientes) => {
+        const ORDEN = ['Tarjeta', 'Efectivo', 'Bizum', 'Mixto', 'Canje'];
+        const acc = {};
+        for (const c of (clientes || [])) {
+          if (c.status !== 'PAGADO') continue;
+          const k = String(c.metodoPago || '').trim() || '⚠️ Sin método registrado';
+          if (!acc[k]) acc[k] = { metodo: k, n: 0, importe: 0 };
+          acc[k].n += 1;
+          acc[k].importe += Number(c.total) || 0;
+        }
+        const out = [];
+        for (const k of ORDEN) if (acc[k]) out.push(acc[k]);
+        for (const k of Object.keys(acc)) if (!ORDEN.includes(k)) out.push(acc[k]);
+        for (const x of out) x.importe = Math.round(x.importe * 100) / 100;
+        return out;
+      };
+
       if (rendimiento.clientesPorStaff?.length) {
         const nCli = rendimiento.clientes?.length || 0;
         h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">👥 Clientes del día (${nCli})</div>`;
@@ -8513,6 +8580,24 @@ button { font-family: inherit; cursor: pointer; }
       } else if (rendimiento.clientes?.length) {
         h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">👥 Clientes del día (${rendimiento.clientes.length})</div>`;
         for (const c of rendimiento.clientes) h += _filaCliente(c);
+        h += `</div>`;
+      }
+
+      // v1.1.102 — Cobros por botón pulsado
+      const _botones = _recuentoBotones(rendimiento.clientes);
+      if (_botones.length) {
+        const _icoBoton = { 'Efectivo': '💵', 'Tarjeta': '💳', 'Bizum': '📲', 'Mixto': '🔀', 'Canje': '🎟️' };
+        const _colBoton = { 'Efectivo': '#2a9d54', 'Tarjeta': '#2f6fd9', 'Bizum': '#a78bfa', 'Mixto': '#c9a44a', 'Canje': '#8b5cf6' };
+        let _nTot = 0, _impTot = 0;
+        for (const b of _botones) { _nTot += b.n; _impTot += b.importe; }
+        _impTot = Math.round(_impTot * 100) / 100;
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🔢 Cobros por botón pulsado (${_nTot})</div>`;
+        for (const b of _botones) {
+          const ico = _icoBoton[b.metodo] || '⚠️';
+          const col = _colBoton[b.metodo] || '#9ca3af';
+          h += `<div class="cierre-row"><span class="cierre-nombre"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin-right:6px;"></span>${ico} ${esc(b.metodo)} <span style="color:#9ca3af;font-size:10px;">· ${b.n} ${b.n === 1 ? 'cobro' : 'cobros'}</span></span><span class="cierre-importe">${eur(b.importe)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total cobros del día</span><span class="cierre-importe" style="font-weight:700;">${_nTot} · ${eur(_impTot)}</span></div>`;
         h += `</div>`;
       }
 
@@ -9131,6 +9216,31 @@ button { font-family: inherit; cursor: pointer; }
             }
           } else {
             for (const c of r.clientes) L.push(lineaCli(c));
+          }
+        }
+        // v1.1.102 — mismo recuento por botón que se ve en pantalla
+        if (r.clientes && r.clientes.length) {
+          const ORDEN_B = ['Tarjeta', 'Efectivo', 'Bizum', 'Mixto', 'Canje'];
+          const accB = {};
+          for (const c of r.clientes) {
+            if (c.status !== 'PAGADO') continue;
+            const k = String(c.metodoPago || '').trim() || 'Sin método registrado';
+            if (!accB[k]) accB[k] = { n: 0, importe: 0 };
+            accB[k].n += 1;
+            accB[k].importe += Number(c.total) || 0;
+          }
+          const clavesB = ORDEN_B.filter(k => accB[k]).concat(Object.keys(accB).filter(k => !ORDEN_B.includes(k)));
+          if (clavesB.length) {
+            let nTotB = 0, impTotB = 0;
+            L.push('');
+            L.push('🔢 Cobros por botón pulsado');
+            for (const k of clavesB) {
+              const b = accB[k];
+              nTotB += b.n;
+              impTotB += b.importe;
+              L.push(`- ${k}: ${b.n} ${b.n === 1 ? 'cobro' : 'cobros'} · ${eur(b.importe)}`);
+            }
+            L.push(`Total cobros del día: ${nTotB} · ${eur(impTotB)}`);
           }
         }
         if (r.descuentos && r.descuentos.length) {
