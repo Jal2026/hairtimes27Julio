@@ -11,7 +11,28 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
     /* ═══════════════════════════════════════════════════════
-       ESTADÍSTICAS KAMISUITE v2.6.0 — Light theme
+       ESTADÍSTICAS KAMISUITE v2.6.1 — Light theme
+       ═════════════════════════════════════════════════════
+       v2.6.1 (12 ago 2026): EWCM ELIMINADO.
+         - Retirado por completo el interruptor "Export Without Cash
+           Mode", que generaba el informe en pantalla, el PDF y el Excel
+           ocultando los cobros en efectivo.
+         - Motivo: incompatible con la obligación Verifactu (enero
+           2027), cuyo principio es el registro íntegro e inalterable de
+           TODAS las operaciones.
+         - Qué desaparece: bloque CSS .ewcm-*, el control del toolbar,
+           el estado _ewcmActivo y su listener, la función ewcmSuffix()
+           y sus 5 puntos de uso (títulos de las 4 gráficas + línea de
+           periodo), la marca "Modo EWCM" en PDF y Excel, el sufijo del
+           pie del PDF y el tag _EWCM del nombre de los ficheros
+           exportados.
+         - Ya no se envía `excludeEfectivo` en los postMessage 'load'
+           ni 'loadComparativa'.
+         - Cadena completa: widget v2.6.1 + page code v2.6 +
+           estadisticas.web.js v2.6.2.
+         - NO se toca nada más: layout, paleta, tipografía, gráficas,
+           comparativa, presets, KPIs, tablas ni el resto de la
+           exportación.
        ═══════════════════════════════════════════════════════
        v2.6.0: Selector de orden en la tabla "Ingresos por Día"
          - La tabla usaba SIEMPRE ingresosPorDiaRanking (orden por
@@ -80,36 +101,8 @@
     .filtros .btn-comparar { background: linear-gradient(135deg, #6B5B95, #4A3D6E); }
     .filtros .btn-comparar.active { background: linear-gradient(135deg, #c9a44a, #a88a3a); }
 
-    /* ═══════════════════════════════════════════════════════
-       EWCM Toggle Switch
-       ═══════════════════════════════════════════════════════ */
-    .ewcm-container {
-      display: flex; align-items: center; gap: 6px;
-      background: var(--surface2); border-radius: var(--radius-sm);
-      padding: 5px 10px; border: 1px solid var(--border);
-    }
-    .ewcm-label {
-      font-size: 11px; font-weight: 600; color: var(--text-secondary);
-      letter-spacing: 0.5px; user-select: none;
-    }
-    .ewcm-switch { position: relative; width: 36px; height: 20px; cursor: pointer; }
-    .ewcm-switch input { opacity: 0; width: 0; height: 0; }
-    .ewcm-slider {
-      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-      background: var(--surface3); border-radius: 20px; transition: background 0.3s;
-    }
-    .ewcm-slider::before {
-      content: ''; position: absolute; width: 16px; height: 16px;
-      left: 2px; bottom: 2px; background: var(--muted); border-radius: 50%; transition: transform 0.3s;
-    }
-    .ewcm-switch input:checked + .ewcm-slider { background: #D18C49; }
-    .ewcm-switch input:checked + .ewcm-slider::before { background: #fff; transform: translateX(16px); }
-    .ewcm-badge {
-      display: none; font-size: 9px; font-weight: 700;
-      color: #D18C49; background: rgba(209,140,73,0.15);
-      padding: 2px 6px; border-radius: 4px;
-    }
-    .ewcm-badge.visible { display: inline-block; }
+    /* v2.6.1: bloque .ewcm-* ELIMINADO junto con el interruptor EWCM.
+       Ninguna otra regla del widget usaba estas clases. */
 
     /* ═══════════════════════════════════════════════════════
        v2.5: Panel Comparar
@@ -288,14 +281,6 @@
       <label>Hasta:</label>
       <input type="date" id="fechaHasta">
       <button id="btnFiltrar">Aplicar</button>
-      <div class="ewcm-container">
-        <span class="ewcm-label">EWCM</span>
-        <label class="ewcm-switch">
-          <input type="checkbox" id="toggleEWCM">
-          <span class="ewcm-slider"></span>
-        </label>
-        <span class="ewcm-badge" id="ewcmBadge">Modo EWCM</span>
-      </div>
       <button id="btnComparar" class="btn-comparar">📊 Comparar</button>
       <button id="btnExportarPdf" class="btn-export">📄 Exportar PDF</button>
       <button id="btnExportarExcel" class="btn-export" style="background:linear-gradient(135deg,#1D6F42,#155C35);">📊 Exportar Excel</button>
@@ -388,14 +373,13 @@
     // VARIABLES GLOBALES
     // ═══════════════════════════════════════════════════════════════════════
 
-    const WIDGET_VERSION = '2.6.0';
+    const WIDGET_VERSION = '2.6.1';
 
     let chartIngresos = null;
     let chartMetodo = null;
     let chartStaff = null;
     let chartServicios = null;
     let _lastData = null;
-    let _ewcmActivo = false;
     // v2.5: Comparativa
     let _comparativaActivo = false;
     let _periodoAData = null;
@@ -435,12 +419,6 @@
       document.getElementById('btnFiltrar').addEventListener('click', () => { cerrarComparativa(); requestStats(); });
       document.getElementById('btnExportarPdf').addEventListener('click', () => exportarPdfConGraficos());
       document.getElementById('btnExportarExcel').addEventListener('click', () => exportarExcel());
-
-      document.getElementById('toggleEWCM').addEventListener('change', (e) => {
-        _ewcmActivo = e.target.checked;
-        document.getElementById('ewcmBadge').classList.toggle('visible', _ewcmActivo);
-        if (_comparativaActivo) { requestComparativa(_lastPreset, _lastPresetLabel); } else { requestStats(); }
-      });
 
       // v2.5: Comparar
       document.getElementById('btnComparar').addEventListener('click', togglePanelComparar);
@@ -512,10 +490,9 @@
       document.getElementById('tablaContainer').style.display = 'none';
       document.getElementById('seccionNuevas').style.display = 'none';
       hideComparativaInfo();
-      window.parent.postMessage({ type: 'load', fechaDesde, fechaHasta, excludeEfectivo: _ewcmActivo }, '*');
+      window.parent.postMessage({ type: 'load', fechaDesde, fechaHasta }, '*');
     }
 
-    function ewcmSuffix() { return _ewcmActivo ? ' (EWCM)' : ''; }
     function eur(n) { return (Math.round(Number(n || 0) * 100) / 100).toFixed(2).replace('.', ',') + '€'; }
     function pct(n) { return (Math.round(Number(n || 0) * 100) / 100).toFixed(2).replace('.', ',') + '%'; }
     function toISODate(dateObj) {
@@ -826,8 +803,7 @@
       window.parent.postMessage({
         type: 'loadComparativa',
         periodoA: { fechaDesde: desdeA, fechaHasta: hastaA, label: `${desdeA} — ${hastaA}` },
-        periodoB: { fechaDesde: periodoB.fechaDesde, fechaHasta: periodoB.fechaHasta, label: periodoB.label },
-        excludeEfectivo: _ewcmActivo
+        periodoB: { fechaDesde: periodoB.fechaDesde, fechaHasta: periodoB.fechaHasta, label: periodoB.label }
       }, '*');
     }
 
@@ -897,7 +873,7 @@
       const compB = _comparativaActivo && _periodoBData && _periodoBData.hayDatos;
       let chartsHTML = `
         <div class="grafico-container" style="grid-column: 1 / -1;">
-          <h3>📈 Ingresos por Día${ewcmSuffix()}</h3>
+          <h3>📈 Ingresos por Día</h3>
           <div class="grafico-wrapper"><canvas id="chartIngresos"></canvas></div>
           <div id="ordenIngresosBar" style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;">
             <span style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;">Ordenar por</span>
@@ -907,7 +883,7 @@
           <div class="chart-data-table" id="dataIngresos"></div>
         </div>
         <div class="grafico-container"${compB ? ' style="grid-column: 1 / -1;"' : ''}>
-          <h3>💳 Por Método de Pago${ewcmSuffix()}</h3>
+          <h3>💳 Por Método de Pago</h3>
           <div class="${compB ? 'compar-pair' : ''}">
             <div>
               ${compB ? '<h4 style="color:var(--text-secondary);">' + _labelA + '</h4>' : ''}
@@ -918,7 +894,7 @@
           </div>
         </div>
         <div class="grafico-container"${compB ? ' style="grid-column: 1 / -1;"' : ''}>
-          <h3>👤 Por Staff${ewcmSuffix()}</h3>
+          <h3>👤 Por Staff</h3>
           <div class="${compB ? 'compar-pair' : ''}">
             <div>
               ${compB ? '<h4 style="color:var(--text-secondary);">' + _labelA + '</h4>' : ''}
@@ -929,7 +905,7 @@
           </div>
         </div>
         <div class="grafico-container" style="grid-column: 1 / -1;">
-          <h3>✂️ Top Servicios${ewcmSuffix()}</h3>
+          <h3>✂️ Top Servicios</h3>
           <div class="grafico-wrapper"><canvas id="chartServicios"></canvas></div>
           <div class="chart-data-table" id="dataServicios"></div>
         </div>
@@ -1186,7 +1162,7 @@
       const d1 = new Date(fechaDesde), d2 = new Date(fechaHasta);
       const dias = Math.round((d2 - d1) / 86400000) + 1;
       const semanas = (dias / 7).toFixed(1);
-      periodo.textContent = `Desde: ${d1.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} — Hasta: ${d2.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${dias} días (${semanas} semanas)${ewcmSuffix()}`;
+      periodo.textContent = `Desde: ${d1.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} — Hasta: ${d2.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${dias} días (${semanas} semanas)`;
 
       // v2.5: Check if IVA data available
       const hasIVA = data.tablaDesglose && data.tablaDesglose.length > 0 && data.tablaDesglose[0].totalImporteBase != null;
@@ -1416,7 +1392,6 @@
       doc.text('Estadísticas y Análisis — Hair Times', m, y); y += 8;
       doc.setFontSize(10); doc.setFont(undefined, 'normal'); doc.setTextColor(100);
       doc.text(`Período: ${fechaDesde} — ${fechaHasta}`, m, y); y += 5;
-      if (_ewcmActivo) { doc.setTextColor(209, 140, 73); doc.setFont(undefined, 'bold'); doc.text('Modo EWCM', m, y); y += 5; doc.setFont(undefined, 'normal'); }
       if (_comparativaActivo) { doc.setTextColor(107, 91, 149); doc.setFont(undefined, 'bold'); doc.text(`Comparativa: ${_labelA} vs ${_labelB}`, m, y); y += 5; doc.setFont(undefined, 'normal'); }
       doc.setDrawColor(200); doc.line(m, y, pw - m, y); y += 6;
 
@@ -1792,12 +1767,11 @@
         doc.setPage(i);
         doc.setFontSize(8); doc.setTextColor(128); doc.setFont(undefined, 'normal');
         doc.text(`Página ${i} de ${totalPaginas}`, m, ph - 10);
-        doc.text(`Generado: ${new Date().toLocaleString('es-ES')}${_ewcmActivo ? ' · EWCM' : ''}`, pw - m, ph - 10, { align: 'right' });
+        doc.text(`Generado: ${new Date().toLocaleString('es-ES')}`, pw - m, ph - 10, { align: 'right' });
       }
 
-      const ewcmTag = _ewcmActivo ? '_EWCM' : '';
       const compTag = _comparativaActivo ? '_COMP' : '';
-      doc.save(`estadisticas_${fechaDesde}_${fechaHasta}${ewcmTag}${compTag}.pdf`);
+      doc.save(`estadisticas_${fechaDesde}_${fechaHasta}${compTag}.pdf`);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1810,15 +1784,13 @@
       const wb = XLSX.utils.book_new();
       const fechaDesde = document.getElementById('fechaDesde').value;
       const fechaHasta = document.getElementById('fechaHasta').value;
-      const sufijo = ewcmSuffix();
       const vr = _lastData.vatRate || 21;
 
       // Hoja 1: Resumen
       const resumenData = [
-        ['Estadísticas Hair Times' + sufijo],
+        ['Estadísticas Hair Times'],
         [`Período: ${fechaDesde} — ${fechaHasta}`],
       ];
-      if (_ewcmActivo) resumenData.push(['Modo EWCM']);
       if (_comparativaActivo) resumenData.push([`Comparativa: ${_labelA} vs ${_labelB}`]);
       resumenData.push([]);
       const tv = _lastData.totalVentas != null ? _lastData.totalVentas : _lastData.totalIngresos;
@@ -1897,10 +1869,9 @@
       // Hoja 6: Desglose por Categoría — CON IVA
       const hasDesIVA = _lastData.tablaDesglose && _lastData.tablaDesglose.length > 0 && _lastData.tablaDesglose[0].totalImporteBase != null;
       const desData = [
-        ['Desglose de Servicios por Categoría' + sufijo],
+        ['Desglose de Servicios por Categoría'],
         [`Período: ${fechaDesde} — ${fechaHasta}`],
       ];
-      if (_ewcmActivo) desData.push(['Modo EWCM']);
       desData.push([]);
       const desHeaders = hasDesIVA ? ['Categoría / Servicio', 'Cant.', 'Total €', 'Base €', 'IVA €', '1/2. €', '% de €', '% Cant.'] : ['Categoría / Servicio', 'Cant.', '€', '1/2. €', '% de €', '% Cant.'];
       desData.push(desHeaders);
@@ -1969,9 +1940,8 @@
         const wsProd = XLSX.utils.aoa_to_sheet(prodData); wsProd['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 14 }]; XLSX.utils.book_append_sheet(wb, wsProd, 'Productividad');
       }
 
-      const ewcmTag = _ewcmActivo ? '_EWCM' : '';
       const compTag = _comparativaActivo ? '_COMP' : '';
-      XLSX.writeFile(wb, `estadisticas_${fechaDesde}_${fechaHasta}${ewcmTag}${compTag}.xlsx`);
+      XLSX.writeFile(wb, `estadisticas_${fechaDesde}_${fechaHasta}${compTag}.xlsx`);
     }
   </script>
 </body>
