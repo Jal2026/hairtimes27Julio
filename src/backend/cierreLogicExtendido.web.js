@@ -1,6 +1,65 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.1.9
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.2.0
 // =====================================================
+// v1.2.0 (12 ago 2026): REPARTO POR CANAL FÍSICO DE COBRO.
+//      Se elimina la cesta "Otros" del Observatorio semanal y la cesta
+//      "Mixto" del Cierre Financiero. Ambas eran cajones de sastre en
+//      pantallas cuya única función es CUADRAR.
+//
+//      QUÉ ESTABA MAL
+//        · procesarCierre agrupaba por `tipoPago` en crudo sumando el
+//          importeTotal entero. Resultado: la línea "Tarjeta" contenía
+//          SOLO los cobros 100% tarjeta; la parte tarjeta de un cobro
+//          Mixto no estaba en ninguna parte, y el mixto entero aparecía
+//          como una cuarta cesta imposible de contrastar contra el
+//          datáfono.
+//        · _cesta() del Observatorio semanal mandaba a 'otros' todo lo
+//          que no fuese exactamente Tarjeta/Efectivo/Bizum: el importe
+//          ÍNTEGRO de cada Mixto, los Canjes y cualquier tipoPago vacío.
+//          Un mixto de 60€ (40 tarjeta + 20 efectivo) sumaba 60€ a
+//          "Otros" y 0€ a Tarjeta y a Efectivo.
+//        · Daño colateral: los semáforos estadoTarjeta/estadoEfectivo/
+//          estadoBizum contrastaban el arqueo contra cifras a las que
+//          les faltaba la parte mixta → el Observatorio contradecía al
+//          Arqueo de Caja de forma sistemática siempre que hubiese un
+//          cobro mixto en el día.
+//
+//      QUÉ HACE AHORA
+//        · Nuevo helper _repartirCanales(pago): parte cada cobro en los
+//          tres ÚNICOS canales contrastables contra algo físico —
+//          TARJETA (liquidación del datáfono), EFECTIVO (cajón/arqueo)
+//          y BIZUM (extracto). No existe cesta "otros".
+//        · Los cobros Mixto se reparten leyendo `desglosemetodopago`.
+//          El patrón de lectura está copiado LITERALMENTE de
+//          cashRegisterLogic.web.js → calcularEfectivoEsperado, que es
+//          el único punto del proyecto que ya lo hacía bien y lleva
+//          meses en producción.
+//        · Canje NO es dinero: el ingreso entró el día que se compró el
+//          bono. Sale de la fila de importes y se reporta solo como
+//          recuento (`canjes`).
+//        · Lo que no se puede repartir sin inventar NO se reparte y NO
+//          se esconde: genera una ANOMALÍA con etiqueta propia y
+//          visible ("⚠️ Mixto sin desglose", "⚠️ Mixto descuadrado",
+//          "⚠️ Canje con importe", "⚠️ <tipoPago crudo>"). Es un aviso
+//          para corregir en el Editor de Cobros, no una categoría.
+//
+//      INVARIANTE GARANTIZADA
+//        suma(porMetodo) === totalReal. Se expone `porMetodoCuadra`
+//        para poder auditarlo desde fuera. Ningún euro se pierde.
+//
+//      COMPATIBILIDAD CON EL WIDGET ACTUAL (sin tocar el widget)
+//        obtenerObservatorioSemanal sigue devolviendo la clave `otros`
+//        (por día y en totales), pero ahora vale EXACTAMENTE el importe
+//        en anomalías. En un salón sin anomalías vale 0 y el widget,
+//        que solo pinta esa línea con `if (dia.otros > 0)`, deja de
+//        mostrarla por sí solo. Cuando aparezca, significará algo real
+//        y accionable. Claves nuevas añadidas (`anomalia`,
+//        `anomaliasDetalle`, `canjes`) que el widget actual ignora.
+//
+//      NO SE TOCA: procesarRendimiento, procesarReconciliacion, IVA,
+//      propinas, productos, staff, externos, descuentos, especiales,
+//      arqueo, ni la firma de ningún export.
+//
 // v1.1.9 (5 ago 2026): "Servicios del día" muestra el PRECIO DE TARIFA.
 //      Cada línea salía con el neto prorrateado (precio × factor
 //      neto/bruto del pago), de modo que un ajuste en el cobro o un
@@ -195,7 +254,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.1.9]';
+const TAG = '[CierreExt v1.2.0]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_STAFF    = 'StaffConfig';
@@ -667,6 +726,107 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}) {
 }
 
 // =====================================================
+// REPARTO POR CANAL FÍSICO DE COBRO — v1.2.0
+// =====================================================
+// Un cuadre solo admite canales que se puedan contrastar contra algo
+// físico:
+//     TARJETA  → liquidación del datáfono
+//     EFECTIVO → cajón / arqueo de caja
+//     BIZUM    → extracto de la cuenta
+// Todo lo demás no es un canal: o no es dinero (Canje), o es una
+// anomalía que hay que corregir. Por eso esta función NO tiene cesta
+// "otros" ni cesta "Mixto".
+//
+// Universo real de `tipoPago` escrito hoy en PaymentReservations:
+//   'Efectivo' | 'Tarjeta' | 'Bizum' | 'Mixto' | 'Canje' | ''
+// (recepcionProLogic, tiendaProductos, especialesVentaLogic,
+//  externosLogic, servicesPublicSync y testCheckout). Cualquier valor
+// distinto cae en su propia cesta de anomalía etiquetada con el valor
+// crudo — nunca se mezcla con otro.
+//
+// Lectura de `desglosemetodopago`: patrón copiado LITERALMENTE de
+// cashRegisterLogic.web.js → calcularEfectivoEsperado (en producción).
+// Formato canónico emitido por recepcionProCMS_widget._openMixto y por
+// edicionpagoswidget:  '{"Tarjeta":N,"Efectivo":N,"Bizum":N}'
+// (solo las claves > 0).
+//
+// Devuelve SIEMPRE el mismo objeto:
+//   { tarjeta, efectivo, bizum, anomalia, anomaliaLabel, canje }
+// Invariante: tarjeta + efectivo + bizum + anomalia === importeTotal.
+// Único caso con todo a 0: un Canje de 0€ (canje === true).
+function _repartirCanales(p) {
+  const out = { tarjeta: 0, efectivo: 0, bizum: 0, anomalia: 0, anomaliaLabel: '', canje: false };
+
+  const importe = Number(p.importeTotal) || 0;
+  const tipoCrudo = String(p.tipoPago || '').trim();
+  const t = tipoCrudo.toLowerCase();
+
+  if (t === 'tarjeta')  { out.tarjeta  = importe; return out; }
+  if (t === 'efectivo') { out.efectivo = importe; return out; }
+  if (t === 'bizum')    { out.bizum    = importe; return out; }
+
+  // Canje: el dinero entró el día que se compró el bono/tarjeta.
+  // Con importe 0 (caso normal) solo se cuenta. Con importe > 0 es una
+  // incoherencia que hay que ver, no ocultar.
+  if (t === 'canje') {
+    if (Math.abs(importe) < 0.005) { out.canje = true; return out; }
+    out.anomalia = importe;
+    out.anomaliaLabel = '⚠️ Canje con importe';
+    return out;
+  }
+
+  if (t === 'mixto') {
+    let d = null;
+    try {
+      d = p.desglosemetodopago ? JSON.parse(p.desglosemetodopago) : null;
+    } catch (e) {
+      d = null;
+    }
+
+    if (!d || typeof d !== 'object') {
+      // Filas anteriores al 1-ago-2026, cuando paymentReservationsLogic
+      // v1.3.2 añadió la validación cross-field que exige desglose.
+      out.anomalia = importe;
+      out.anomaliaLabel = '⚠️ Mixto sin desglose';
+      return out;
+    }
+
+    const lower = {};
+    for (const k of Object.keys(d)) lower[String(k).trim().toLowerCase()] = Number(d[k]) || 0;
+    const ta = lower.tarjeta  || 0;
+    const ef = lower.efectivo || 0;
+    const bi = lower.bizum    || 0;
+    const suma = ta + ef + bi;
+
+    if (suma <= 0) {
+      out.anomalia = importe;
+      out.anomaliaLabel = '⚠️ Mixto sin desglose';
+      return out;
+    }
+
+    // Si el desglose no cuadra con el importe cobrado, repartirlo sería
+    // inventar. Se marca entero y se deja ver.
+    if (Math.abs(suma - importe) >= 0.01) {
+      out.anomalia = importe;
+      out.anomaliaLabel = '⚠️ Mixto descuadrado';
+      return out;
+    }
+
+    out.tarjeta  = ta;
+    out.efectivo = ef;
+    out.bizum    = bi;
+    return out;
+  }
+
+  out.anomalia = importe;
+  out.anomaliaLabel = '⚠️ ' + (tipoCrudo || 'Sin método');
+  return out;
+}
+
+// Orden fijo de presentación de los canales físicos.
+const CANALES_FISICOS = ['Tarjeta', 'Efectivo', 'Bizum'];
+
+// =====================================================
 // Q2 — CIERRE FINANCIERO
 // =====================================================
 function procesarCierre(pagos, staffList, vatRate) {
@@ -691,14 +851,33 @@ function procesarCierre(pagos, staffList, vatRate) {
   const especialesArr = [];   // v1.1.5
   let especialesTotal = 0;    // v1.1.5
   const productosDetalle = [];  // v1.1.6 — una entrada por producto vendido
+  let canjesCount = 0;          // v1.2.0 — canjes de 0€ (no son dinero)
+  const anomaliasArr = [];      // v1.2.0 — cobros que no se pueden repartir
 
   for (const p of noCancelados) {
     const importe = Number(p.importeTotal) || 0;
     totalReal += importe;
     totalPropinas += extraerPropinasDeDescripcion(p.descripcion);
 
-    const metodo = p.tipoPago || 'Sin especificar';
-    porMetodo[metodo] = (porMetodo[metodo] || 0) + importe;
+    // v1.2.0 — reparto por canal físico. La parte tarjeta / efectivo /
+    // bizum de un cobro Mixto suma en su canal correspondiente; ya no
+    // existe la cesta "Mixto".
+    const rep = _repartirCanales(p);
+    if (rep.tarjeta)  porMetodo['Tarjeta']  = (porMetodo['Tarjeta']  || 0) + rep.tarjeta;
+    if (rep.efectivo) porMetodo['Efectivo'] = (porMetodo['Efectivo'] || 0) + rep.efectivo;
+    if (rep.bizum)    porMetodo['Bizum']    = (porMetodo['Bizum']    || 0) + rep.bizum;
+    if (rep.canje)    canjesCount += 1;
+    if (Math.abs(rep.anomalia) >= 0.005) {
+      porMetodo[rep.anomaliaLabel] = (porMetodo[rep.anomaliaLabel] || 0) + rep.anomalia;
+      anomaliasArr.push({
+        cliente: (p.nombreCliente || '').trim(),
+        importe: Math.round(rep.anomalia * 100) / 100,
+        motivo: rep.anomaliaLabel,
+        tipoPago: String(p.tipoPago || ''),
+        descripcion: String(p.descripcion || ''),
+        pagoId: p._id || ''
+      });
+    }
 
     const prods = parsearProductos(p.descripcion);
     for (const prod of prods) {
@@ -789,10 +968,27 @@ function procesarCierre(pagos, staffList, vatRate) {
   const iva = desglosarIVA(baseConIVA, vatRate);
 
   const round = v => Math.round(v * 100) / 100;
+
+  // v1.2.0 — orden fijo: los tres canales físicos primero, las
+  // anomalías después (nunca se mezclan entre sí).
+  const porMetodoArr = [];
+  for (const c of CANALES_FISICOS) {
+    if (porMetodo[c]) porMetodoArr.push({ metodo: c, importe: round(porMetodo[c]) });
+  }
+  for (const k of Object.keys(porMetodo)) {
+    if (!CANALES_FISICOS.includes(k)) porMetodoArr.push({ metodo: k, importe: round(porMetodo[k]) });
+  }
+  const porMetodoSuma = round(porMetodoArr.reduce((s, m) => s + m.importe, 0));
+
   return {
     totalReal,
     transacciones: noCancelados.length,
-    porMetodo: Object.entries(porMetodo).map(([metodo, importe]) => ({ metodo, importe: round(importe) })),
+    porMetodo: porMetodoArr,
+    porMetodoSuma,                                  // v1.2.0
+    porMetodoCuadra: Math.abs(porMetodoSuma - totalReal) < 0.01,  // v1.2.0
+    canjes: canjesCount,                            // v1.2.0 — recuento, no importe
+    anomaliasCobro: anomaliasArr,                   // v1.2.0
+    anomaliasCobroTotal: round(anomaliasArr.reduce((s, a) => s + a.importe, 0)),  // v1.2.0
     iva: { vatRate, totalCobrado: totalReal, totalPropinas, totalSinPropinas: baseConIVA, baseImponible: iva.base, cuotaIVA: iva.cuota },
     productos: Array.from(productosAgg.values()),
     productosDetalle: productosDetalle.sort((a, b) => a.fechaMs - b.fechaMs),   // v1.1.6
@@ -959,14 +1155,12 @@ function _iso(d) {
   return `${y}-${m}-${dd}`;
 }
 
-// Normaliza el tipoPago a las cuatro cestas del observatorio.
-function _cesta(tipoPago) {
-  const t = String(tipoPago || '').trim().toLowerCase();
-  if (t === 'tarjeta') return 'tarjeta';
-  if (t === 'efectivo') return 'efectivo';
-  if (t === 'bizum') return 'bizum';
-  return 'otros';   // Mixto, Canje, transferencia, sin especificar…
-}
+// v1.2.0 — _cesta() ELIMINADA.
+// Mandaba a 'otros' el importe íntegro de cada Mixto, los Canjes y
+// cualquier tipoPago vacío. Un cajón de sastre en una pantalla de
+// cuadre es un error conceptual: si un euro cae ahí, no se puede
+// contrastar contra el datáfono, ni contra el cajón, ni contra el
+// extracto. El reparto lo hace ahora _repartirCanales().
 
 export const obtenerObservatorioSemanal = webMethod(
   Permissions.Anyone,
@@ -1016,13 +1210,26 @@ export const obtenerObservatorioSemanal = webMethod(
         const ini = new Date(`${iso}T00:00:00.000`).getTime();
         const fin = new Date(`${iso}T23:59:59.999`).getTime();
 
-        const acc = { tarjeta: 0, efectivo: 0, bizum: 0, otros: 0 };
+        // v1.2.0 — tres canales físicos + anomalías identificadas.
+        const acc = { tarjeta: 0, efectivo: 0, bizum: 0, anomalia: 0, canjes: 0 };
+        const anomaliasDia = {};
         for (const p of pagos) {
           if (String(p.status || '').toUpperCase() === 'CANCELADO') continue;
           const t = p.fechaPago ? new Date(p.fechaPago).getTime() : 0;
           if (t < ini || t > fin) continue;
-          acc[_cesta(p.tipoPago)] += Number(p.importeTotal) || 0;
+
+          const rep = _repartirCanales(p);
+          acc.tarjeta  += rep.tarjeta;
+          acc.efectivo += rep.efectivo;
+          acc.bizum    += rep.bizum;
+          if (rep.canje) acc.canjes += 1;
+          if (Math.abs(rep.anomalia) >= 0.005) {
+            acc.anomalia += rep.anomalia;
+            anomaliasDia[rep.anomaliaLabel] = (anomaliasDia[rep.anomaliaLabel] || 0) + rep.anomalia;
+          }
         }
+        const anomaliasDetalle = Object.entries(anomaliasDia)
+          .map(([motivo, importe]) => ({ motivo, importe: round(importe) }));
 
         const reg = registros.find(r => {
           const t = r.registerDate ? new Date(r.registerDate).getTime() : 0;
@@ -1048,8 +1255,16 @@ export const obtenerObservatorioSemanal = webMethod(
           tarjeta: round(acc.tarjeta),
           efectivo: round(acc.efectivo),
           bizum: round(acc.bizum),
-          otros: round(acc.otros),
-          total: round(acc.tarjeta + acc.efectivo + acc.bizum + acc.otros),
+          // v1.2.0 — `otros` se conserva SOLO por compatibilidad con el
+          // widget actual, que pinta esa línea con `if (dia.otros > 0)`.
+          // Ya no es un cajón de sastre: vale exactamente el importe en
+          // anomalías, así que en un día limpio vale 0 y la línea
+          // desaparece sola. Cuando aparezca, hay algo que corregir.
+          otros: round(acc.anomalia),
+          anomalia: round(acc.anomalia),
+          anomaliasDetalle,
+          canjes: acc.canjes,
+          total: round(acc.tarjeta + acc.efectivo + acc.bizum + acc.anomalia),
           estadoTarjeta: estado(acc.tarjeta, reg ? reg.cardConfirmed === true : false),
           estadoEfectivo: estado(acc.efectivo, arqueado && Math.abs(Number(reg.difference) || 0) < 0.005),
           estadoBizum: estado(acc.bizum, reg ? reg.bizumConfirmed === true : false),
@@ -1059,8 +1274,9 @@ export const obtenerObservatorioSemanal = webMethod(
 
       const tot = dias.reduce((a, d) => ({
         tarjeta: a.tarjeta + d.tarjeta, efectivo: a.efectivo + d.efectivo,
-        bizum: a.bizum + d.bizum, otros: a.otros + d.otros, total: a.total + d.total
-      }), { tarjeta: 0, efectivo: 0, bizum: 0, otros: 0, total: 0 });
+        bizum: a.bizum + d.bizum, otros: a.otros + d.otros,
+        canjes: a.canjes + d.canjes, total: a.total + d.total
+      }), { tarjeta: 0, efectivo: 0, bizum: 0, otros: 0, canjes: 0, total: 0 });
 
       return {
         ok: true,
@@ -1069,7 +1285,11 @@ export const obtenerObservatorioSemanal = webMethod(
         dias,
         totales: {
           tarjeta: round(tot.tarjeta), efectivo: round(tot.efectivo),
-          bizum: round(tot.bizum), otros: round(tot.otros), total: round(tot.total)
+          bizum: round(tot.bizum),
+          otros: round(tot.otros),          // compat widget — = anomalia
+          anomalia: round(tot.otros),       // v1.2.0
+          canjes: tot.canjes,               // v1.2.0 — recuento, no importe
+          total: round(tot.total)
         }
       };
     } catch (error) {
