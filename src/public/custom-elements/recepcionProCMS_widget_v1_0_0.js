@@ -1,7 +1,45 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.102 · Cobros por botón pulsado en Rendimiento productivo
+ * VERSION: 1.1.103  ·  Los cobros externos, con su botón y su etiqueta
+ *
+ * v1.1.103 (12 ago 2026) — FUERA EL COMODÍN "SIN MÉTODO".
+ *
+ *   SÍNTOMA. En "Cobros por botón pulsado" salía una línea
+ *   "⚠️ Sin método registrado" con el cobro de una cita de EMY. En un
+ *   informe económico eso es inadmisible: si la cita consta COBRADA,
+ *   alguien pulsó un botón.
+ *
+ *   CAUSA REAL, en el backend. El cobro de una cita de profesional
+ *   externo no se guarda en PaymentReservations sino en
+ *   PagoreservasExternos, con bookingId 'EXT_<reservaId>'. La consulta
+ *   que cruza cobros con las citas del día solo miraba el prefijo
+ *   'KRI_', así que jamás encontraba esos cobros y el método llegaba
+ *   vacío. Corregido en cierreLogicExtendido v1.2.1 (Q2.6). El dato
+ *   siempre estuvo ahí: no se iba a buscar.
+ *
+ *   AQUÍ, EN EL WIDGET:
+ *     · Los cobros de citas externas van en su propia línea, con el
+ *       botón que se pulsó y el añadido · EXTERNO en violeta. No se
+ *       mezclan con los del salón: ese dinero pasa por el calendario
+ *       pero el salón no lo ingresa.
+ *     · Línea nueva bajo el total: "De los cuales EXTERNO — no entra
+ *       en la caja del salón", con su recuento e importe.
+ *     · El caso residual sin método deja de ser una categoría comodín
+ *       y pasa a llamarse por lo que es: "⚠️ Cobro sin fila en el CMS
+ *       — revisar", en rojo y al final de la lista. No es una cesta
+ *       donde tirar lo que no se sabe clasificar: es un defecto
+ *       concreto que hay que ir a arreglar. Con el backend v1.2.1
+ *       desplegado no debería aparecer nunca.
+ *     · El texto del botón 📋 COPIAR refleja lo mismo.
+ *
+ *   Requiere cierreLogicExtendido v1.2.1 (campo `esExterno` en
+ *   `clientes` y método resuelto). Con el backend v1.2.0 el bloque
+ *   sigue funcionando, pero los externos seguirán saliendo en la línea
+ *   de revisar, que es justo lo que hay que evitar.
+ *
+ * v1.1.102 (12 ago 2026) — Cobros por botón pulsado en Rendimiento
+ *   productivo.
  *
  * v1.1.102 (12 ago 2026) — RECUENTO POR BOTÓN DE COBRO en el bloque
  *   📈 Rendimiento productivo del informe del día.
@@ -1808,7 +1846,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.102]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.103]';
 
   // ─── helpers ───
   function esc(s) {
@@ -8552,19 +8590,31 @@ button { font-family: inherit; cursor: pointer; }
       // financiero, que es otra pregunta distinta.
       // Nada se esconde: una cita PAGADA sin método registrado sale en
       // su propia línea marcada, no se mezcla con las demás.
+      // v1.1.103 — Las citas de profesional EXTERNO llevan su propia
+      // línea, con el botón que se pulsó y el añadido · EXTERNO. Ese
+      // dinero pasa por el calendario del salón pero el salón no lo
+      // ingresa, así que no se mezcla con el resto — pero tampoco se
+      // esconde ni se manda a ninguna cesta indeterminada.
       const _recuentoBotones = (clientes) => {
         const ORDEN = ['Tarjeta', 'Efectivo', 'Bizum', 'Mixto', 'Canje'];
         const acc = {};
         for (const c of (clientes || [])) {
           if (c.status !== 'PAGADO') continue;
-          const k = String(c.metodoPago || '').trim() || '⚠️ Sin método registrado';
-          if (!acc[k]) acc[k] = { metodo: k, n: 0, importe: 0 };
+          const met = String(c.metodoPago || '').trim();
+          // Sin método NO es una categoría: es que falta la fila del cobro
+          // en el CMS. Se nombra como el defecto que es, para ir a por él.
+          const base = met || '⚠️ Cobro sin fila en el CMS — revisar';
+          const k = c.esExterno ? base + ' · EXTERNO' : base;
+          if (!acc[k]) acc[k] = { metodo: k, n: 0, importe: 0, base, ext: !!c.esExterno, roto: !met };
           acc[k].n += 1;
           acc[k].importe += Number(c.total) || 0;
         }
-        const out = [];
-        for (const k of ORDEN) if (acc[k]) out.push(acc[k]);
-        for (const k of Object.keys(acc)) if (!ORDEN.includes(k)) out.push(acc[k]);
+        const claves = Object.keys(acc);
+        const rank = (x) => {
+          const i = ORDEN.indexOf(x.base);
+          return (x.roto ? 200 : 0) + (x.ext ? 100 : 0) + (i === -1 ? 50 : i);
+        };
+        const out = claves.map(k => acc[k]).sort((a, b) => rank(a) - rank(b));
         for (const x of out) x.importe = Math.round(x.importe * 100) / 100;
         return out;
       };
@@ -8588,16 +8638,24 @@ button { font-family: inherit; cursor: pointer; }
       if (_botones.length) {
         const _icoBoton = { 'Efectivo': '💵', 'Tarjeta': '💳', 'Bizum': '📲', 'Mixto': '🔀', 'Canje': '🎟️' };
         const _colBoton = { 'Efectivo': '#2a9d54', 'Tarjeta': '#2f6fd9', 'Bizum': '#a78bfa', 'Mixto': '#c9a44a', 'Canje': '#8b5cf6' };
-        let _nTot = 0, _impTot = 0;
-        for (const b of _botones) { _nTot += b.n; _impTot += b.importe; }
+        let _nTot = 0, _impTot = 0, _nExt = 0, _impExt = 0;
+        for (const b of _botones) {
+          _nTot += b.n; _impTot += b.importe;
+          if (b.ext) { _nExt += b.n; _impExt += b.importe; }
+        }
         _impTot = Math.round(_impTot * 100) / 100;
+        _impExt = Math.round(_impExt * 100) / 100;
         h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🔢 Cobros por botón pulsado (${_nTot})</div>`;
         for (const b of _botones) {
-          const ico = _icoBoton[b.metodo] || '⚠️';
-          const col = _colBoton[b.metodo] || '#9ca3af';
-          h += `<div class="cierre-row"><span class="cierre-nombre"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin-right:6px;"></span>${ico} ${esc(b.metodo)} <span style="color:#9ca3af;font-size:10px;">· ${b.n} ${b.n === 1 ? 'cobro' : 'cobros'}</span></span><span class="cierre-importe">${eur(b.importe)}</span></div>`;
+          const ico = b.roto ? '⚠️' : (_icoBoton[b.base] || '💰');
+          const col = b.roto ? '#d93636' : (b.ext ? '#8b5cf6' : (_colBoton[b.base] || '#9ca3af'));
+          const tagExt = b.ext ? ` <span style="color:#8b5cf6;font-size:9px;font-weight:700;letter-spacing:.5px;background:rgba(139,92,246,.12);padding:1px 5px;border-radius:4px;">EXTERNO</span>` : '';
+          h += `<div class="cierre-row"><span class="cierre-nombre"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin-right:6px;"></span>${ico} ${esc(b.base)}${tagExt} <span style="color:#9ca3af;font-size:10px;">· ${b.n} ${b.n === 1 ? 'cobro' : 'cobros'}</span></span><span class="cierre-importe">${eur(b.importe)}</span></div>`;
         }
         h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;margin-top:4px;padding-top:6px;"><span class="cierre-nombre" style="font-weight:700;">Total cobros del día</span><span class="cierre-importe" style="font-weight:700;">${_nTot} · ${eur(_impTot)}</span></div>`;
+        if (_nExt > 0) {
+          h += `<div class="cierre-row"><span class="cierre-nombre" style="color:#8b5cf6;font-size:10.5px;">De los cuales EXTERNO — no entra en la caja del salón</span><span class="cierre-importe" style="color:#8b5cf6;font-size:11px;">${_nExt} · ${eur(_impExt)}</span></div>`;
+        }
         h += `</div>`;
       }
 
@@ -9224,23 +9282,31 @@ button { font-family: inherit; cursor: pointer; }
           const accB = {};
           for (const c of r.clientes) {
             if (c.status !== 'PAGADO') continue;
-            const k = String(c.metodoPago || '').trim() || 'Sin método registrado';
-            if (!accB[k]) accB[k] = { n: 0, importe: 0 };
+            const met = String(c.metodoPago || '').trim();
+            const base = met || 'Cobro sin fila en el CMS - revisar';
+            const k = c.esExterno ? base + ' · EXTERNO' : base;
+            if (!accB[k]) accB[k] = { n: 0, importe: 0, base, ext: !!c.esExterno, roto: !met };
             accB[k].n += 1;
             accB[k].importe += Number(c.total) || 0;
           }
-          const clavesB = ORDEN_B.filter(k => accB[k]).concat(Object.keys(accB).filter(k => !ORDEN_B.includes(k)));
+          const rankB = (x) => {
+            const i = ORDEN_B.indexOf(x.base);
+            return (x.roto ? 200 : 0) + (x.ext ? 100 : 0) + (i === -1 ? 50 : i);
+          };
+          const clavesB = Object.keys(accB).sort((a, b) => rankB(accB[a]) - rankB(accB[b]));
           if (clavesB.length) {
-            let nTotB = 0, impTotB = 0;
+            let nTotB = 0, impTotB = 0, nExtB = 0, impExtB = 0;
             L.push('');
             L.push('🔢 Cobros por botón pulsado');
             for (const k of clavesB) {
               const b = accB[k];
               nTotB += b.n;
               impTotB += b.importe;
+              if (b.ext) { nExtB += b.n; impExtB += b.importe; }
               L.push(`- ${k}: ${b.n} ${b.n === 1 ? 'cobro' : 'cobros'} · ${eur(b.importe)}`);
             }
             L.push(`Total cobros del día: ${nTotB} · ${eur(impTotB)}`);
+            if (nExtB > 0) L.push(`De los cuales EXTERNO (no entra en caja): ${nExtB} · ${eur(impExtB)}`);
           }
         }
         if (r.descuentos && r.descuentos.length) {
