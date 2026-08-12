@@ -1,0 +1,1978 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Estadísticas Hair Times</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <style>
+    /* ═══════════════════════════════════════════════════════
+       ESTADÍSTICAS KAMISUITE v2.6.0 — Light theme
+       ═══════════════════════════════════════════════════════
+       v2.6.0: Selector de orden en la tabla "Ingresos por Día"
+         - La tabla usaba SIEMPRE ingresosPorDiaRanking (orden por
+           importe descendente). Ahora por defecto va en orden
+           CRONOLÓGICO (ingresosPorDia) y se puede alternar con dos
+           botones: Día / Importe.
+         - El gráfico no cambia: siempre cronológico.
+         - La exportación a PDF respeta el orden elegido en pantalla.
+         - Días sin cobros: se muestran a 0€ y la columna "vs Media"
+           queda con guión (no tiene sentido un -100% en día cerrado).
+         - Sin cambios en CSS, colores ni layout: los botones usan
+           estilos en línea con las variables ya existentes.
+       ═══════════════════════════════════════════════════════ */
+    :root {
+      --bg: #f5f6f8;
+      --surface: #ffffff;
+      --surface2: #f0f1f3;
+      --surface3: #e8e9ec;
+      --border: rgba(0,0,0,.10);
+      --border-hover: rgba(0,0,0,.20);
+      --text: #1a1b1e;
+      --text-secondary: rgba(0,0,0,.60);
+      --muted: rgba(0,0,0,.40);
+      --accent: #c9a44a;
+      --accent-dim: rgba(201,164,74,.12);
+      --cash: #8F1C5B;
+      --card: #4D8F8C;
+      --bizum: #D18C49;
+      --paid: #2a9d54;
+      --radius: 10px;
+      --radius-sm: 6px;
+      --delta-up: #2a9d54;
+      --delta-down: #d32f2f;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Bai Jamjuree', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--bg);
+      padding: 20px;
+      color: var(--text);
+    }
+
+    .header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 20px; flex-wrap: wrap; gap: 15px;
+    }
+    .header h1 { font-size: 24px; color: var(--text); font-weight: 700; }
+
+    .filtros { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .filtros label { font-size: 14px; color: var(--text-secondary); font-weight: 600; }
+    .filtros input[type="date"] {
+      padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: 14px; font-family: inherit; background: var(--surface2); color: var(--text); outline: none;
+      transition: border-color .2s;
+    }
+    .filtros input[type="date"]:focus { border-color: var(--accent); }
+    .filtros button {
+      padding: 8px 16px; background: linear-gradient(135deg, #3a7ca5, #2c5f7c);
+      color: white; border: none; border-radius: var(--radius-sm);
+      cursor: pointer; font-weight: 600; transition: transform 0.2s; font-family: inherit; font-size: 14px;
+    }
+    .filtros button:hover { transform: scale(1.02); }
+    .filtros .btn-export { background: linear-gradient(135deg, #8F1C5B, #6B1543); }
+    .filtros .btn-comparar { background: linear-gradient(135deg, #6B5B95, #4A3D6E); }
+    .filtros .btn-comparar.active { background: linear-gradient(135deg, #c9a44a, #a88a3a); }
+
+    /* ═══════════════════════════════════════════════════════
+       EWCM Toggle Switch
+       ═══════════════════════════════════════════════════════ */
+    .ewcm-container {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--surface2); border-radius: var(--radius-sm);
+      padding: 5px 10px; border: 1px solid var(--border);
+    }
+    .ewcm-label {
+      font-size: 11px; font-weight: 600; color: var(--text-secondary);
+      letter-spacing: 0.5px; user-select: none;
+    }
+    .ewcm-switch { position: relative; width: 36px; height: 20px; cursor: pointer; }
+    .ewcm-switch input { opacity: 0; width: 0; height: 0; }
+    .ewcm-slider {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--surface3); border-radius: 20px; transition: background 0.3s;
+    }
+    .ewcm-slider::before {
+      content: ''; position: absolute; width: 16px; height: 16px;
+      left: 2px; bottom: 2px; background: var(--muted); border-radius: 50%; transition: transform 0.3s;
+    }
+    .ewcm-switch input:checked + .ewcm-slider { background: #D18C49; }
+    .ewcm-switch input:checked + .ewcm-slider::before { background: #fff; transform: translateX(16px); }
+    .ewcm-badge {
+      display: none; font-size: 9px; font-weight: 700;
+      color: #D18C49; background: rgba(209,140,73,0.15);
+      padding: 2px 6px; border-radius: 4px;
+    }
+    .ewcm-badge.visible { display: inline-block; }
+
+    /* ═══════════════════════════════════════════════════════
+       v2.5: Panel Comparar
+       ═══════════════════════════════════════════════════════ */
+    .panel-comparar {
+      display: none; margin-bottom: 20px; padding: 16px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .panel-comparar.visible { display: block; }
+    .panel-comparar h4 { font-size: 14px; color: var(--text); margin-bottom: 12px; }
+    .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .presets button {
+      padding: 6px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      background: var(--surface2); color: var(--text-secondary); cursor: pointer;
+      font-family: inherit; font-size: 13px; font-weight: 600; transition: all .2s;
+    }
+    .presets button:hover { border-color: var(--accent); color: var(--accent); }
+    .presets button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .custom-dates {
+      display: none; gap: 10px; align-items: center; flex-wrap: wrap;
+      padding-top: 10px; border-top: 1px solid var(--border);
+    }
+    .custom-dates.visible { display: flex; }
+    .custom-dates label { font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+    .custom-dates input[type="date"] {
+      padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      font-size: 13px; font-family: inherit; background: var(--surface2); color: var(--text);
+    }
+    .custom-dates button {
+      padding: 6px 14px; background: linear-gradient(135deg, #6B5B95, #4A3D6E);
+      color: #fff; border: none; border-radius: var(--radius-sm); cursor: pointer;
+      font-family: inherit; font-weight: 600; font-size: 13px;
+    }
+    .comparativa-info {
+      display: none; padding: 8px 14px; background: rgba(107,91,149,.08);
+      border: 1px solid rgba(107,91,149,.2); border-radius: var(--radius-sm);
+      font-size: 13px; color: #6B5B95; font-weight: 600; margin-bottom: 16px;
+    }
+    .comparativa-info.visible { display: flex; align-items: center; justify-content: space-between; }
+    .comparativa-info .cerrar-comp {
+      background: none; border: none; color: #6B5B95; cursor: pointer;
+      font-size: 16px; font-weight: 700; padding: 0 4px;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       KPI Cards + Delta indicators
+       ═══════════════════════════════════════════════════════ */
+    .resumen { display: flex; gap: 20px; margin-bottom: 25px; flex-wrap: wrap; }
+    .resumen-card {
+      flex: 1; min-width: 150px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06); text-align: center;
+    }
+    .resumen-card .valor { font-size: 28px; font-weight: 700; color: var(--text); }
+    .resumen-card .etiqueta { font-size: 13px; color: var(--muted); margin-top: 5px; }
+    .resumen-card .delta {
+      display: none; font-size: 12px; font-weight: 600; margin-top: 6px;
+    }
+    .resumen-card .delta.visible { display: block; }
+    .resumen-card .delta.up { color: var(--delta-up); }
+    .resumen-card .delta.down { color: var(--delta-down); }
+    .resumen-card .delta .prev-val { font-size: 11px; color: var(--muted); font-weight: 400; }
+
+    .grid-graficos { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+    .grafico-container {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    .grafico-container h3 { font-size: 16px; color: var(--text); margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid var(--border); }
+    .grafico-wrapper { position: relative; height: 280px; }
+    /* v2.5.1: comparativa — pares lado a lado */
+    .compar-pair { display: flex; gap: 16px; }
+    .compar-pair > div { flex: 1; min-width: 0; }
+    .compar-pair > div + div { border-left: 1px solid var(--border); padding-left: 16px; }
+    .compar-pair .grafico-wrapper { height: 240px; }
+    .compar-pair h4 { font-size: 12px; margin-bottom: 8px; text-align: center; }
+    @media (max-width: 768px) { .compar-pair { flex-direction: column; } .compar-pair > div + div { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 16px; } }
+
+    .no-datos { text-align: center; padding: 60px 20px; color: var(--muted); font-size: 18px; }
+    .loading { text-align: center; padding: 60px 20px; color: var(--text-secondary); }
+    .loading::after {
+      content: ''; display: inline-block; width: 20px; height: 20px;
+      border: 3px solid var(--border); border-top-color: #3a7ca5; border-radius: 50%;
+      animation: spin 1s linear infinite; margin-left: 10px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ═══════════════════════════════════════════════════════
+       TABLA DESGLOSE POR CATEGORÍA
+       ═══════════════════════════════════════════════════════ */
+    .tabla-desglose-container {
+      margin-top: 25px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,.06);
+      overflow-x: auto;
+    }
+    .tabla-desglose-container h3 {
+      font-size: 18px; color: var(--text); margin-bottom: 16px;
+      padding-bottom: 10px; border-bottom: 2px solid var(--border);
+    }
+    .tabla-desglose { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .tabla-desglose th {
+      text-align: right; padding: 8px 10px; color: var(--muted); font-weight: 600;
+      border-bottom: 2px solid var(--border); font-size: 12px; white-space: nowrap;
+    }
+    .tabla-desglose th:first-child { text-align: left; }
+    .tabla-desglose td { padding: 5px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .tabla-desglose td:first-child { text-align: left; white-space: normal; }
+
+    .tabla-desglose .cat-header td {
+      font-weight: 700; color: var(--text); font-size: 13px;
+      padding-top: 14px; padding-bottom: 6px; border-bottom: none;
+    }
+    .tabla-desglose .svc-row td { padding-left: 20px; color: var(--text-secondary); font-size: 12px; }
+    .tabla-desglose .svc-row td:first-child { color: var(--text-secondary); }
+    .tabla-desglose .cat-subtotal td {
+      font-weight: 700; color: #8F1C5B; font-size: 12px;
+      border-bottom: 2px solid var(--border); padding-top: 4px; padding-bottom: 8px;
+    }
+    .tabla-desglose .grand-total td {
+      font-weight: 700; color: #8F1C5B; font-size: 14px;
+      border-top: 3px solid #8F1C5B; padding-top: 12px; padding-bottom: 12px;
+    }
+
+    .chart-data-table {
+      margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; font-size: 12px;
+      overflow-x: auto;
+    }
+    .chart-data-table table { width: 100%; border-collapse: collapse; }
+    .chart-data-table th {
+      text-align: right; font-weight: 600; color: var(--muted); font-size: 11px;
+      padding: 3px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .chart-data-table th:first-child { text-align: left; }
+    .chart-data-table td { padding: 3px 8px; text-align: right; border-bottom: 1px solid var(--border); color: var(--text-secondary); white-space: nowrap; }
+    .chart-data-table td:first-child { text-align: left; color: var(--text-secondary); font-weight: 500; white-space: normal; }
+    .chart-data-table .total-row td { font-weight: 700; color: var(--text); border-top: 2px solid var(--border); }
+
+    /* IVA columns styling */
+    .col-base { color: var(--text-secondary); }
+    .col-iva { color: #6B5B95; font-style: italic; }
+
+    .tabla-desglose .cat-header.extras td { color: #D18C49; }
+    .tabla-desglose .cat-subtotal.extras td { color: #D18C49; border-bottom-color: rgba(209,140,73,.3); }
+    .tabla-desglose .cat-header.productos td { color: #4D8F8C; }
+    .tabla-desglose .cat-subtotal.productos td { color: #4D8F8C; border-bottom-color: rgba(77,143,140,.3); }
+    .tabla-desglose .cat-header.externos td { color: #6B5B95; }
+    .tabla-desglose .cat-subtotal.externos td { color: #6B5B95; border-bottom-color: rgba(107,91,149,.3); }
+
+    .tabla-desglose .subgrupo-header td {
+      font-weight: 600; font-size: 11px; color: var(--muted); font-style: italic;
+      padding-top: 8px; padding-bottom: 4px; padding-left: 16px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .tabla-periodo { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+
+    @media (max-width: 600px) {
+      .grid-graficos { grid-template-columns: 1fr; }
+      .grafico-wrapper { height: 250px; }
+      .header h1 { font-size: 20px; }
+      .tabla-desglose { font-size: 11px; }
+      .tabla-desglose th, .tabla-desglose td { padding: 4px 6px; }
+      .resumen-card .valor { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>📊 Estadísticas y Análisis</h1>
+    <div class="filtros">
+      <label>Desde:</label>
+      <input type="date" id="fechaDesde">
+      <label>Hasta:</label>
+      <input type="date" id="fechaHasta">
+      <button id="btnFiltrar">Aplicar</button>
+      <div class="ewcm-container">
+        <span class="ewcm-label">EWCM</span>
+        <label class="ewcm-switch">
+          <input type="checkbox" id="toggleEWCM">
+          <span class="ewcm-slider"></span>
+        </label>
+        <span class="ewcm-badge" id="ewcmBadge">Modo EWCM</span>
+      </div>
+      <button id="btnComparar" class="btn-comparar">📊 Comparar</button>
+      <button id="btnExportarPdf" class="btn-export">📄 Exportar PDF</button>
+      <button id="btnExportarExcel" class="btn-export" style="background:linear-gradient(135deg,#1D6F42,#155C35);">📊 Exportar Excel</button>
+    </div>
+  </div>
+
+  <!-- v2.5: Panel comparar -->
+  <div class="panel-comparar" id="panelComparar">
+    <h4>Comparar con periodo anterior</h4>
+    <div class="presets" id="presetButtons">
+      <button data-preset="anio">Año</button>
+      <button data-preset="trimestre">Trimestre</button>
+      <button data-preset="mes">Mes (interanual)</button>
+      <button data-preset="mesAnterior">Mes anterior</button>
+      <button data-preset="semana">Semana anterior</button>
+      <button data-preset="diaSemana">Día de semana</button>
+      <button data-preset="custom">Custom</button>
+    </div>
+    <div class="custom-dates" id="customDates">
+      <label>Periodo A — Desde:</label>
+      <input type="date" id="fechaDesdeA2">
+      <label>Hasta:</label>
+      <input type="date" id="fechaHastaA2">
+      <span style="color:var(--muted);font-weight:700;font-size:16px;padding:0 6px;">VS</span>
+      <label>Periodo B — Desde:</label>
+      <input type="date" id="fechaDesdeB">
+      <label>Hasta:</label>
+      <input type="date" id="fechaHastaB">
+      <button id="btnAplicarCustom">Aplicar</button>
+    </div>
+  </div>
+
+  <div class="comparativa-info" id="comparativaInfo">
+    <span id="comparativaLabel"></span>
+    <button class="cerrar-comp" id="btnCerrarComp" title="Cerrar comparativa">✕</button>
+  </div>
+
+  <!-- v2.5.1: Banner análisis Día de Semana -->
+  <div id="diaSemanaBanner" style="display:none; margin-bottom:20px; padding:20px; background:linear-gradient(135deg,#fdf6e3,#f9eccc); border:2px solid var(--accent); border-radius:var(--radius); box-shadow:0 2px 8px rgba(201,164,74,0.2);">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h3 style="color:#8a6d2f; margin:0; font-size:16px;">Análisis por Día de la Semana</h3>
+      <button id="btnCerrarDS" style="background:none; border:none; color:#8a6d2f; cursor:pointer; font-size:18px; font-weight:700;">✕</button>
+    </div>
+    <div id="diaSemanaBannerContent"></div>
+  </div>
+
+  <!-- v2.5: 4 KPI cards (added Impuesto) -->
+  <div class="resumen" id="resumen">
+    <div class="resumen-card">
+      <div class="valor" id="totalIngresos">-</div>
+      <div class="etiqueta">Total Ventas</div>
+      <div class="delta" id="deltaIngresos"></div>
+    </div>
+    <div class="resumen-card">
+      <div class="valor" id="totalTransacciones">-</div>
+      <div class="etiqueta">Transacciones</div>
+      <div class="delta" id="deltaTransacciones"></div>
+    </div>
+    <div class="resumen-card">
+      <div class="valor" id="promedioTicket">-</div>
+      <div class="etiqueta">Ticket Medio</div>
+      <div class="delta" id="deltaTicket"></div>
+    </div>
+    <div class="resumen-card">
+      <div class="valor" id="totalImpuesto">-</div>
+      <div class="etiqueta" id="etiquetaImpuesto">Impuesto</div>
+      <div class="delta" id="deltaImpuesto"></div>
+    </div>
+  </div>
+
+  <div class="grid-graficos" id="graficos">
+    <div class="loading">Cargando estadísticas</div>
+  </div>
+
+  <div class="tabla-desglose-container" id="tablaContainer" style="display:none;">
+    <h3>Desglose de Servicios por Categoria</h3>
+    <div class="tabla-periodo" id="tablaPeriodo"></div>
+    <table class="tabla-desglose" id="tablaDesglose"></table>
+  </div>
+
+  <div class="tabla-desglose-container" id="seccionNuevas" style="display:none;">
+    <div id="diaSemanaSection"></div>
+    <div id="clientesSection" style="margin-top:20px;"></div>
+    <div id="ratioSTSection" style="margin-top:20px;"></div>
+    <div id="productividadSection" style="margin-top:20px;"></div>
+  </div>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════════════════
+    // VARIABLES GLOBALES
+    // ═══════════════════════════════════════════════════════════════════════
+
+    const WIDGET_VERSION = '2.6.0';
+
+    let chartIngresos = null;
+    let chartMetodo = null;
+    let chartStaff = null;
+    let chartServicios = null;
+    let _lastData = null;
+    let _ewcmActivo = false;
+    // v2.5: Comparativa
+    let _comparativaActivo = false;
+    let _periodoAData = null;
+    let _periodoBData = null;
+    let _labelA = '';
+    let _labelB = '';
+    let _scrollToDiaSemana = false; // unused, kept for safety
+    // v2.5.1: Fechas originales antes de aplicar preset (para restaurar al cerrar)
+    let _fechasOriginales = null;
+    // v2.6.0: Orden de la tabla "Ingresos por Día" — 'dia' (cronológico) | 'importe'
+    let _ordenIngresosDia = 'dia';
+
+    const COLORES = {
+      primario: '#3a7ca5',
+      secundario: '#2c5f7c',
+      efectivo: '#8F1C5B',
+      tarjeta: '#4D8F8C',
+      bizum: '#D18C49',
+      comparB: 'rgba(107,91,149,0.5)',
+      gradiente: ['#3a7ca5', '#4D8F8C', '#8F1C5B', '#D18C49', '#6B5B95', '#88B04B', '#F7CAC9', '#92A8D1']
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // INICIALIZACIÓN
+    // ═══════════════════════════════════════════════════════════════════════
+
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('[Stats widget v' + WIDGET_VERSION + '] listo');
+
+      const hoy = new Date();
+      const primerDia = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+      const ultimoDia = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+
+      document.getElementById('fechaDesde').value = toISODate(primerDia);
+      document.getElementById('fechaHasta').value = toISODate(ultimoDia);
+
+      document.getElementById('btnFiltrar').addEventListener('click', () => { cerrarComparativa(); requestStats(); });
+      document.getElementById('btnExportarPdf').addEventListener('click', () => exportarPdfConGraficos());
+      document.getElementById('btnExportarExcel').addEventListener('click', () => exportarExcel());
+
+      document.getElementById('toggleEWCM').addEventListener('change', (e) => {
+        _ewcmActivo = e.target.checked;
+        document.getElementById('ewcmBadge').classList.toggle('visible', _ewcmActivo);
+        if (_comparativaActivo) { requestComparativa(_lastPreset, _lastPresetLabel); } else { requestStats(); }
+      });
+
+      // v2.5: Comparar
+      document.getElementById('btnComparar').addEventListener('click', togglePanelComparar);
+      document.getElementById('btnCerrarComp').addEventListener('click', cerrarComparativa);
+      document.getElementById('btnAplicarCustom').addEventListener('click', aplicarCustom);
+      document.getElementById('btnCerrarDS').addEventListener('click', () => {
+        ocultarAnalisisDiaSemana();
+        document.querySelectorAll('#presetButtons button').forEach(b => b.classList.remove('active'));
+      });
+
+      document.querySelectorAll('#presetButtons button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const preset = btn.dataset.preset;
+          document.querySelectorAll('#presetButtons button').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          if (preset === 'custom') {
+            ocultarAnalisisDiaSemana();
+            document.getElementById('customDates').classList.add('visible');
+            // Pre-rellenar custom con fechas actuales
+            document.getElementById('fechaDesdeA2').value = document.getElementById('fechaDesde').value;
+            document.getElementById('fechaHastaA2').value = document.getElementById('fechaHasta').value;
+          } else if (preset === 'diaSemana') {
+            document.getElementById('customDates').classList.remove('visible');
+            // Pedir media día semana del año al backend
+            document.getElementById('diaSemanaBanner').style.display = 'block';
+            document.getElementById('diaSemanaBannerContent').innerHTML = '<div class="loading">Calculando medias del año</div>';
+            window.parent.postMessage({ type: 'loadDiaSemanaAnio' }, '*');
+          } else {
+            ocultarAnalisisDiaSemana();
+            document.getElementById('customDates').classList.remove('visible');
+            // Guardar fechas originales antes de cambiar (solo si no las hemos guardado ya)
+            if (!_fechasOriginales) {
+              _fechasOriginales = {
+                desde: document.getElementById('fechaDesde').value,
+                hasta: document.getElementById('fechaHasta').value
+              };
+            }
+            const periodos = calcularPeriodos(preset);
+            if (periodos) {
+              document.getElementById('fechaDesde').value = periodos.a.fechaDesde;
+              document.getElementById('fechaHasta').value = periodos.a.fechaHasta;
+              requestComparativa(periodos.b, periodos.a.label + ' vs ' + periodos.b.label);
+            }
+          }
+        });
+      });
+
+      window.parent.postMessage({ type: 'ready' }, '*');
+    });
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'stats') { _comparativaActivo = false; renderStats(msg.payload); }
+      if (msg.type === 'comparativa') renderComparativa(msg);
+      if (msg.type === 'diaSemanaAnio') renderDiaSemanaAnio(msg.payload);
+      if (msg.type === 'loading') { document.getElementById('graficos').innerHTML = '<div class="loading">' + (msg.message || 'Cargando') + '</div>'; }
+      if (msg.type === 'error') showError(msg.message);
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function requestStats() {
+      const fechaDesde = document.getElementById('fechaDesde').value;
+      const fechaHasta = document.getElementById('fechaHasta').value;
+      document.getElementById('graficos').innerHTML = '<div class="loading">Cargando estadísticas</div>';
+      document.getElementById('tablaContainer').style.display = 'none';
+      document.getElementById('seccionNuevas').style.display = 'none';
+      hideComparativaInfo();
+      window.parent.postMessage({ type: 'load', fechaDesde, fechaHasta, excludeEfectivo: _ewcmActivo }, '*');
+    }
+
+    function ewcmSuffix() { return _ewcmActivo ? ' (EWCM)' : ''; }
+    function eur(n) { return (Math.round(Number(n || 0) * 100) / 100).toFixed(2).replace('.', ',') + '€'; }
+    function pct(n) { return (Math.round(Number(n || 0) * 100) / 100).toFixed(2).replace('.', ',') + '%'; }
+    function toISODate(dateObj) {
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const d = String(dateObj.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    // v2.5: Delta helpers
+    function calcDelta(actual, anterior) {
+      if (!anterior || anterior === 0) return { abs: actual, pct: 0, dir: 'up' };
+      const diff = actual - anterior;
+      const p = Math.round((diff / Math.abs(anterior)) * 10000) / 100;
+      return { abs: Math.round(diff * 100) / 100, pct: p, dir: diff >= 0 ? 'up' : 'down' };
+    }
+
+    function renderDelta(elId, actual, anterior, formatFn) {
+      const el = document.getElementById(elId);
+      if (!el || !_comparativaActivo || anterior == null) { if (el) { el.classList.remove('visible'); } return; }
+      const d = calcDelta(actual, anterior);
+      const arrow = d.dir === 'up' ? '▲' : '▼';
+      const sign = d.abs >= 0 ? '+' : '';
+      el.className = 'delta visible ' + d.dir;
+      el.innerHTML = `${arrow} ${sign}${formatFn ? formatFn(d.abs) : d.abs} (${sign}${d.pct}%) <span class="prev-val">ant: ${formatFn ? formatFn(anterior) : anterior}</span>`;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // v2.5: COMPARATIVA — Panel, presets, cálculo de fechas
+    // ═══════════════════════════════════════════════════════════════════════
+
+    let _lastPreset = null;
+    let _lastPresetLabel = '';
+
+    function togglePanelComparar() {
+      const panel = document.getElementById('panelComparar');
+      const btn = document.getElementById('btnComparar');
+      panel.classList.toggle('visible');
+      btn.classList.toggle('active', panel.classList.contains('visible'));
+    }
+
+    function cerrarComparativa() {
+      _comparativaActivo = false;
+      _periodoAData = null;
+      _periodoBData = null;
+      // v2.5.1: Restaurar fechas originales si las guardamos
+      if (_fechasOriginales) {
+        document.getElementById('fechaDesde').value = _fechasOriginales.desde;
+        document.getElementById('fechaHasta').value = _fechasOriginales.hasta;
+        _fechasOriginales = null;
+      }
+      hideComparativaInfo();
+      document.querySelectorAll('#presetButtons button').forEach(b => b.classList.remove('active'));
+      document.getElementById('customDates').classList.remove('visible');
+      document.querySelectorAll('.delta').forEach(d => d.classList.remove('visible'));
+      ocultarAnalisisDiaSemana();
+      requestStats();
+    }
+
+    function hideComparativaInfo() {
+      document.getElementById('comparativaInfo').classList.remove('visible');
+    }
+
+    function showComparativaInfo(labelA, labelB) {
+      const el = document.getElementById('comparativaInfo');
+      document.getElementById('comparativaLabel').textContent = `Comparativa: ${labelA} vs ${labelB}`;
+      el.classList.add('visible');
+    }
+
+    // v2.5.1: Análisis Día de Semana — banner con resumen
+    function mostrarAnalisisDiaSemana() {
+      if (!_lastData || !_lastData.porDiaSemana || _lastData.porDiaSemana.labels.length === 0) {
+        alert('No hay datos cargados. Pulsa Aplicar primero.');
+        return;
+      }
+      const ds = _lastData.porDiaSemana;
+      if (!ds.promedios || !ds.conteos) {
+        alert('No hay datos suficientes de promedios por día.');
+        return;
+      }
+
+      // Mejor y peor día por MEDIA (no por total)
+      const indexed = ds.labels.map((l, i) => ({ dia: l, total: ds.valores[i], media: ds.promedios[i], conteo: ds.conteos[i] }));
+      const conMedia = indexed.filter(x => x.media > 0).sort((a, b) => b.media - a.media);
+      const mejor = conMedia[0];
+      const peor = conMedia[conMedia.length - 1];
+      const masVolumen = [...indexed].sort((a, b) => b.total - a.total)[0];
+
+      let html = '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-bottom:14px;">';
+      if (mejor) {
+        html += `<div style="background:#fff; padding:12px; border-radius:8px; border-left:4px solid #2a9d54;">
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; font-weight:600;">Mejor día (por media)</div>
+          <div style="font-size:18px; font-weight:700; color:var(--text); margin:4px 0;">${mejor.dia}</div>
+          <div style="font-size:13px; color:var(--text-secondary);">${eur(mejor.media)}/día · ${mejor.conteo} ${mejor.conteo === 1 ? 'día' : 'días'}</div>
+        </div>`;
+      }
+      if (peor && peor !== mejor) {
+        html += `<div style="background:#fff; padding:12px; border-radius:8px; border-left:4px solid #d32f2f;">
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; font-weight:600;">Peor día (por media)</div>
+          <div style="font-size:18px; font-weight:700; color:var(--text); margin:4px 0;">${peor.dia}</div>
+          <div style="font-size:13px; color:var(--text-secondary);">${eur(peor.media)}/día · ${peor.conteo} ${peor.conteo === 1 ? 'día' : 'días'}</div>
+        </div>`;
+      }
+      if (masVolumen) {
+        html += `<div style="background:#fff; padding:12px; border-radius:8px; border-left:4px solid #3a7ca5;">
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; font-weight:600;">Mayor volumen total</div>
+          <div style="font-size:18px; font-weight:700; color:var(--text); margin:4px 0;">${masVolumen.dia}</div>
+          <div style="font-size:13px; color:var(--text-secondary);">${eur(masVolumen.total)} total</div>
+        </div>`;
+      }
+      html += '</div>';
+
+      // Tabla compacta de todos los días
+      html += '<table style="width:100%; border-collapse:collapse; font-size:12px; background:#fff; border-radius:8px; overflow:hidden;">';
+      html += '<thead><tr style="background:#f0e5c4;"><th style="text-align:left; padding:8px;">Día</th><th style="text-align:right; padding:8px;">Total</th><th style="text-align:right; padding:8px;">Nº días</th><th style="text-align:right; padding:8px;">Media/día</th><th style="text-align:right; padding:8px;">% total</th></tr></thead><tbody>';
+      const totalDS = ds.valores.reduce((s, v) => s + v, 0);
+      for (let i = 0; i < ds.labels.length; i++) {
+        const v = ds.valores[i];
+        const p = totalDS > 0 ? v / totalDS * 100 : 0;
+        html += `<tr style="border-bottom:1px solid #f0e5c4;"><td style="padding:6px 8px;">${ds.labels[i]}</td><td style="text-align:right; padding:6px 8px;">${eur(v)}</td><td style="text-align:right; padding:6px 8px;">${ds.conteos[i]}</td><td style="text-align:right; padding:6px 8px; font-weight:600; color:#8a6d2f;">${eur(ds.promedios[i])}</td><td style="text-align:right; padding:6px 8px;">${pct(p)}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      html += '<p style="margin-top:10px; font-size:11px; color:var(--muted); font-style:italic;">El cálculo se hace sobre el periodo actualmente cargado. La columna "vs Media" en la tabla de Ingresos por Día muestra cómo se desvía cada día concreto respecto a la media de su día de la semana.</p>';
+
+      document.getElementById('diaSemanaBannerContent').innerHTML = html;
+      document.getElementById('diaSemanaBanner').style.display = 'block';
+    }
+
+    function ocultarAnalisisDiaSemana() {
+      document.getElementById('diaSemanaBanner').style.display = 'none';
+    }
+
+    // v2.5: Render — HOY vs media del año + análisis del periodo cargado
+    function renderDiaSemanaAnio(data) {
+      let html = '';
+
+      // ═══ COMPARATIVA HOY vs MEDIA DEL AÑO ═══ (PRINCIPAL)
+      const delta = data.deltaPct;
+      const dir = delta >= 0 ? 'up' : 'down';
+      const arrow = delta >= 0 ? '▲' : '▼';
+      const color = delta >= 0 ? '#2a9d54' : '#d32f2f';
+      const bgColor = delta >= 0 ? 'rgba(42,157,84,0.08)' : 'rgba(211,47,47,0.08)';
+      const fechaHoyFormat = new Date(data.fechaHoy + 'T00:00:00').toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+      html += `
+        <div style="background:${bgColor}; border:2px solid ${color}; border-radius:10px; padding:18px; margin-bottom:18px;">
+          <div style="font-size:11px; color:#8a6d2f; text-transform:uppercase; font-weight:700; letter-spacing:0.5px; margin-bottom:8px;">
+            Comparativa del día — ${fechaHoyFormat}
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; align-items:center;">
+            <div>
+              <div style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase;">Hoy (${data.diaSemanaHoy})</div>
+              <div style="font-size:26px; font-weight:700; color:var(--text); margin-top:4px;">${eur(data.ventasHoy)}</div>
+            </div>
+            <div>
+              <div style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase;">Media ${data.diaSemanaHoy} ${data.anio}</div>
+              <div style="font-size:26px; font-weight:700; color:var(--text-secondary); margin-top:4px;">${eur(data.mediaDiaHoy)}</div>
+              <div style="font-size:11px; color:var(--muted); margin-top:2px;">${data.totalDiasHistorico} ${data.totalDiasHistorico === 1 ? 'día' : 'días'} en histórico</div>
+            </div>
+            <div style="text-align:center; padding:12px; background:#fff; border-radius:8px;">
+              <div style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase;">Diferencia</div>
+              <div style="font-size:28px; font-weight:700; color:${color}; margin-top:4px;">${arrow} ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%</div>
+              <div style="font-size:12px; color:${color}; font-weight:600;">${delta >= 0 ? '+' : ''}${eur(data.ventasHoy - data.mediaDiaHoy)}</div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // ═══ Resto: las 3 tarjetas SIEMPRE: Mejor, Peor, Mayor volumen — del AÑO ═══
+      if (data.mediasPorDia) {
+        const ORDEN = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+        const indexed = ORDEN
+          .filter(d => data.mediasPorDia[d])
+          .map(d => ({
+            dia: d,
+            total: data.mediasPorDia[d].totalImporte || 0,
+            media: data.mediasPorDia[d].media || 0,
+            conteo: data.mediasPorDia[d].totalDias || 0
+          }));
+        const conMedia = indexed.filter(x => x.media > 0).sort((a, b) => b.media - a.media);
+        const mejor = conMedia[0];
+        const peor = conMedia[conMedia.length - 1];
+        const masVolumen = [...indexed].sort((a, b) => b.total - a.total)[0];
+
+        html += `<div style="font-size:13px; color:#8a6d2f; font-weight:600; margin-bottom:10px;">Análisis del año ${data.anio}:</div>`;
+        html += '<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-bottom:14px;">';
+        if (mejor) {
+          html += `<div style="background:#fff; padding:12px; border-radius:8px; border-left:4px solid #2a9d54;">
+            <div style="font-size:11px; color:var(--muted); text-transform:uppercase; font-weight:600;">Mejor día (por media)</div>
+            <div style="font-size:18px; font-weight:700; color:var(--text); margin:4px 0;">${mejor.dia}</div>
+            <div style="font-size:13px; color:var(--text-secondary);">${eur(mejor.media)}/día · ${mejor.conteo} ${mejor.conteo === 1 ? 'día' : 'días'}</div>
+          </div>`;
+        }
+        if (peor) {
+          html += `<div style="background:#fff; padding:12px; border-radius:8px; border-left:4px solid #d32f2f;">
+            <div style="font-size:11px; color:var(--muted); text-transform:uppercase; font-weight:600;">Peor día (por media)</div>
+            <div style="font-size:18px; font-weight:700; color:var(--text); margin:4px 0;">${peor.dia}</div>
+            <div style="font-size:13px; color:var(--text-secondary);">${eur(peor.media)}/día · ${peor.conteo} ${peor.conteo === 1 ? 'día' : 'días'}</div>
+          </div>`;
+        }
+        if (masVolumen) {
+          html += `<div style="background:#fff; padding:12px; border-radius:8px; border-left:4px solid #3a7ca5;">
+            <div style="font-size:11px; color:var(--muted); text-transform:uppercase; font-weight:600;">Mayor volumen total</div>
+            <div style="font-size:18px; font-weight:700; color:var(--text); margin:4px 0;">${masVolumen.dia}</div>
+            <div style="font-size:13px; color:var(--text-secondary);">${eur(masVolumen.total)} total</div>
+          </div>`;
+        }
+        html += '</div>';
+
+        // Tabla completa del año
+        html += '<table style="width:100%; border-collapse:collapse; font-size:12px; background:#fff; border-radius:8px; overflow:hidden;">';
+        html += '<thead><tr style="background:#f0e5c4;"><th style="text-align:left; padding:8px;">Día</th><th style="text-align:right; padding:8px;">Total año</th><th style="text-align:right; padding:8px;">Nº días</th><th style="text-align:right; padding:8px;">Media/día</th></tr></thead><tbody>';
+        for (const item of indexed) {
+          html += `<tr style="border-bottom:1px solid #f0e5c4;"><td style="padding:6px 8px;">${item.dia}</td><td style="text-align:right; padding:6px 8px;">${eur(item.total)}</td><td style="text-align:right; padding:6px 8px;">${item.conteo}</td><td style="text-align:right; padding:6px 8px; font-weight:600; color:#8a6d2f;">${eur(item.media)}</td></tr>`;
+        }
+        html += '</tbody></table>';
+      }
+
+      document.getElementById('diaSemanaBannerContent').innerHTML = html;
+      document.getElementById('diaSemanaBanner').style.display = 'block';
+    }
+
+    function calcularPeriodos(preset) {
+      const hoy = new Date();
+
+      switch (preset) {
+        case 'anio': {
+          const a0 = new Date(hoy.getFullYear(), 0, 1);
+          const b0 = new Date(hoy.getFullYear() - 1, 0, 1);
+          const b1 = new Date(hoy.getFullYear() - 1, hoy.getMonth(), hoy.getDate());
+          return {
+            a: { fechaDesde: toISODate(a0), fechaHasta: toISODate(hoy), label: String(hoy.getFullYear()) },
+            b: { fechaDesde: toISODate(b0), fechaHasta: toISODate(b1), label: String(hoy.getFullYear() - 1) }
+          };
+        }
+        case 'trimestre': {
+          const q = Math.floor(hoy.getMonth() / 3);
+          const qStart = new Date(hoy.getFullYear(), q * 3, 1);
+          const qEnd = new Date(hoy.getFullYear(), (q + 1) * 3, 0);
+          const qEndActual = qEnd > hoy ? hoy : qEnd;
+          const bEnd = new Date(hoy.getFullYear() - 1, hoy.getMonth(), hoy.getDate());
+          return {
+            a: { fechaDesde: toISODate(qStart), fechaHasta: toISODate(qEndActual), label: `Q${q + 1} ${hoy.getFullYear()}` },
+            b: { fechaDesde: toISODate(new Date(hoy.getFullYear() - 1, q * 3, 1)), fechaHasta: toISODate(bEnd), label: `Q${q + 1} ${hoy.getFullYear() - 1}` }
+          };
+        }
+        case 'mes': {
+          const m0 = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+          return {
+            a: { fechaDesde: toISODate(m0), fechaHasta: toISODate(hoy), label: `${hoy.toLocaleString('es-ES', { month: 'long' })} ${hoy.getFullYear()}` },
+            b: { fechaDesde: toISODate(new Date(hoy.getFullYear() - 1, hoy.getMonth(), 1)), fechaHasta: toISODate(new Date(hoy.getFullYear() - 1, hoy.getMonth(), hoy.getDate())), label: `${hoy.toLocaleString('es-ES', { month: 'long' })} ${hoy.getFullYear() - 1}` }
+          };
+        }
+        case 'mesAnterior': {
+          const m0 = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+          const mPrev0 = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+          const mPrev1 = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
+          return {
+            a: { fechaDesde: toISODate(m0), fechaHasta: toISODate(hoy), label: `${hoy.toLocaleString('es-ES', { month: 'long' })} ${hoy.getFullYear()}` },
+            b: { fechaDesde: toISODate(mPrev0), fechaHasta: toISODate(mPrev1), label: `${mPrev0.toLocaleString('es-ES', { month: 'long', year: 'numeric' })}` }
+          };
+        }
+        case 'semana': {
+          // Semana natural: LUNES a SÁBADO (6 días, sin domingo)
+          const dow = hoy.getDay(); // 0=Dom, 1=Lun ... 6=Sáb
+          const lunes = new Date(hoy);
+          // Calcular lunes de esta semana
+          const diffLunes = dow === 0 ? -6 : 1 - dow;
+          lunes.setDate(hoy.getDate() + diffLunes);
+          const sabado = new Date(lunes);
+          sabado.setDate(lunes.getDate() + 5); // Lun+5 = Sáb
+          // Semana anterior completa
+          const prevLunes = new Date(lunes);
+          prevLunes.setDate(lunes.getDate() - 7);
+          const prevSabado = new Date(prevLunes);
+          prevSabado.setDate(prevLunes.getDate() + 5);
+          return {
+            a: { fechaDesde: toISODate(lunes), fechaHasta: toISODate(sabado), label: 'Esta semana (L-S)' },
+            b: { fechaDesde: toISODate(prevLunes), fechaHasta: toISODate(prevSabado), label: 'Semana anterior (L-S)' }
+          };
+        }
+        default: return null;
+      }
+    }
+
+    function aplicarCustom() {
+      const desdeA = document.getElementById('fechaDesdeA2').value;
+      const hastaA = document.getElementById('fechaHastaA2').value;
+      const desdeB = document.getElementById('fechaDesdeB').value;
+      const hastaB = document.getElementById('fechaHastaB').value;
+      if (!desdeA || !hastaA || !desdeB || !hastaB) { alert('Selecciona las 4 fechas'); return; }
+      // Actualizar date pickers principales con periodo A
+      document.getElementById('fechaDesde').value = desdeA;
+      document.getElementById('fechaHasta').value = hastaA;
+      requestComparativa({ fechaDesde: desdeB, fechaHasta: hastaB, label: `${desdeB} — ${hastaB}` }, `${desdeA}/${hastaA} vs ${desdeB}/${hastaB}`);
+    }
+
+    function requestComparativa(periodoB, presetLabel) {
+      const desdeA = document.getElementById('fechaDesde').value;
+      const hastaA = document.getElementById('fechaHasta').value;
+      _lastPreset = periodoB;
+      _lastPresetLabel = presetLabel;
+
+      document.getElementById('graficos').innerHTML = '<div class="loading">Cargando comparativa</div>';
+      document.getElementById('tablaContainer').style.display = 'none';
+      document.getElementById('seccionNuevas').style.display = 'none';
+
+      window.parent.postMessage({
+        type: 'loadComparativa',
+        periodoA: { fechaDesde: desdeA, fechaHasta: hastaA, label: `${desdeA} — ${hastaA}` },
+        periodoB: { fechaDesde: periodoB.fechaDesde, fechaHasta: periodoB.fechaHasta, label: periodoB.label },
+        excludeEfectivo: _ewcmActivo
+      }, '*');
+    }
+
+    function renderComparativa(msg) {
+      _comparativaActivo = true;
+      _periodoAData = msg.periodoA;
+      _periodoBData = msg.periodoB;
+      _labelA = msg.labelA || 'Actual';
+      _labelB = msg.labelB || 'Anterior';
+
+      showComparativaInfo(_labelA, _labelB);
+
+      // Render period A data normally, then overlay deltas
+      _lastData = msg.periodoA;
+      renderStats(msg.periodoA);
+
+      // After renderStats, overlay deltas on KPIs
+      const a = msg.periodoA;
+      const b = msg.periodoB;
+
+      if (a.hayDatos) {
+        const ventasA = a.totalVentas != null ? a.totalVentas : a.totalIngresos;
+        const ventasB = b.hayDatos ? (b.totalVentas != null ? b.totalVentas : b.totalIngresos) : null;
+        const promA = a.totalTransacciones > 0 ? ventasA / a.totalTransacciones : 0;
+        const promB = b.hayDatos && b.totalTransacciones > 0 ? ventasB / b.totalTransacciones : 0;
+        renderDelta('deltaIngresos', ventasA, ventasB, eur);
+        renderDelta('deltaTransacciones', a.totalTransacciones, b.hayDatos ? b.totalTransacciones : null, v => String(v));
+        renderDelta('deltaTicket', promA, b.hayDatos ? promB : null, eur);
+        renderDelta('deltaImpuesto', a.totalImpuesto || 0, b.hayDatos ? (b.totalImpuesto || 0) : null, eur);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // RENDER STATS (single period + IVA)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function renderStats(data) {
+      if (!data.ok) { showError(data.error || 'Error obteniendo datos'); return; }
+
+      if (!data.hayDatos) {
+        document.getElementById('graficos').innerHTML = '<div class="no-datos">No hay datos en el período seleccionado</div>';
+        document.getElementById('totalIngresos').textContent = '0€';
+        document.getElementById('totalTransacciones').textContent = '0';
+        document.getElementById('promedioTicket').textContent = '0€';
+        document.getElementById('totalImpuesto').textContent = '0€';
+        document.getElementById('etiquetaImpuesto').textContent = 'Impuesto';
+        document.getElementById('tablaContainer').style.display = 'none';
+        document.getElementById('seccionNuevas').style.display = 'none';
+        if (!_comparativaActivo) { document.querySelectorAll('.delta').forEach(d => d.classList.remove('visible')); }
+        return;
+      }
+
+      _lastData = data;
+      const vr = data.vatRate || 21;
+
+      // KPIs — v2.5.1: totalVentas (sin propinas)
+      const totalVentas = data.totalVentas != null ? data.totalVentas : data.totalIngresos;
+      document.getElementById('totalIngresos').textContent = totalVentas.toFixed(2) + '€';
+      document.getElementById('totalTransacciones').textContent = data.totalTransacciones;
+      const promedio = data.totalTransacciones > 0 ? (totalVentas / data.totalTransacciones) : 0;
+      document.getElementById('promedioTicket').textContent = promedio.toFixed(2) + '€';
+      // v2.5: IVA KPI
+      document.getElementById('totalImpuesto').textContent = (data.totalImpuesto || 0).toFixed(2) + '€';
+      document.getElementById('etiquetaImpuesto').textContent = `Impuesto (${vr}%)`;
+
+      // Charts — v2.5.1: en comparativa, pares lado a lado dentro del mismo contenedor
+      const compB = _comparativaActivo && _periodoBData && _periodoBData.hayDatos;
+      let chartsHTML = `
+        <div class="grafico-container" style="grid-column: 1 / -1;">
+          <h3>📈 Ingresos por Día${ewcmSuffix()}</h3>
+          <div class="grafico-wrapper"><canvas id="chartIngresos"></canvas></div>
+          <div id="ordenIngresosBar" style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;">
+            <span style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;">Ordenar por</span>
+            <button type="button" data-orden="dia" class="btn-orden">Día</button>
+            <button type="button" data-orden="importe" class="btn-orden">Importe</button>
+          </div>
+          <div class="chart-data-table" id="dataIngresos"></div>
+        </div>
+        <div class="grafico-container"${compB ? ' style="grid-column: 1 / -1;"' : ''}>
+          <h3>💳 Por Método de Pago${ewcmSuffix()}</h3>
+          <div class="${compB ? 'compar-pair' : ''}">
+            <div>
+              ${compB ? '<h4 style="color:var(--text-secondary);">' + _labelA + '</h4>' : ''}
+              <div class="grafico-wrapper"><canvas id="chartMetodo"></canvas></div>
+              <div class="chart-data-table" id="dataMetodo"></div>
+            </div>
+            ${compB ? '<div><h4 style="color:#6B5B95;">' + _labelB + '</h4><div class="grafico-wrapper"><canvas id="chartMetodoB"></canvas></div><div class="chart-data-table" id="dataMetodoB"></div></div>' : ''}
+          </div>
+        </div>
+        <div class="grafico-container"${compB ? ' style="grid-column: 1 / -1;"' : ''}>
+          <h3>👤 Por Staff${ewcmSuffix()}</h3>
+          <div class="${compB ? 'compar-pair' : ''}">
+            <div>
+              ${compB ? '<h4 style="color:var(--text-secondary);">' + _labelA + '</h4>' : ''}
+              <div class="grafico-wrapper"><canvas id="chartStaff"></canvas></div>
+              <div class="chart-data-table" id="dataStaff"></div>
+            </div>
+            ${compB ? '<div><h4 style="color:#6B5B95;">' + _labelB + '</h4><div class="grafico-wrapper"><canvas id="chartStaffB"></canvas></div><div class="chart-data-table" id="dataStaffB"></div></div>' : ''}
+          </div>
+        </div>
+        <div class="grafico-container" style="grid-column: 1 / -1;">
+          <h3>✂️ Top Servicios${ewcmSuffix()}</h3>
+          <div class="grafico-wrapper"><canvas id="chartServicios"></canvas></div>
+          <div class="chart-data-table" id="dataServicios"></div>
+        </div>
+      `;
+      document.getElementById('graficos').innerHTML = chartsHTML;
+
+      if (chartIngresos) chartIngresos.destroy();
+      if (chartMetodo) chartMetodo.destroy();
+      if (chartStaff) chartStaff.destroy();
+      if (chartServicios) chartServicios.destroy();
+
+      // Chart 1: Ingresos por día (con overlay en comparativa)
+      const ingDatasets = [{ label: 'Ingresos (€)', data: data.ingresosPorDia.valores, borderColor: COLORES.primario, backgroundColor: 'rgba(58,124,165,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: COLORES.primario }];
+      if (compB && _periodoBData.ingresosPorDia) {
+        ingDatasets.push({ label: _labelB + ' (€)', data: _periodoBData.ingresosPorDia.valores, borderColor: COLORES.comparB, backgroundColor: 'rgba(107,91,149,0.05)', fill: false, tension: 0.3, pointRadius: 3, borderDash: [5, 5] });
+      }
+      chartIngresos = new Chart(document.getElementById('chartIngresos'), {
+        type: 'line', data: { labels: data.ingresosPorDia.labels, datasets: ingDatasets },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: compB } }, scales: { y: { beginAtZero: true, ticks: { callback: v => v + '€' } } } }
+      });
+
+      // Chart 2: Método de pago — Periodo A
+      const makeColoresMetodo = (labels) => labels.map(label => {
+        if (label.toLowerCase().includes('efectivo')) return COLORES.efectivo;
+        if (label.toLowerCase().includes('tarjeta')) return COLORES.tarjeta;
+        if (label.toLowerCase().includes('bizum')) return COLORES.bizum;
+        return COLORES.gradiente[3];
+      });
+      const coloresMetodo = makeColoresMetodo(data.porMetodoPago.labels);
+      chartMetodo = new Chart(document.getElementById('chartMetodo'), {
+        type: 'doughnut', data: { labels: data.porMetodoPago.labels, datasets: [{ data: data.porMetodoPago.valores, backgroundColor: coloresMetodo, borderWidth: 2, borderColor: '#fff' }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 15, padding: 15 } }, tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.raw.toFixed(2)}€` } } } }
+      });
+      // Periodo B
+      if (compB && _periodoBData.porMetodoPago) {
+        const colB = makeColoresMetodo(_periodoBData.porMetodoPago.labels);
+        new Chart(document.getElementById('chartMetodoB'), {
+          type: 'doughnut', data: { labels: _periodoBData.porMetodoPago.labels, datasets: [{ data: _periodoBData.porMetodoPago.valores, backgroundColor: colB, borderWidth: 2, borderColor: '#fff' }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { boxWidth: 15, padding: 15 } }, tooltip: { callbacks: { label: ctx => `${ctx.label}: ${ctx.raw.toFixed(2)}€` } } } }
+        });
+        // Tabla Método B
+        const totalMetB = _periodoBData.porMetodoPago.valores.reduce((s, v) => s + v, 0);
+        let hMetB = '<table><thead><tr><th>Método</th><th>Importe</th><th>%</th></tr></thead><tbody>';
+        for (let i = 0; i < _periodoBData.porMetodoPago.labels.length; i++) {
+          const v = _periodoBData.porMetodoPago.valores[i];
+          hMetB += `<tr><td>${_periodoBData.porMetodoPago.labels[i]}</td><td>${eur(v)}</td><td>${pct(totalMetB > 0 ? v/totalMetB*100 : 0)}</td></tr>`;
+        }
+        hMetB += `<tr class="total-row"><td>Total</td><td>${eur(totalMetB)}</td><td></td></tr></tbody></table>`;
+        document.getElementById('dataMetodoB').innerHTML = hMetB;
+      }
+
+      // Chart 3: Staff — Periodo A
+      chartStaff = new Chart(document.getElementById('chartStaff'), {
+        type: 'bar', data: { labels: data.porStaff.labels, datasets: [{ label: 'Ingresos (€)', data: data.porStaff.valores, backgroundColor: COLORES.gradiente.slice(0, data.porStaff.labels.length), borderRadius: 6 }] },
+        options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { callback: v => v + '€' } } } }
+      });
+      // Periodo B
+      if (compB && _periodoBData.porStaff) {
+        new Chart(document.getElementById('chartStaffB'), {
+          type: 'bar', data: { labels: _periodoBData.porStaff.labels, datasets: [{ label: 'Ingresos (€)', data: _periodoBData.porStaff.valores, backgroundColor: COLORES.gradiente.slice(0, _periodoBData.porStaff.labels.length), borderRadius: 6 }] },
+          options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { callback: v => v + '€' } } } }
+        });
+        // Tabla Staff B
+        const totalStB = _periodoBData.porStaff.valores.reduce((s, v) => s + v, 0);
+        let hStB = '<table><thead><tr><th>Staff</th><th>Ingresos</th><th>%</th></tr></thead><tbody>';
+        for (let i = 0; i < _periodoBData.porStaff.labels.length; i++) {
+          const v = _periodoBData.porStaff.valores[i];
+          hStB += `<tr><td>${_periodoBData.porStaff.labels[i]}</td><td>${eur(v)}</td><td>${pct(totalStB > 0 ? v/totalStB*100 : 0)}</td></tr>`;
+        }
+        hStB += `<tr class="total-row"><td>Total</td><td>${eur(totalStB)}</td><td></td></tr></tbody></table>`;
+        document.getElementById('dataStaffB').innerHTML = hStB;
+      }
+
+      // Chart 4: Top servicios
+      chartServicios = new Chart(document.getElementById('chartServicios'), {
+        type: 'bar', data: { labels: data.porServicio.labels, datasets: [{ label: 'Ingresos (€)', data: data.porServicio.valores, backgroundColor: COLORES.secundario, borderRadius: 6 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => v + '€' } }, x: { ticks: { maxRotation: 45, minRotation: 45 } } } }
+      });
+
+      // ═══════════════════════════════════════════════════════════════════
+      // DATA TABLES UNDER CHARTS — v2.5: con IVA donde aplica
+      // ═══════════════════════════════════════════════════════════════════
+
+      // v2.6.0: Ingresos por día — orden seleccionable (Día / Importe)
+      renderTablaIngresosDia();
+
+      // Método de pago — SIN IVA
+      {
+        let h = '<table><thead><tr><th>Método</th><th>Importe</th><th>%</th></tr></thead><tbody>';
+        const totalMet = data.porMetodoPago.valores.reduce((s, v) => s + v, 0);
+        for (let i = 0; i < data.porMetodoPago.labels.length; i++) {
+          const v = data.porMetodoPago.valores[i];
+          const p = totalMet > 0 ? (v / totalMet * 100) : 0;
+          h += `<tr><td>${data.porMetodoPago.labels[i]}</td><td>${eur(v)}</td><td>${pct(p)}</td></tr>`;
+        }
+        h += `<tr class="total-row"><td>Total</td><td>${eur(totalMet)}</td><td></td></tr></tbody></table>`;
+        document.getElementById('dataMetodo').innerHTML = h;
+      }
+
+      // Staff — SIN IVA
+      {
+        let h = '<table><thead><tr><th>Staff</th><th>Ingresos</th><th>%</th></tr></thead><tbody>';
+        const totalSt = data.porStaff.valores.reduce((s, v) => s + v, 0);
+        for (let i = 0; i < data.porStaff.labels.length; i++) {
+          const v = data.porStaff.valores[i];
+          const p = totalSt > 0 ? (v / totalSt * 100) : 0;
+          h += `<tr><td>${data.porStaff.labels[i]}</td><td>${eur(v)}</td><td>${pct(p)}</td></tr>`;
+        }
+        h += `<tr class="total-row"><td>Total</td><td>${eur(totalSt)}</td><td></td></tr></tbody></table>`;
+        document.getElementById('dataStaff').innerHTML = h;
+      }
+
+      // Top servicios — CON IVA
+      {
+        const hasIVA = data.porServicio.valoresBase && data.porServicio.valoresIva;
+        let h = '<table><thead><tr><th>Servicio</th><th>Total</th>';
+        if (hasIVA) h += '<th class="col-base">Base</th><th class="col-iva">IVA</th>';
+        h += '<th>%</th></tr></thead><tbody>';
+        const totalSvc = data.porServicio.valores.reduce((s, v) => s + v, 0);
+        for (let i = 0; i < data.porServicio.labels.length; i++) {
+          const v = data.porServicio.valores[i];
+          const p = totalSvc > 0 ? (v / totalSvc * 100) : 0;
+          h += `<tr><td>${data.porServicio.labels[i]}</td><td>${eur(v)}</td>`;
+          if (hasIVA) h += `<td class="col-base">${eur(data.porServicio.valoresBase[i])}</td><td class="col-iva">${eur(data.porServicio.valoresIva[i])}</td>`;
+          h += `<td>${pct(p)}</td></tr>`;
+        }
+        h += `<tr class="total-row"><td>Top 10</td><td>${eur(totalSvc)}</td>`;
+        if (hasIVA) {
+          const tBase = data.porServicio.valoresBase.reduce((s, v) => s + v, 0);
+          const tIva = data.porServicio.valoresIva.reduce((s, v) => s + v, 0);
+          h += `<td class="col-base">${eur(tBase)}</td><td class="col-iva">${eur(tIva)}</td>`;
+        }
+        h += '<td></td></tr></tbody></table>';
+        document.getElementById('dataServicios').innerHTML = h;
+      }
+
+      renderTablaDesglose(data);
+      renderNuevasSecciones(data);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // v2.6.0 — TABLA INGRESOS POR DÍA CON ORDEN SELECCIONABLE
+    //   'dia'     → data.ingresosPorDia        (cronológico, por defecto)
+    //   'importe' → data.ingresosPorDiaRanking (mayor a menor)
+    //   El gráfico NO cambia: siempre cronológico.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function getDatosIngresosDia() {
+      if (!_lastData) return null;
+      if (_ordenIngresosDia === 'importe') {
+        return _lastData.ingresosPorDiaRanking || _lastData.ingresosPorDia;
+      }
+      return _lastData.ingresosPorDia;
+    }
+
+    function pintarBotonesOrden() {
+      const bar = document.getElementById('ordenIngresosBar');
+      if (!bar) return;
+      bar.querySelectorAll('.btn-orden').forEach(btn => {
+        const activo = btn.dataset.orden === _ordenIngresosDia;
+        btn.style.padding = '5px 14px';
+        btn.style.borderRadius = 'var(--radius-sm)';
+        btn.style.cursor = 'pointer';
+        btn.style.fontFamily = 'inherit';
+        btn.style.fontSize = '12px';
+        btn.style.fontWeight = '600';
+        btn.style.border = '1px solid ' + (activo ? 'var(--accent)' : 'var(--border)');
+        btn.style.background = activo ? 'var(--accent)' : 'var(--surface2)';
+        btn.style.color = activo ? '#fff' : 'var(--text-secondary)';
+      });
+    }
+
+    function renderTablaIngresosDia() {
+      const cont = document.getElementById('dataIngresos');
+      if (!cont || !_lastData) return;
+
+      const rankData = getDatosIngresosDia();
+      if (!rankData) return;
+
+      const hasIVA = rankData.valoresBase && rankData.valoresIva;
+      const hasDS = rankData.diasSemana && rankData.promediosDiaSemana;
+
+      let h = '<table><thead><tr><th>Día</th>';
+      if (hasDS) h += '<th></th>';
+      h += '<th>Total</th>';
+      if (hasDS) h += '<th>Media día</th><th>vs Media</th>';
+      if (hasIVA) h += '<th class="col-base">Base</th><th class="col-iva">IVA</th>';
+      h += '</tr></thead><tbody>';
+
+      let totalIng = 0, totalBase = 0, totalIva = 0;
+      for (let i = 0; i < rankData.labels.length; i++) {
+        const v = rankData.valores[i];
+        totalIng += v;
+        h += `<tr><td>${rankData.labels[i]}</td>`;
+        if (hasDS) {
+          const avg = rankData.promediosDiaSemana[i];
+          h += `<td style="color:var(--muted)">${rankData.diasSemana[i].substring(0,3)}</td>`;
+          h += `<td>${eur(v)}</td>`;
+          h += `<td style="color:var(--muted)">${eur(avg)}</td>`;
+          if (v === 0 || avg <= 0) {
+            // Día sin cobros (salón cerrado): un -100% no aporta información.
+            h += '<td style="color:var(--muted)">—</td>';
+          } else {
+            const delta = Math.round((v - avg) / avg * 10000) / 100;
+            const cls = delta >= 0 ? 'color:var(--delta-up)' : 'color:var(--delta-down)';
+            const arrow = delta >= 0 ? '▲' : '▼';
+            h += `<td style="${cls};font-weight:600">${arrow} ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%</td>`;
+          }
+        } else {
+          h += `<td>${eur(v)}</td>`;
+        }
+        if (hasIVA) {
+          totalBase += rankData.valoresBase[i];
+          totalIva += rankData.valoresIva[i];
+          h += `<td class="col-base">${eur(rankData.valoresBase[i])}</td><td class="col-iva">${eur(rankData.valoresIva[i])}</td>`;
+        }
+        h += '</tr>';
+      }
+
+      h += '<tr class="total-row"><td>Total</td>';
+      if (hasDS) h += '<td></td>';
+      h += `<td>${eur(totalIng)}</td>`;
+      if (hasDS) h += '<td></td><td></td>';
+      if (hasIVA) h += `<td class="col-base">${eur(totalBase)}</td><td class="col-iva">${eur(totalIva)}</td>`;
+      h += '</tr></tbody></table>';
+
+      cont.innerHTML = h;
+
+      // Botones de orden: se repintan y se reenganchan en cada render porque
+      // el contenedor de gráficos se regenera entero con innerHTML.
+      const bar = document.getElementById('ordenIngresosBar');
+      if (bar) {
+        bar.querySelectorAll('.btn-orden').forEach(btn => {
+          btn.onclick = () => {
+            _ordenIngresosDia = btn.dataset.orden;
+            renderTablaIngresosDia();
+          };
+        });
+        pintarBotonesOrden();
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // RENDER TABLA DESGLOSE — v2.5: con IVA
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function renderTablaDesglose(data) {
+      const container = document.getElementById('tablaContainer');
+      const tabla = document.getElementById('tablaDesglose');
+      const periodo = document.getElementById('tablaPeriodo');
+
+      const fechaDesde = document.getElementById('fechaDesde').value;
+      const fechaHasta = document.getElementById('fechaHasta').value;
+      const d1 = new Date(fechaDesde), d2 = new Date(fechaHasta);
+      const dias = Math.round((d2 - d1) / 86400000) + 1;
+      const semanas = (dias / 7).toFixed(1);
+      periodo.textContent = `Desde: ${d1.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} — Hasta: ${d2.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${dias} días (${semanas} semanas)${ewcmSuffix()}`;
+
+      // v2.5: Check if IVA data available
+      const hasIVA = data.tablaDesglose && data.tablaDesglose.length > 0 && data.tablaDesglose[0].totalImporteBase != null;
+      const colSpan = hasIVA ? 8 : 6;
+
+      let grandCant = 0, grandImporte = 0, grandBase = 0, grandIva = 0;
+      if (data.tablaDesglose) {
+        for (const cat of data.tablaDesglose) {
+          grandCant += cat.totalCantidad;
+          grandImporte += cat.totalImporte;
+          if (hasIVA) { grandBase += cat.totalImporteBase || 0; grandIva += cat.totalImporteIva || 0; }
+        }
+      }
+      let prodCant = 0, prodImporte = 0;
+      if (data.productos && data.productos.desglose) {
+        for (const p of data.productos.desglose) { prodCant += p.count; prodImporte += p.total; }
+        grandCant += prodCant; grandImporte += prodImporte;
+      }
+      let extCant = 0, extImporte = 0;
+      if (data.externos && data.externos.desglose) {
+        for (const e of data.externos.desglose) { extCant += e.count; extImporte += e.comision; }
+        grandCant += extCant; grandImporte += extImporte;
+      }
+
+      let html = '<thead><tr>';
+      html += '<th style="min-width:200px;"></th><th>Cant.</th><th>€</th>';
+      if (hasIVA) html += '<th class="col-base">Base</th><th class="col-iva">IVA</th>';
+      html += '<th>1/2. €</th><th>% de €</th><th>% Cant.</th>';
+      html += '</tr></thead><tbody>';
+
+      if (data.tablaDesglose) {
+        for (const cat of data.tablaDesglose) {
+          const cssClass = cat.categoria === 'EXTRAS' ? ' extras' : cat.categoria === 'PROPINAS' ? ' extras' : '';
+          html += `<tr class="cat-header${cssClass}"><td colspan="${colSpan}">${cat.categoria}</td></tr>`;
+
+          let currentSubgrupo = '__none__';
+          for (const item of cat.items) {
+            if ((item.subgrupo || null) !== (currentSubgrupo === '__none__' ? null : currentSubgrupo)) {
+              currentSubgrupo = item.subgrupo || null;
+              if (currentSubgrupo) {
+                html += `<tr class="subgrupo-header"><td colspan="${colSpan}">${currentSubgrupo}</td></tr>`;
+              }
+            }
+            html += '<tr class="svc-row">';
+            html += `<td>${item.nombre}</td><td>${item.cantidad}</td><td>${eur(item.importe)}</td>`;
+            if (hasIVA) html += `<td class="col-base">${eur(item.importeBase)}</td><td class="col-iva">${eur(item.importeIva)}</td>`;
+            html += `<td>${eur(item.ticketMedio)}</td>`;
+            html += `<td>${pct(grandImporte > 0 ? (item.importe / grandImporte * 100) : 0)}</td>`;
+            html += `<td>${pct(grandCant > 0 ? (item.cantidad / grandCant * 100) : 0)}</td>`;
+            html += '</tr>';
+          }
+
+          const catTicket = cat.totalCantidad > 0 ? cat.totalImporte / cat.totalCantidad : 0;
+          html += `<tr class="cat-subtotal${cssClass}"><td></td><td>${cat.totalCantidad}</td><td>${eur(cat.totalImporte)}</td>`;
+          if (hasIVA) html += `<td class="col-base">${eur(cat.totalImporteBase)}</td><td class="col-iva">${eur(cat.totalImporteIva)}</td>`;
+          html += `<td>${eur(catTicket)}</td>`;
+          html += `<td>${pct(grandImporte > 0 ? (cat.totalImporte / grandImporte * 100) : 0)}</td>`;
+          html += `<td>${pct(grandCant > 0 ? (cat.totalCantidad / grandCant * 100) : 0)}</td></tr>`;
+        }
+      }
+
+      // Productos (sin IVA desglosado)
+      if (data.productos && data.productos.desglose && data.productos.desglose.length > 0) {
+        html += `<tr class="cat-header productos"><td colspan="${colSpan}">PRODUCTOS</td></tr>`;
+        for (const p of data.productos.desglose) {
+          const ticket = p.count > 0 ? p.total / p.count : 0;
+          html += '<tr class="svc-row">';
+          html += `<td>🛒 ${p.nombre}</td><td>${p.count}</td><td>${eur(p.total)}</td>`;
+          if (hasIVA) html += '<td></td><td></td>';
+          html += `<td>${eur(ticket)}</td>`;
+          html += `<td>${pct(grandImporte > 0 ? (p.total / grandImporte * 100) : 0)}</td>`;
+          html += `<td>${pct(grandCant > 0 ? (p.count / grandCant * 100) : 0)}</td></tr>`;
+        }
+        const prodTicket = prodCant > 0 ? prodImporte / prodCant : 0;
+        html += `<tr class="cat-subtotal productos"><td></td><td>${prodCant}</td><td>${eur(prodImporte)}</td>`;
+        if (hasIVA) html += '<td></td><td></td>';
+        html += `<td>${eur(prodTicket)}</td>`;
+        html += `<td>${pct(grandImporte > 0 ? (prodImporte / grandImporte * 100) : 0)}</td>`;
+        html += `<td>${pct(grandCant > 0 ? (prodCant / grandCant * 100) : 0)}</td></tr>`;
+      }
+
+      // Externos (sin IVA desglosado)
+      if (data.externos && data.externos.desglose && data.externos.desglose.length > 0) {
+        html += `<tr class="cat-header externos"><td colspan="${colSpan}">COMISIONES EXTERNAS</td></tr>`;
+        for (const e of data.externos.desglose) {
+          const ticket = e.count > 0 ? e.comision / e.count : 0;
+          html += '<tr class="svc-row">';
+          html += `<td>🔗 ${e.nombre}</td><td>${e.count}</td><td>${eur(e.comision)}</td>`;
+          if (hasIVA) html += '<td></td><td></td>';
+          html += `<td>${eur(ticket)}</td>`;
+          html += `<td>${pct(grandImporte > 0 ? (e.comision / grandImporte * 100) : 0)}</td>`;
+          html += `<td>${pct(grandCant > 0 ? (e.count / grandCant * 100) : 0)}</td></tr>`;
+        }
+        const extTicket = extCant > 0 ? extImporte / extCant : 0;
+        html += `<tr class="cat-subtotal externos"><td></td><td>${extCant}</td><td>${eur(extImporte)}</td>`;
+        if (hasIVA) html += '<td></td><td></td>';
+        html += `<td>${eur(extTicket)}</td>`;
+        html += `<td>${pct(grandImporte > 0 ? (extImporte / grandImporte * 100) : 0)}</td>`;
+        html += `<td>${pct(grandCant > 0 ? (extCant / grandCant * 100) : 0)}</td></tr>`;
+      }
+
+      // Gran total
+      const grandTicket = grandCant > 0 ? grandImporte / grandCant : 0;
+      html += '<tr class="grand-total">';
+      html += `<td>Total de todas las Categorías</td><td>${grandCant}</td><td>${eur(grandImporte)}</td>`;
+      if (hasIVA) html += `<td class="col-base">${eur(grandBase)}</td><td class="col-iva">${eur(grandIva)}</td>`;
+      html += `<td>${eur(grandTicket)}</td><td></td><td></td></tr>`;
+
+      html += '</tbody>';
+      tabla.innerHTML = html;
+      container.style.display = 'block';
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // NUEVAS SECCIONES (sin cambios respecto a v2.4)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function renderNuevasSecciones(data) {
+      const container = document.getElementById('seccionNuevas');
+
+      let htmlDS = '';
+      if (data.porDiaSemana && data.porDiaSemana.labels.length > 0) {
+        const hasAvg = data.porDiaSemana.conteos && data.porDiaSemana.promedios;
+        htmlDS += '<h3>Ingresos por Dia de la Semana</h3>';
+        htmlDS += '<table class="tabla-desglose"><thead><tr><th>Dia</th><th>Total</th>';
+        if (hasAvg) htmlDS += '<th>Nº días</th><th>Media/día</th>';
+        htmlDS += '<th>%</th></tr></thead><tbody>';
+        const totalDS = data.porDiaSemana.valores.reduce((s, v) => s + v, 0);
+        for (let i = 0; i < data.porDiaSemana.labels.length; i++) {
+          const v = data.porDiaSemana.valores[i];
+          const p = totalDS > 0 ? (v / totalDS * 100) : 0;
+          htmlDS += `<tr class="svc-row"><td>${data.porDiaSemana.labels[i]}</td><td>${eur(v)}</td>`;
+          if (hasAvg) htmlDS += `<td>${data.porDiaSemana.conteos[i]}</td><td>${eur(data.porDiaSemana.promedios[i])}</td>`;
+          htmlDS += `<td>${pct(p)}</td></tr>`;
+        }
+        const totalCont = hasAvg ? data.porDiaSemana.conteos.reduce((s, v) => s + v, 0) : 0;
+        htmlDS += `<tr class="grand-total"><td>Total</td><td>${eur(totalDS)}</td>`;
+        if (hasAvg) htmlDS += `<td>${totalCont}</td><td></td>`;
+        htmlDS += '<td></td></tr></tbody></table>';
+      }
+      document.getElementById('diaSemanaSection').innerHTML = htmlDS;
+
+      let htmlClientes = '';
+      if (data.clientesPorTipo && data.clientesPorTipo.total > 0) {
+        const ct = data.clientesPorTipo;
+        htmlClientes += '<h3>Clientes por Tipo</h3>';
+        htmlClientes += '<table class="tabla-desglose"><thead><tr><th>Tipo</th><th>Cantidad</th><th>%</th></tr></thead><tbody>';
+        for (const t of ct.tipos) {
+          htmlClientes += `<tr class="svc-row"><td>${t.tipo}</td><td>${t.cantidad}</td><td>${pct(t.pct)}</td></tr>`;
+        }
+        htmlClientes += `<tr class="grand-total"><td>Total clientes</td><td>${ct.total}</td><td></td></tr></tbody></table>`;
+      }
+      document.getElementById('clientesSection').innerHTML = htmlClientes;
+
+      let htmlRatio = '';
+      if (data.ratioSTvsComplementos) {
+        const rst = data.ratioSTvsComplementos;
+        htmlRatio += '<h3>Servicios Tecnicos vs Complementos Asociados</h3>';
+        htmlRatio += '<table class="tabla-desglose"><tbody>';
+        htmlRatio += `<tr class="svc-row"><td style="font-weight:600;">Ingresos Servicios Tecnicos (principal)</td><td>${eur(rst.ingresosST)}</td></tr>`;
+        htmlRatio += `<tr class="svc-row"><td style="font-weight:600;">Ingresos complementos asociados a ST</td><td>${eur(rst.ingresosComplementos)}</td></tr>`;
+        htmlRatio += `<tr class="svc-row"><td style="font-weight:600;">Ratio complementos / ST</td><td>${pct(rst.ratio)}</td></tr>`;
+        htmlRatio += '</tbody></table>';
+        if (rst.top5 && rst.top5.length > 0) {
+          htmlRatio += '<h4 style="margin-top:12px;font-size:14px;color:#2c3e50;">Top 5 Complementos de Servicios Tecnicos</h4>';
+          htmlRatio += '<table class="tabla-desglose"><thead><tr><th>Servicio</th><th>Cant.</th><th>Importe</th></tr></thead><tbody>';
+          for (const c of rst.top5) { htmlRatio += `<tr class="svc-row"><td>${c.nombre}</td><td>${c.cantidad}</td><td>${eur(c.importe)}</td></tr>`; }
+          htmlRatio += '</tbody></table>';
+        }
+      }
+      document.getElementById('ratioSTSection').innerHTML = htmlRatio;
+
+      let htmlProd = '';
+      if (data.productividadStaff && data.productividadStaff.length > 0) {
+        htmlProd += '<h3>Productividad por Empleado</h3>';
+        htmlProd += '<table class="tabla-desglose"><thead><tr><th>Empleado</th><th>Ingresos</th><th>Horas</th><th>Servicios</th><th>EUR/hora</th><th>Min/servicio</th></tr></thead><tbody>';
+        for (const ps of data.productividadStaff) {
+          htmlProd += `<tr class="svc-row"><td>${ps.nombre}</td><td>${eur(ps.ingresos)}</td><td>${ps.horas}h</td><td>${ps.servicios}</td><td>${eur(ps.eurosPorHora)}</td><td>${ps.minutosPorServicio} min</td></tr>`;
+        }
+        htmlProd += '</tbody></table>';
+      }
+      document.getElementById('productividadSection').innerHTML = htmlProd;
+
+      container.style.display = (htmlDS || htmlClientes || htmlRatio || htmlProd) ? 'block' : 'none';
+
+      // v2.5.1: Scroll a Día de Semana si se pulsó el preset
+      if (_scrollToDiaSemana && htmlDS) {
+        _scrollToDiaSemana = false;
+        setTimeout(() => {
+          document.getElementById('diaSemanaSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 200);
+      }
+    }
+
+    function showError(message) {
+      document.getElementById('graficos').innerHTML = `<div class="no-datos">Error: ${message}</div>`;
+      document.getElementById('tablaContainer').style.display = 'none';
+      document.getElementById('seccionNuevas').style.display = 'none';
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // EXPORTAR PDF — v2.5: incluye IVA donde aplica
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function exportarPdfConGraficos() {
+      const { jsPDF } = window.jspdf;
+      if (!_lastData || !_lastData.hayDatos) { alert('Primero carga los datos'); return; }
+
+      const doc = new jsPDF('p', 'mm', 'a4');
+      const pw = 210, ph = 297, m = 15;
+      const cw = pw - m * 2;
+      const fechaDesde = document.getElementById('fechaDesde').value;
+      const fechaHasta = document.getElementById('fechaHasta').value;
+      const vr = _lastData.vatRate || 21;
+      const totalVentas = _lastData.totalVentas != null ? _lastData.totalVentas : _lastData.totalIngresos;
+      const promedio = _lastData.totalTransacciones > 0 ? totalVentas / _lastData.totalTransacciones : 0;
+      let y = 20;
+
+      const checkPage = (needed) => { if (y + needed > ph - 20) { doc.addPage(); y = 20; } };
+      const headStyle = { fillColor: [44, 62, 80], textColor: 255, fontStyle: 'bold', fontSize: 9 };
+      const bodyStyle = { fontSize: 9, cellPadding: 3 };
+
+      // ─────────────────────────────────────────────────────
+      // TÍTULO + PERIODO
+      // ─────────────────────────────────────────────────────
+      doc.setFontSize(18); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+      doc.text('Estadísticas y Análisis — Hair Times', m, y); y += 8;
+      doc.setFontSize(10); doc.setFont(undefined, 'normal'); doc.setTextColor(100);
+      doc.text(`Período: ${fechaDesde} — ${fechaHasta}`, m, y); y += 5;
+      if (_ewcmActivo) { doc.setTextColor(209, 140, 73); doc.setFont(undefined, 'bold'); doc.text('Modo EWCM', m, y); y += 5; doc.setFont(undefined, 'normal'); }
+      if (_comparativaActivo) { doc.setTextColor(107, 91, 149); doc.setFont(undefined, 'bold'); doc.text(`Comparativa: ${_labelA} vs ${_labelB}`, m, y); y += 5; doc.setFont(undefined, 'normal'); }
+      doc.setDrawColor(200); doc.line(m, y, pw - m, y); y += 6;
+
+      // ─────────────────────────────────────────────────────
+      // KPIs
+      // ─────────────────────────────────────────────────────
+      doc.autoTable({
+        startY: y,
+        head: [['Total Ventas', 'Transacciones', 'Ticket Medio', `Impuesto (${vr}%)`]],
+        body: [[eur(totalVentas), String(_lastData.totalTransacciones), eur(promedio), eur(_lastData.totalImpuesto || 0)]],
+        theme: 'grid',
+        styles: { fontSize: 14, halign: 'center', fontStyle: 'bold', cellPadding: 5 },
+        headStyles: { fillColor: [44, 62, 80], textColor: 255, fontSize: 9, fontStyle: 'bold' },
+        margin: { left: m, right: m },
+      });
+      y = doc.lastAutoTable.finalY + 10;
+
+      // ─────────────────────────────────────────────────────
+      // GRÁFICO: Ingresos por Día + tabla datos
+      // ─────────────────────────────────────────────────────
+      checkPage(100);
+      doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+      doc.text('Ingresos por Día', m, y); y += 4;
+      doc.addImage(chartIngresos.toBase64Image(), 'PNG', m, y, cw, 65); y += 70;
+
+      // Tabla Ingresos por Día — v2.6.0: mismo orden que el elegido en pantalla
+      {
+        const rd = getDatosIngresosDia() || _lastData.ingresosPorDia;
+        const hasIVA = rd.valoresBase && rd.valoresIva;
+        const head = hasIVA ? [['Día', 'Total', 'Base', 'IVA']] : [['Día', 'Ingresos']];
+        const body = [];
+        let tV = 0, tB = 0, tI = 0;
+        for (let i = 0; i < rd.labels.length; i++) {
+          const row = [rd.labels[i], eur(rd.valores[i])];
+          if (hasIVA) { row.push(eur(rd.valoresBase[i]), eur(rd.valoresIva[i])); tB += rd.valoresBase[i]; tI += rd.valoresIva[i]; }
+          body.push(row); tV += rd.valores[i];
+        }
+        const totalRow = ['Total', eur(tV)];
+        if (hasIVA) totalRow.push(eur(tB), eur(tI));
+        body.push(totalRow);
+
+        doc.autoTable({
+          startY: y, head, body, theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+          margin: { left: m, right: m },
+          didParseCell: (data) => { if (data.row.index === body.length - 1) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [230, 230, 230]; } },
+          columnStyles: hasIVA ? { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } } : { 0: { halign: 'left' }, 1: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // GRÁFICO: Método de Pago + tabla
+      // ─────────────────────────────────────────────────────
+      checkPage(100);
+      doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+      doc.text('Por Método de Pago', m, y); y += 4;
+      doc.addImage(chartMetodo.toBase64Image(), 'PNG', m, y, cw, 65); y += 70;
+
+      {
+        const totalMet = _lastData.porMetodoPago.valores.reduce((s, v) => s + v, 0);
+        const body = _lastData.porMetodoPago.labels.map((l, i) => {
+          const v = _lastData.porMetodoPago.valores[i];
+          return [l, eur(v), pct(totalMet > 0 ? v / totalMet * 100 : 0)];
+        });
+        body.push(['Total', eur(totalMet), '']);
+        doc.autoTable({
+          startY: y, head: [['Método', 'Importe', '%']], body, theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+          margin: { left: m, right: m },
+          columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' } },
+          didParseCell: (data) => { if (data.row.index === body.length - 1) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [230, 230, 230]; } }
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // GRÁFICO: Staff + tabla
+      // ─────────────────────────────────────────────────────
+      checkPage(100);
+      doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+      doc.text('Por Staff', m, y); y += 4;
+      doc.addImage(chartStaff.toBase64Image(), 'PNG', m, y, cw, 65); y += 70;
+
+      {
+        const totalSt = _lastData.porStaff.valores.reduce((s, v) => s + v, 0);
+        const body = _lastData.porStaff.labels.map((l, i) => {
+          const v = _lastData.porStaff.valores[i];
+          return [l, eur(v), pct(totalSt > 0 ? v / totalSt * 100 : 0)];
+        });
+        body.push(['Total', eur(totalSt), '']);
+        doc.autoTable({
+          startY: y, head: [['Staff', 'Ingresos', '%']], body, theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+          margin: { left: m, right: m },
+          columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' } },
+          didParseCell: (data) => { if (data.row.index === body.length - 1) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [230, 230, 230]; } }
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // GRÁFICO: Top Servicios + tabla (con IVA)
+      // ─────────────────────────────────────────────────────
+      checkPage(100);
+      doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+      doc.text('Top Servicios', m, y); y += 4;
+      doc.addImage(chartServicios.toBase64Image(), 'PNG', m, y, cw, 65); y += 70;
+
+      {
+        const d = _lastData.porServicio;
+        const hasIVA = d.valoresBase && d.valoresIva;
+        const totalSvc = d.valores.reduce((s, v) => s + v, 0);
+        const head = hasIVA ? [['Servicio', 'Total', 'Base', 'IVA', '%']] : [['Servicio', 'Ingresos', '%']];
+        const body = d.labels.map((l, i) => {
+          const row = [l, eur(d.valores[i])];
+          if (hasIVA) row.push(eur(d.valoresBase[i]), eur(d.valoresIva[i]));
+          row.push(pct(totalSvc > 0 ? d.valores[i] / totalSvc * 100 : 0));
+          return row;
+        });
+        const totalRow = ['Top 10', eur(totalSvc)];
+        if (hasIVA) { totalRow.push(eur(d.valoresBase.reduce((s, v) => s + v, 0)), eur(d.valoresIva.reduce((s, v) => s + v, 0))); }
+        totalRow.push('');
+        body.push(totalRow);
+        doc.autoTable({
+          startY: y, head, body, theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+          margin: { left: m, right: m },
+          didParseCell: (data) => { if (data.row.index === body.length - 1) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [230, 230, 230]; } }
+        });
+        y = doc.lastAutoTable.finalY + 12;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // TABLA DESGLOSE POR CATEGORÍA (con IVA)
+      // ─────────────────────────────────────────────────────
+      if (_lastData.tablaDesglose || (_lastData.productos && _lastData.productos.desglose) || (_lastData.externos && _lastData.externos.desglose)) {
+        checkPage(30);
+        doc.setFontSize(15); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+        doc.text('Desglose de Servicios por Categoría', m, y); y += 8;
+
+        const hasIVA = _lastData.tablaDesglose && _lastData.tablaDesglose.length > 0 && _lastData.tablaDesglose[0].totalImporteBase != null;
+        const head = hasIVA
+          ? [['', 'Cant.', 'Total €', 'Base €', 'IVA €', '1/2. €', '% €', '% Cnt.']]
+          : [['', 'Cant.', '€', '1/2. €', '% €', '% Cnt.']];
+
+        let grandCant = 0, grandImporte = 0, grandBase = 0, grandIva = 0;
+        if (_lastData.tablaDesglose) { for (const c of _lastData.tablaDesglose) { grandCant += c.totalCantidad; grandImporte += c.totalImporte; grandBase += c.totalImporteBase || 0; grandIva += c.totalImporteIva || 0; } }
+        if (_lastData.productos && _lastData.productos.desglose) { for (const p of _lastData.productos.desglose) { grandCant += p.count; grandImporte += p.total; } }
+        if (_lastData.externos && _lastData.externos.desglose) { for (const e of _lastData.externos.desglose) { grandCant += e.count; grandImporte += e.comision; } }
+
+        const body = [];
+        const catHeaderRows = [];
+        const subtotalRows = [];
+
+        // Servicios
+        if (_lastData.tablaDesglose) {
+          for (const cat of _lastData.tablaDesglose) {
+            const catRow = hasIVA ? [cat.categoria, '', '', '', '', '', '', ''] : [cat.categoria, '', '', '', '', ''];
+            catHeaderRows.push(body.length);
+            body.push(catRow);
+
+            for (const item of cat.items) {
+              const pe = grandImporte > 0 ? item.importe / grandImporte * 100 : 0;
+              const pc = grandCant > 0 ? item.cantidad / grandCant * 100 : 0;
+              const row = ['  ' + item.nombre, String(item.cantidad), eur(item.importe)];
+              if (hasIVA) row.push(item.importeBase ? eur(item.importeBase) : '', item.importeIva ? eur(item.importeIva) : '');
+              row.push(eur(item.ticketMedio), pct(pe), pct(pc));
+              body.push(row);
+            }
+
+            const catTicket = cat.totalCantidad > 0 ? cat.totalImporte / cat.totalCantidad : 0;
+            const subRow = ['', String(cat.totalCantidad), eur(cat.totalImporte)];
+            if (hasIVA) subRow.push(cat.totalImporteBase ? eur(cat.totalImporteBase) : '', cat.totalImporteIva ? eur(cat.totalImporteIva) : '');
+            subRow.push(eur(catTicket), pct(grandImporte > 0 ? cat.totalImporte / grandImporte * 100 : 0), pct(grandCant > 0 ? cat.totalCantidad / grandCant * 100 : 0));
+            subtotalRows.push(body.length);
+            body.push(subRow);
+          }
+        }
+
+        // Productos
+        if (_lastData.productos && _lastData.productos.desglose && _lastData.productos.desglose.length > 0) {
+          catHeaderRows.push(body.length);
+          body.push(hasIVA ? ['PRODUCTOS', '', '', '', '', '', '', ''] : ['PRODUCTOS', '', '', '', '', '']);
+          let pC = 0, pI = 0;
+          for (const p of _lastData.productos.desglose) {
+            const t = p.count > 0 ? p.total / p.count : 0;
+            const row = ['  🛒 ' + p.nombre, String(p.count), eur(p.total)];
+            if (hasIVA) row.push('', '');
+            row.push(eur(t), pct(grandImporte > 0 ? p.total / grandImporte * 100 : 0), pct(grandCant > 0 ? p.count / grandCant * 100 : 0));
+            body.push(row);
+            pC += p.count; pI += p.total;
+          }
+          const pt = pC > 0 ? pI / pC : 0;
+          subtotalRows.push(body.length);
+          const sRow = ['', String(pC), eur(pI)];
+          if (hasIVA) sRow.push('', '');
+          sRow.push(eur(pt), pct(grandImporte > 0 ? pI / grandImporte * 100 : 0), pct(grandCant > 0 ? pC / grandCant * 100 : 0));
+          body.push(sRow);
+        }
+
+        // Externos
+        if (_lastData.externos && _lastData.externos.desglose && _lastData.externos.desglose.length > 0) {
+          catHeaderRows.push(body.length);
+          body.push(hasIVA ? ['COMISIONES EXTERNAS', '', '', '', '', '', '', ''] : ['COMISIONES EXTERNAS', '', '', '', '', '']);
+          let eC = 0, eI = 0;
+          for (const e of _lastData.externos.desglose) {
+            const t = e.count > 0 ? e.comision / e.count : 0;
+            const row = ['  🔗 ' + e.nombre, String(e.count), eur(e.comision)];
+            if (hasIVA) row.push('', '');
+            row.push(eur(t), pct(grandImporte > 0 ? e.comision / grandImporte * 100 : 0), pct(grandCant > 0 ? e.count / grandCant * 100 : 0));
+            body.push(row);
+            eC += e.count; eI += e.comision;
+          }
+          const et = eC > 0 ? eI / eC : 0;
+          subtotalRows.push(body.length);
+          const sRow = ['', String(eC), eur(eI)];
+          if (hasIVA) sRow.push('', '');
+          sRow.push(eur(et), pct(grandImporte > 0 ? eI / grandImporte * 100 : 0), pct(grandCant > 0 ? eC / grandCant * 100 : 0));
+          body.push(sRow);
+        }
+
+        // Gran total
+        const gt = grandCant > 0 ? grandImporte / grandCant : 0;
+        const grandRow = ['TOTAL', String(grandCant), eur(grandImporte)];
+        if (hasIVA) grandRow.push(eur(grandBase), eur(grandIva));
+        grandRow.push(eur(gt), '', '');
+        const grandTotalIdx = body.length;
+        body.push(grandRow);
+
+        doc.autoTable({
+          startY: y, head, body, theme: 'striped',
+          styles: { fontSize: 8, cellPadding: 2.5 },
+          headStyles: headStyle,
+          margin: { left: m, right: m },
+          columnStyles: { 0: { halign: 'left', cellWidth: 55 } },
+          didParseCell: (data) => {
+            if (data.section !== 'body') return;
+            const ri = data.row.index;
+            if (catHeaderRows.includes(ri)) {
+              data.cell.styles.fontStyle = 'bold'; data.cell.styles.fontSize = 9;
+              data.cell.styles.fillColor = [44, 62, 80]; data.cell.styles.textColor = 255;
+            }
+            if (subtotalRows.includes(ri)) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [240, 230, 235]; data.cell.styles.textColor = [143, 28, 91];
+            }
+            if (ri === grandTotalIdx) {
+              data.cell.styles.fontStyle = 'bold'; data.cell.styles.fontSize = 10;
+              data.cell.styles.fillColor = [143, 28, 91]; data.cell.styles.textColor = 255;
+            }
+          }
+        });
+        y = doc.lastAutoTable.finalY + 12;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // DÍA DE LA SEMANA
+      // ─────────────────────────────────────────────────────
+      if (_lastData.porDiaSemana && _lastData.porDiaSemana.labels.length > 0) {
+        checkPage(30);
+        doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+        doc.text('Ingresos por Día de la Semana', m, y); y += 5;
+        const totalDS = _lastData.porDiaSemana.valores.reduce((s, v) => s + v, 0);
+        const body = _lastData.porDiaSemana.labels.map((l, i) => {
+          const v = _lastData.porDiaSemana.valores[i];
+          return [l, eur(v), pct(totalDS > 0 ? v / totalDS * 100 : 0)];
+        });
+        body.push(['Total', eur(totalDS), '']);
+        doc.autoTable({
+          startY: y, head: [['Día', 'Ingresos', '%']], body, theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+          margin: { left: m, right: m },
+          columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' } },
+          didParseCell: (data) => { if (data.row.index === body.length - 1) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [230, 230, 230]; } }
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // CLIENTES POR TIPO
+      // ─────────────────────────────────────────────────────
+      if (_lastData.clientesPorTipo && _lastData.clientesPorTipo.total > 0) {
+        checkPage(30);
+        doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+        doc.text('Clientes por Tipo', m, y); y += 5;
+        const ct = _lastData.clientesPorTipo;
+        const body = ct.tipos.map(t => [t.tipo, String(t.cantidad), pct(t.pct)]);
+        body.push(['Total', String(ct.total), '']);
+        doc.autoTable({
+          startY: y, head: [['Tipo', 'Cantidad', '%']], body, theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+          margin: { left: m, right: m },
+          columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' } },
+          didParseCell: (data) => { if (data.row.index === body.length - 1) { data.cell.styles.fontStyle = 'bold'; data.cell.styles.fillColor = [230, 230, 230]; } }
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // RATIO ST vs COMPLEMENTOS
+      // ─────────────────────────────────────────────────────
+      if (_lastData.ratioSTvsComplementos) {
+        checkPage(40);
+        const rst = _lastData.ratioSTvsComplementos;
+        doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+        doc.text('Servicios Técnicos vs Complementos Asociados', m, y); y += 5;
+        doc.autoTable({
+          startY: y,
+          body: [
+            ['Ingresos Servicios Técnicos (principal)', eur(rst.ingresosST)],
+            ['Ingresos complementos asociados a ST', eur(rst.ingresosComplementos)],
+            ['Ratio complementos / ST', pct(rst.ratio)]
+          ],
+          theme: 'plain', styles: { fontSize: 10, cellPadding: 3 },
+          margin: { left: m, right: m },
+          columnStyles: { 0: { fontStyle: 'bold', halign: 'left', cellWidth: 100 }, 1: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 4;
+
+        if (rst.top5 && rst.top5.length > 0) {
+          doc.autoTable({
+            startY: y, head: [['Top 5 Complementos ST', 'Cant.', 'Importe']],
+            body: rst.top5.map(c => [c.nombre, String(c.cantidad), eur(c.importe)]),
+            theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+            margin: { left: m, right: m },
+            columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' } }
+          });
+          y = doc.lastAutoTable.finalY + 10;
+        }
+      }
+
+      // ─────────────────────────────────────────────────────
+      // PRODUCTIVIDAD POR EMPLEADO
+      // ─────────────────────────────────────────────────────
+      if (_lastData.productividadStaff && _lastData.productividadStaff.length > 0) {
+        checkPage(30);
+        doc.setFontSize(13); doc.setTextColor(44, 62, 80); doc.setFont(undefined, 'bold');
+        doc.text('Productividad por Empleado', m, y); y += 5;
+        doc.autoTable({
+          startY: y,
+          head: [['Empleado', 'Ingresos', 'Horas', 'Servicios', 'EUR/hora', 'Min/serv.']],
+          body: _lastData.productividadStaff.map(ps => [ps.nombre, eur(ps.ingresos), ps.horas + 'h', String(ps.servicios), eur(ps.eurosPorHora), ps.minutosPorServicio + ' min']),
+          theme: 'striped', styles: bodyStyle, headStyles: headStyle,
+          margin: { left: m, right: m },
+          columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // DESGLOSE FISCAL
+      // ─────────────────────────────────────────────────────
+      if (_lastData.totalImpuesto && _lastData.totalImpuesto > 0) {
+        checkPage(30);
+        doc.setFontSize(13); doc.setTextColor(107, 91, 149); doc.setFont(undefined, 'bold');
+        doc.text(`Desglose Fiscal (IVA ${vr}%)`, m, y); y += 5;
+        doc.autoTable({
+          startY: y,
+          body: [
+            ['Total ventas (IVA incluido)', eur(totalVentas)],
+            ['Base imponible', eur(_lastData.totalBaseImponible || 0)],
+            [`Cuota IVA (${vr}%)`, eur(_lastData.totalImpuesto)],
+            ...((_lastData.totalPropinas && _lastData.totalPropinas > 0) ? [['Propinas (sin IVA)', eur(_lastData.totalPropinas)]] : []),
+            ['Recaudación total (ventas + propinas)', eur(_lastData.totalIngresos)]
+          ],
+          theme: 'grid', styles: { fontSize: 10, cellPadding: 4 },
+          margin: { left: m, right: m },
+          columnStyles: { 0: { fontStyle: 'bold', halign: 'left', cellWidth: 90 }, 1: { halign: 'right' } }
+        });
+        y = doc.lastAutoTable.finalY + 10;
+      }
+
+      // ─────────────────────────────────────────────────────
+      // PIE DE PÁGINA
+      // ─────────────────────────────────────────────────────
+      const totalPaginas = doc.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPaginas; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8); doc.setTextColor(128); doc.setFont(undefined, 'normal');
+        doc.text(`Página ${i} de ${totalPaginas}`, m, ph - 10);
+        doc.text(`Generado: ${new Date().toLocaleString('es-ES')}${_ewcmActivo ? ' · EWCM' : ''}`, pw - m, ph - 10, { align: 'right' });
+      }
+
+      const ewcmTag = _ewcmActivo ? '_EWCM' : '';
+      const compTag = _comparativaActivo ? '_COMP' : '';
+      doc.save(`estadisticas_${fechaDesde}_${fechaHasta}${ewcmTag}${compTag}.pdf`);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // EXPORTAR EXCEL — v2.5: incluye IVA donde aplica
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function exportarExcel() {
+      if (!_lastData || !_lastData.hayDatos) { alert('Primero carga los datos'); return; }
+
+      const wb = XLSX.utils.book_new();
+      const fechaDesde = document.getElementById('fechaDesde').value;
+      const fechaHasta = document.getElementById('fechaHasta').value;
+      const sufijo = ewcmSuffix();
+      const vr = _lastData.vatRate || 21;
+
+      // Hoja 1: Resumen
+      const resumenData = [
+        ['Estadísticas Hair Times' + sufijo],
+        [`Período: ${fechaDesde} — ${fechaHasta}`],
+      ];
+      if (_ewcmActivo) resumenData.push(['Modo EWCM']);
+      if (_comparativaActivo) resumenData.push([`Comparativa: ${_labelA} vs ${_labelB}`]);
+      resumenData.push([]);
+      const tv = _lastData.totalVentas != null ? _lastData.totalVentas : _lastData.totalIngresos;
+      resumenData.push(['Total Ventas (sin propinas)', tv]);
+      resumenData.push(['Transacciones', _lastData.totalTransacciones]);
+      resumenData.push(['Ticket Medio', _lastData.totalTransacciones > 0 ? Math.round((tv / _lastData.totalTransacciones) * 100) / 100 : 0]);
+      if (_lastData.totalPropinas && _lastData.totalPropinas > 0) {
+        resumenData.push(['Propinas', _lastData.totalPropinas]);
+        resumenData.push(['Recaudación total', _lastData.totalIngresos]);
+      }
+      // v2.5: IVA in resumen
+      resumenData.push([]);
+      resumenData.push([`DESGLOSE FISCAL (IVA ${vr}%)`]);
+      resumenData.push(['Base imponible', _lastData.totalBaseImponible || 0]);
+      resumenData.push([`Cuota IVA (${vr}%)`, _lastData.totalImpuesto || 0]);
+      resumenData.push(['Total ventas (IVA incluido)', tv]);
+
+      if (_lastData.granTotal) {
+        resumenData.push([]);
+        resumenData.push(['DESGLOSE GRAN TOTAL']);
+        resumenData.push(['Ventas (sin propinas)', _lastData.granTotal.ventas || _lastData.granTotal.reservas]);
+        if (_lastData.granTotal.propinas > 0) resumenData.push(['Propinas', _lastData.granTotal.propinas]);
+        resumenData.push(['Comisión externos', _lastData.granTotal.comisionExternos]);
+        resumenData.push(['Productos', _lastData.granTotal.productos]);
+        resumenData.push(['TOTAL', _lastData.granTotal.total]);
+      }
+      const wsResumen = XLSX.utils.aoa_to_sheet(resumenData);
+      wsResumen['!cols'] = [{ wch: 40 }, { wch: 15 }];
+      XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
+
+      // Hoja 2: Ingresos por Día — CON IVA
+      const hasIngIVA = _lastData.ingresosPorDia.valoresBase;
+      const ingHeaders = hasIngIVA ? ['Día', 'Total (€)', 'Base (€)', 'IVA (€)'] : ['Día', 'Ingresos (€)'];
+      const ingData = [ingHeaders];
+      let totalIng = 0, totalIngBase = 0, totalIngIva = 0;
+      for (let i = 0; i < _lastData.ingresosPorDia.labels.length; i++) {
+        const v = _lastData.ingresosPorDia.valores[i];
+        const row = [_lastData.ingresosPorDia.labels[i], v];
+        if (hasIngIVA) { row.push(_lastData.ingresosPorDia.valoresBase[i], _lastData.ingresosPorDia.valoresIva[i]); totalIngBase += _lastData.ingresosPorDia.valoresBase[i]; totalIngIva += _lastData.ingresosPorDia.valoresIva[i]; }
+        ingData.push(row); totalIng += v;
+      }
+      const totalRow = ['TOTAL', totalIng];
+      if (hasIngIVA) totalRow.push(totalIngBase, totalIngIva);
+      ingData.push(totalRow);
+      const wsIng = XLSX.utils.aoa_to_sheet(ingData);
+      wsIng['!cols'] = [{ wch: 12 }, { wch: 15 }, { wch: 15 }, { wch: 15 }];
+      XLSX.utils.book_append_sheet(wb, wsIng, 'Ingresos por Día');
+
+      // Hoja 3-4: Método de Pago, Staff (sin IVA, sin cambios)
+      const metData = [['Método', 'Importe (€)', '% del Total']];
+      const totalMet = _lastData.porMetodoPago.valores.reduce((s, v) => s + v, 0);
+      for (let i = 0; i < _lastData.porMetodoPago.labels.length; i++) { const v = _lastData.porMetodoPago.valores[i]; metData.push([_lastData.porMetodoPago.labels[i], v, totalMet > 0 ? Math.round((v / totalMet * 100) * 100) / 100 : 0]); }
+      metData.push(['TOTAL', totalMet, 100]);
+      const wsMet = XLSX.utils.aoa_to_sheet(metData); wsMet['!cols'] = [{ wch: 18 }, { wch: 15 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, wsMet, 'Método de Pago');
+
+      const staffData = [['Staff', 'Ingresos (€)', '% del Total']];
+      const totalSt = _lastData.porStaff.valores.reduce((s, v) => s + v, 0);
+      for (let i = 0; i < _lastData.porStaff.labels.length; i++) { const v = _lastData.porStaff.valores[i]; staffData.push([_lastData.porStaff.labels[i], v, totalSt > 0 ? Math.round((v / totalSt * 100) * 100) / 100 : 0]); }
+      staffData.push(['TOTAL', totalSt, 100]);
+      const wsStaff = XLSX.utils.aoa_to_sheet(staffData); wsStaff['!cols'] = [{ wch: 18 }, { wch: 15 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, wsStaff, 'Por Staff');
+
+      // Hoja 5: Top Servicios — CON IVA
+      const hasSvcIVA = _lastData.porServicio.valoresBase;
+      const svcHeaders = hasSvcIVA ? ['Servicio', 'Total (€)', 'Base (€)', 'IVA (€)', '% del Total'] : ['Servicio', 'Ingresos (€)', '% del Total'];
+      const svcData = [svcHeaders];
+      const totalSvc = _lastData.porServicio.valores.reduce((s, v) => s + v, 0);
+      for (let i = 0; i < _lastData.porServicio.labels.length; i++) {
+        const v = _lastData.porServicio.valores[i]; const p = totalSvc > 0 ? Math.round((v / totalSvc * 100) * 100) / 100 : 0;
+        const row = [_lastData.porServicio.labels[i], v];
+        if (hasSvcIVA) row.push(_lastData.porServicio.valoresBase[i], _lastData.porServicio.valoresIva[i]);
+        row.push(p); svcData.push(row);
+      }
+      svcData.push(['TOTAL (Top 10)', totalSvc]);
+      const wsSvc = XLSX.utils.aoa_to_sheet(svcData); wsSvc['!cols'] = [{ wch: 35 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, wsSvc, 'Top Servicios');
+
+      // Hoja 6: Desglose por Categoría — CON IVA
+      const hasDesIVA = _lastData.tablaDesglose && _lastData.tablaDesglose.length > 0 && _lastData.tablaDesglose[0].totalImporteBase != null;
+      const desData = [
+        ['Desglose de Servicios por Categoría' + sufijo],
+        [`Período: ${fechaDesde} — ${fechaHasta}`],
+      ];
+      if (_ewcmActivo) desData.push(['Modo EWCM']);
+      desData.push([]);
+      const desHeaders = hasDesIVA ? ['Categoría / Servicio', 'Cant.', 'Total €', 'Base €', 'IVA €', '1/2. €', '% de €', '% Cant.'] : ['Categoría / Servicio', 'Cant.', '€', '1/2. €', '% de €', '% Cant.'];
+      desData.push(desHeaders);
+
+      let grandCant = 0, grandImporte = 0;
+      if (_lastData.tablaDesglose) { for (const cat of _lastData.tablaDesglose) { grandCant += cat.totalCantidad; grandImporte += cat.totalImporte; } }
+      if (_lastData.productos && _lastData.productos.desglose) { for (const p of _lastData.productos.desglose) { grandCant += p.count; grandImporte += p.total; } }
+      if (_lastData.externos && _lastData.externos.desglose) { for (const e of _lastData.externos.desglose) { grandCant += e.count; grandImporte += e.comision; } }
+
+      if (_lastData.tablaDesglose) {
+        for (const cat of _lastData.tablaDesglose) {
+          desData.push([cat.categoria]);
+          for (const item of cat.items) {
+            const pe = grandImporte > 0 ? Math.round((item.importe / grandImporte * 100) * 100) / 100 : 0;
+            const pc = grandCant > 0 ? Math.round((item.cantidad / grandCant * 100) * 100) / 100 : 0;
+            const row = ['  ' + item.nombre, item.cantidad, item.importe];
+            if (hasDesIVA) row.push(item.importeBase || 0, item.importeIva || 0);
+            row.push(item.ticketMedio, pe, pc);
+            desData.push(row);
+          }
+          const catTicket = cat.totalCantidad > 0 ? Math.round((cat.totalImporte / cat.totalCantidad) * 100) / 100 : 0;
+          const catPe = grandImporte > 0 ? Math.round((cat.totalImporte / grandImporte * 100) * 100) / 100 : 0;
+          const catPc = grandCant > 0 ? Math.round((cat.totalCantidad / grandCant * 100) * 100) / 100 : 0;
+          const subRow = ['  SUBTOTAL', cat.totalCantidad, cat.totalImporte];
+          if (hasDesIVA) subRow.push(cat.totalImporteBase || 0, cat.totalImporteIva || 0);
+          subRow.push(catTicket, catPe, catPc);
+          desData.push(subRow);
+        }
+      }
+
+      const grandTicket = grandCant > 0 ? Math.round((grandImporte / grandCant) * 100) / 100 : 0;
+      desData.push([]);
+      desData.push(['TOTAL DE TODAS LAS CATEGORÍAS', grandCant, grandImporte]);
+
+      const wsDes = XLSX.utils.aoa_to_sheet(desData);
+      wsDes['!cols'] = [{ wch: 38 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }];
+      XLSX.utils.book_append_sheet(wb, wsDes, 'Desglose por Categoría');
+
+      // Hojas 7-10: sin cambios (Día Semana, ST vs Complementos, Clientes, Productividad)
+      if (_lastData.porDiaSemana && _lastData.porDiaSemana.labels.length > 0) {
+        const dsData = [['Día de la Semana', 'Ingresos (€)', '% del Total']];
+        const totalDS = _lastData.porDiaSemana.valores.reduce((s, v) => s + v, 0);
+        for (let i = 0; i < _lastData.porDiaSemana.labels.length; i++) { const v = _lastData.porDiaSemana.valores[i]; dsData.push([_lastData.porDiaSemana.labels[i], v, totalDS > 0 ? Math.round((v / totalDS * 100) * 100) / 100 : 0]); }
+        dsData.push(['TOTAL', totalDS, 100]);
+        const wsDS = XLSX.utils.aoa_to_sheet(dsData); wsDS['!cols'] = [{ wch: 15 }, { wch: 15 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, wsDS, 'Dia Semana');
+      }
+
+      if (_lastData.ratioSTvsComplementos) {
+        const rst = _lastData.ratioSTvsComplementos;
+        const rstData = [['Servicios Tecnicos vs Complementos'], [], ['Ingresos ST', rst.ingresosST], ['Ingresos complementos', rst.ingresosComplementos], ['Ratio', rst.ratio + '%'], [], ['Top 5 Complementos', 'Cant.', 'Importe']];
+        if (rst.top5) { for (const c of rst.top5) rstData.push([c.nombre, c.cantidad, c.importe]); }
+        const wsRST = XLSX.utils.aoa_to_sheet(rstData); wsRST['!cols'] = [{ wch: 35 }, { wch: 12 }, { wch: 12 }]; XLSX.utils.book_append_sheet(wb, wsRST, 'ST vs Complementos');
+      }
+
+      if (_lastData.clientesPorTipo && _lastData.clientesPorTipo.total > 0) {
+        const ct = _lastData.clientesPorTipo;
+        const ctData = [['Tipo', 'Cantidad', '%']];
+        for (const t of ct.tipos) ctData.push([t.tipo, t.cantidad, t.pct]);
+        ctData.push(['TOTAL', ct.total, 100]);
+        const wsCT = XLSX.utils.aoa_to_sheet(ctData); wsCT['!cols'] = [{ wch: 18 }, { wch: 10 }, { wch: 10 }]; XLSX.utils.book_append_sheet(wb, wsCT, 'Clientes por Tipo');
+      }
+
+      if (_lastData.productividadStaff && _lastData.productividadStaff.length > 0) {
+        const prodData = [['Empleado', 'Ingresos (€)', 'Horas', 'Servicios', 'EUR/hora', 'Min/servicio']];
+        for (const ps of _lastData.productividadStaff) prodData.push([ps.nombre, ps.ingresos, ps.horas, ps.servicios, ps.eurosPorHora, ps.minutosPorServicio]);
+        const wsProd = XLSX.utils.aoa_to_sheet(prodData); wsProd['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 14 }]; XLSX.utils.book_append_sheet(wb, wsProd, 'Productividad');
+      }
+
+      const ewcmTag = _ewcmActivo ? '_EWCM' : '';
+      const compTag = _comparativaActivo ? '_COMP' : '';
+      XLSX.writeFile(wb, `estadisticas_${fechaDesde}_${fechaHasta}${ewcmTag}${compTag}.xlsx`);
+    }
+  </script>
+</body>
+</html>
