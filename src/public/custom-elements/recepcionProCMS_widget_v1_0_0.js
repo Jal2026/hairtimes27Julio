@@ -1,7 +1,7 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.102  ·  Cobros por botón pulsado en Rendimiento productivo
+ * VERSION: 1.1.102 · Cobros por botón pulsado en Rendimiento productivo
  *
  * v1.1.102 (12 ago 2026) — RECUENTO POR BOTÓN DE COBRO en el bloque
  *   📈 Rendimiento productivo del informe del día.
