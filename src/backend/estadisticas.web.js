@@ -1,123 +1,6 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.6.3
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.5.3
 // =====================================================
-// v2.6.3: MEDIOS DE PAGO — DOS VISTAS + CANJES DE BONO (12 ago 2026)
-//   Tres salidas nuevas en obtenerEstadisticas. Ninguna existente cambia.
-//
-//   1) `porBotonPago` — RECUENTO POR BOTÓN PULSADO.
-//      Agrupación en crudo por `tipoPago`, con NÚMERO de pulsaciones
-//      además del importe: [{ metodo, n, importe }]. Aquí 'Mixto' SÍ es
-//      una cesta propia, porque fue UN botón. Responde a "¿se pulsó el
-//      botón correcto en cada cita?". Se acompaña de `botonTotales`
-//      { n, importe }. Un cobro sin `tipoPago` sale en su propia línea
-//      "Sin método registrado": no se reparte ni se omite.
-//
-//   2) `porMetodoPago` — IMPORTES REALES POR CANAL (ya existía desde
-//      v2.6.1, se mantiene sin cambios). Tarjeta = tarjeta pura + parte
-//      tarjeta de los mixtos; ídem Efectivo y Bizum. Responde a
-//      "¿cuánto hay en el datáfono, en el cajón y en la cuenta?".
-//
-//      LAS DOS VISTAS CONVIVEN A PROPÓSITO y no dan la misma cifra por
-//      canal cuando hay mixtos. No es un descuadre: son dos preguntas
-//      distintas. El TOTAL de ambas sí coincide.
-//
-//   3) `canjesBono` — { n, valorConsumido, disponible }.
-//      Fuente: KamisuiteVoucherRedemptions filtrada por `redeemDate`,
-//      sumando `amountSaved`. Patrón de consulta copiado de
-//      akiraLogic.web.js → consultarBonos. NO se parsea la descripción
-//      del pago: el dato está de primera mano en esa colección.
-//      Va SEPARADO de los medios de pago porque un canje no es caja
-//      nueva — ese dinero entró el día que se compró el bono — y por
-//      tanto NO se suma a ventas ni a ningún canal. Si la colección no
-//      existe en el tenant, `disponible:false` y el widget no pinta la
-//      sección; nunca se devuelve un 0 inventado.
-//
-//   NO se toca: totales, IVA, propinas, servicios, staff, externos,
-//   productos POS, comparativa ni ninguna otra sección.
-//
-// v2.6.2: EWCM ELIMINADO (12 ago 2026)
-//   - Se retira por completo el modo "Export Without Cash Mode"
-//     (parámetro `excludeEfectivo`, introducido en v2.3), que permitía
-//     generar el informe de estadísticas ocultando los cobros en
-//     efectivo.
-//   - Motivo: un informe que omite selectivamente los ingresos en
-//     metálico es incompatible con la obligación Verifactu que entra en
-//     vigor en enero de 2027, cuyo principio es justamente el contrario:
-//     registro íntegro, inalterable y encadenado de TODAS las
-//     operaciones. Mantener el interruptor en el producto era un riesgo
-//     que no compensa ninguna comodidad de exportación.
-//   - Qué se ha quitado: el bloque de filtrado previo al pipeline, la
-//     excepción del canal Efectivo en el desglose por método de pago, y
-//     los sufijos [EWCM] de los logs.
-//   - La firma sigue aceptando `excludeEfectivo` para no romper a un
-//     llamante que aún lo envíe, pero NO HACE NADA: se ignora y se
-//     registra un console.warn para poder localizar y limpiar al
-//     llamante. El informe trabaja SIEMPRE con la totalidad de cobros.
-//   - Page code asociado: `Recepción _ Estadísticas _  Hairtimes .et172.js`
-//     v2.6 deja de reenviarlo. PENDIENTE: el widget HTML conserva el
-//     interruptor en la interfaz — hay que retirarlo también.
-//
-// v2.6.1: REPARTO POR CANAL FÍSICO en "Por Método de Pago" (12 ago 2026)
-//   - El donut agrupaba por `tipoPago` en crudo: la cesta "Tarjeta"
-//     contenía SOLO los cobros 100% tarjeta y el importe íntegro de cada
-//     Mixto caía en una cesta propia imposible de contrastar contra el
-//     datáfono. Igual con Efectivo y Bizum.
-//   - Ahora cada cobro se parte en los tres canales contrastables
-//     leyendo `desglosemetodopago`. Helper _repartirCanales, copia
-//     literal del de cierreLogicExtendido v1.2.0.
-//   - Queda OBSOLETO el comentario de v2.3 "Pagos MIXTO se incluyen
-//     completos (desglose no disponible en CMS)": el campo existe desde
-//     que lo escriben recepcionProLogic, tiendaProductos y
-//     servicesPublicSync, y es editable en el Editor de Cobros.
-//   - Lo que no se puede repartir sin inventar sale con etiqueta propia
-//     y visible (⚠️ Mixto sin desglose / descuadrado / etc.).
-//   - NO se toca: totalIngresos, totalVentas, IVA, propinas, servicios,
-//     staff, externos, productos POS, ni ninguna otra sección.
-//
-// v2.6.0: Externos V2 + eje de días continuo + paginación
-//
-//   1) EXTERNOS — la fuente pasa a ser PagoreservasExternos (ledger V2)
-//      · Causa del defecto: el bloque leía SOLO SvExternalRecords, la
-//        colección V1 que rellena externosLogic. Desde que el cobro de
-//        externos se unificó en Recepción PRO V2
-//        (recepcionProLogic v1.0.37, rama isExternal → PagoreservasExternos,
-//        bookingId = 'EXT_<reservaId>'), NADIE escribe ya en
-//        SvExternalRecords → el bloque salía vacío.
-//      · Fuente primaria: PagoreservasExternos filtrada por fechaPago,
-//        coherente con el resto del informe (que filtra
-//        PaymentReservations.fechaPago).
-//      · Cruce de comisión POR EMPLEADO replicado literalmente de
-//        cierreExternosLogic v1.1.0 (el backend del Informe del día):
-//        ExternalServices.staffResourceId → StaffConfig.wixResourceId
-//        → StaffConfig.displayName, comparado contra
-//        PagoreservasExternos.staff. Fallback compat por contactPerson
-//        para filas legacy. SIN fallback global.
-//        Así Estadísticas y el Informe del día dan la MISMA comisión.
-//      · Histórico preservado: se siguen leyendo las filas PAGADAS de
-//        SvExternalRecords del rango, pero SOLO las que no tienen gemela
-//        en PagoreservasExternos (bookingId = 'EXT_' + _id). Esas gemelas
-//        existen desde externosLogic v1.1.3 (mar-2026), que escribía en
-//        ambas colecciones. Cero duplicados, cero pérdida de histórico
-//        anterior a marzo-2026. El cálculo de comisión de las filas
-//        legacy se mantiene EXACTAMENTE como en v2.5.3 (por category
-//        contra serviceName, con fallback) para no alterar informes ya
-//        emitidos.
-//
-//   2) EJE DE DÍAS CONTINUO — ingresosPorDia (serie cronológica)
-//      · Antes la serie se construía con Object.keys(ingresosPorDia): un
-//        día sin cobros no generaba punto y DESAPARECÍA del eje
-//        (los domingos, p.ej.). Ahora se recorre el rango
-//        fechaDesde→fechaHasta completo y los días sin cobros valen 0.
-//      · ingresosPorDiaRanking, porDiaSemana y los promedios por día de
-//        semana quedan INTACTOS: los días a 0 no se cuentan como días
-//        trabajados y no diluyen ninguna media.
-//
-//   3) PAGINACIÓN de PaymentReservations
-//      · La query principal era .limit(1000) sin skip: en rangos largos
-//        (trimestre, año) truncaba en silencio. Ahora pagina con el
-//        mismo patrón skip/limit que ya usaba obtenerMediaDiaSemanaAnio
-//        en este mismo archivo.
-//
 // v2.5.3: Fix Día de semana con poco histórico + zona Madrid
 //   - obtenerMediaDiaSemanaAnio funciona aunque solo haya 1 ocurrencia histórica
 //   - Elimina el filtro mínimo cnt < 2
@@ -141,12 +24,11 @@
 //   - Filtro cambiado de excluir BLOQUEADO a incluir solo PAGADO
 //   - Citas CONFIRMADA (no cobradas) ya no inflan venta bruta ni comisiones
 //
-// v2.3: EWCM (Export Without Cash Mode)  — ❌ ELIMINADO EN v2.6.2
+// v2.3: EWCM (Export Without Cash Mode)
 //   - Nuevo parámetro excludeEfectivo
 //   - Filtra registros con tipoPago === 'EFECTIVO' antes de procesar
 //   - Pagos MIXTO se incluyen completos (desglose no disponible en CMS)
 //   - Todo el pipeline trabaja con el array ya filtrado
-//   >>> Funcionalidad retirada. Ver cabecera v2.6.2.
 //
 // v2.0: Rewrite completo
 //   - Merge variantes nombre ST (Tinte AP + Tinte aplicación → Tinte)
@@ -162,117 +44,14 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-
-// =====================================================
-// REPARTO POR CANAL FÃSICO DE COBRO â v2.6.1
-// =====================================================
-// Copia LITERAL del helper homÃ³nimo de cierreLogicExtendido.web.js
-// v1.2.0. Se duplica a propÃ³sito: los imports entre backends .web.js
-// devuelven vacÃ­o en silencio, asÃ­ que cada backend lleva el suyo.
-// Si se cambia aquÃ­, cambiar tambiÃ©n allÃ­.
-//
-// Los tres Ãºnicos canales contrastables contra algo fÃ­sico:
-//     TARJETA  â liquidaciÃ³n del datÃ¡fono
-//     EFECTIVO â cajÃ³n / arqueo de caja
-//     BIZUM    â extracto de la cuenta
-// No hay cesta "otros" ni cesta "Mixto". Lo que no se puede repartir
-// sin inventar se marca como anomalÃ­a visible.
-//
-// Lectura de `desglosemetodopago`: patrÃ³n copiado de
-// cashRegisterLogic.web.js â calcularEfectivoEsperado (en producciÃ³n).
-// Formato canÃ³nico: '{"Tarjeta":N,"Efectivo":N,"Bizum":N}' (claves > 0).
-//
-// Invariante: tarjeta + efectivo + bizum + anomalia === importeTotal.
-function _repartirCanales(p) {
-  const out = { tarjeta: 0, efectivo: 0, bizum: 0, anomalia: 0, anomaliaLabel: '', canje: false };
-
-  const importe = Number(p.importeTotal) || 0;
-  const tipoCrudo = String(p.tipoPago || '').trim();
-  const t = tipoCrudo.toLowerCase();
-
-  if (t === 'tarjeta')  { out.tarjeta  = importe; return out; }
-  if (t === 'efectivo') { out.efectivo = importe; return out; }
-  if (t === 'bizum')    { out.bizum    = importe; return out; }
-
-  if (t === 'canje') {
-    if (Math.abs(importe) < 0.005) { out.canje = true; return out; }
-    out.anomalia = importe;
-    out.anomaliaLabel = '⚠️ Canje con importe';
-    return out;
-  }
-
-  if (t === 'mixto') {
-    let d = null;
-    try {
-      d = p.desglosemetodopago ? JSON.parse(p.desglosemetodopago) : null;
-    } catch (e) {
-      d = null;
-    }
-
-    if (!d || typeof d !== 'object') {
-      out.anomalia = importe;
-      out.anomaliaLabel = '⚠️ Mixto sin desglose';
-      return out;
-    }
-
-    const lower = {};
-    for (const k of Object.keys(d)) lower[String(k).trim().toLowerCase()] = Number(d[k]) || 0;
-    const ta = lower.tarjeta  || 0;
-    const ef = lower.efectivo || 0;
-    const bi = lower.bizum    || 0;
-    const suma = ta + ef + bi;
-
-    if (suma <= 0) {
-      out.anomalia = importe;
-      out.anomaliaLabel = '⚠️ Mixto sin desglose';
-      return out;
-    }
-
-    if (Math.abs(suma - importe) >= 0.01) {
-      out.anomalia = importe;
-      out.anomaliaLabel = '⚠️ Mixto descuadrado';
-      return out;
-    }
-
-    out.tarjeta  = ta;
-    out.efectivo = ef;
-    out.bizum    = bi;
-    return out;
-  }
-
-  out.anomalia = importe;
-  out.anomaliaLabel = '⚠️ ' + (tipoCrudo || 'Sin método');
-  return out;
-}
-
-const CANALES_FISICOS = ['Tarjeta', 'Efectivo', 'Bizum'];
-
-const TAG = '[Stats v2.6.3]';
+const TAG = '[Stats v2.5.3]';
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
 const CMS_EXTERNAL_RECORDS = 'SvExternalRecords';
-const CMS_PAGOS_EXTERNOS = 'PagoreservasExternos';   // v2.6.0 — ledger V2 de cobros externos
-const CMS_STAFF = 'StaffConfig';                      // v2.6.0 — puente staffResourceId → displayName
 const CMS_SALON_CONFIG = 'SalonConfig';
-const CMS_VOUCHER_REDEMPTIONS = 'KamisuiteVoucherRedemptions';   // v2.6.3 - canjes de bono
 const TIMEZONE_MADRID = 'Europe/Madrid';
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DEFAULT_VAT_RATE = 21;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// v2.6.0 — HELPER replicado LITERALMENTE de cierreExternosLogic v1.1.0
-// Extrae el nombre de servicio del primer token de `descripcion`.
-// Formato que escribe marcarPagadoReserva:
-//   "Corte (12€), Peinado (8€)"  →  "Corte"
-//   "Manicura completa (25€)"    →  "Manicura completa"
-// ═══════════════════════════════════════════════════════════════════════════
-function nombreServicioDesdeDescripcion(descripcion) {
-  const primerToken = String(descripcion || '').split(',')[0].trim();
-  if (!primerToken) return '';
-  const idxParen = primerToken.lastIndexOf('(');
-  const nombre = idxParen > 0 ? primerToken.slice(0, idxParen).trim() : primerToken;
-  return nombre;
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUNCIÓN PRINCIPAL
@@ -282,14 +61,7 @@ export const obtenerEstadisticas = webMethod(
   Permissions.Anyone,
   async ({ fechaDesde, fechaHasta, excludeEfectivo }) => {
     try {
-      console.log(`${TAG} Estadísticas: ${fechaDesde} → ${fechaHasta}`);
-
-      // v2.6.2 — El parámetro se sigue aceptando en la firma para no
-      // romper a un llamante que aún lo envíe, pero NO HACE NADA. Se
-      // avisa por consola para poder localizar y limpiar al llamante.
-      if (excludeEfectivo) {
-        console.warn(`${TAG} ⚠️ Recibido excludeEfectivo=true. El modo EWCM fue ELIMINADO en v2.6.2: el parámetro se IGNORA y el informe incluye todos los cobros, efectivo incluido. Revisar el llamante y quitar el envío.`);
-      }
+      console.log(`${TAG} Estadísticas: ${fechaDesde} → ${fechaHasta}${excludeEfectivo ? ' [EWCM]' : ''}`);
 
       // ── Helpers ──
       const normCat = (c) => (c || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
@@ -377,38 +149,29 @@ export const obtenerEstadisticas = webMethod(
       // ══════════════════════════════════════════════════════════════
       // 1. LEER PAYMENTRESERVATIONS
       // ══════════════════════════════════════════════════════════════
-      // v2.6.0: paginación (antes .limit(1000) sin skip → truncaba en
-      // silencio los rangos largos). Mismo patrón que
-      // obtenerMediaDiaSemanaAnio más abajo en este archivo.
-      let pagos = [];
-      let pagosOffset = 0;
-      let pagosHasMore = true;
-
-      while (pagosHasMore) {
-        let query = wixData.query(COLECCION_PAGOS);
-        if (fechaDesde) query = query.ge('fechaPago', new Date(fechaDesde));
-        if (fechaHasta) {
-          const hasta = new Date(fechaHasta);
-          hasta.setDate(hasta.getDate() + 1);
-          query = query.lt('fechaPago', hasta);
-        }
-        const result = await query.skip(pagosOffset).limit(1000).find();
-        const items = result.items || [];
-        pagos = pagos.concat(items);
-
-        pagosHasMore = items.length === 1000;
-        pagosOffset += 1000;
-
-        if (pagosOffset > 50000) break;
+      let query = wixData.query(COLECCION_PAGOS);
+      if (fechaDesde) query = query.ge('fechaPago', new Date(fechaDesde));
+      if (fechaHasta) {
+        const hasta = new Date(fechaHasta);
+        hasta.setDate(hasta.getDate() + 1);
+        query = query.lt('fechaPago', hasta);
       }
-
+      query = query.limit(1000);
+      const result = await query.find();
+      let pagos = result.items;
       console.log(`${TAG} Registros brutos: ${pagos.length}`);
 
       // ══════════════════════════════════════════════════════════════
-      // v2.6.2 — EWCM ELIMINADO. Aquí vivía el filtro que sacaba los
-      // cobros en efectivo del informe. No se sustituye por nada: el
-      // informe trabaja SIEMPRE con la totalidad de los cobros.
+      // v2.3: EWCM — Filtrar pagos en efectivo
       // ══════════════════════════════════════════════════════════════
+      if (excludeEfectivo) {
+        const antesFiltro = pagos.length;
+        pagos = pagos.filter(p => {
+          const tipo = (p.tipoPago || '').toUpperCase();
+          return tipo !== 'EFECTIVO';
+        });
+        console.log(`${TAG} EWCM: ${antesFiltro} → ${pagos.length} registros (${antesFiltro - pagos.length} efectivo excluidos)`);
+      }
 
       // ══════════════════════════════════════════════════════════════
       // 2. MAPAS desde queryServices: categoría + duración
@@ -520,7 +283,6 @@ export const obtenerEstadisticas = webMethod(
       const ingresosPorDiaSemana = {};
       const diasUnicosPorDiaSemana = {};
       const porMetodo = {};
-      const porBoton = {};        // v2.6.3 - pulsaciones de boton (tipoPago en crudo)
       const porStaff = {};
       const porServicioTop = {};
       const desglosePorCat = {};
@@ -568,28 +330,8 @@ export const obtenerEstadisticas = webMethod(
           diasUnicosPorDiaSemana[diaSemana].add(dia);
         }
 
-        // v2.6.3 — RECUENTO POR BOTÓN PULSADO. Agrupación en crudo por
-        // `tipoPago`, con número de pulsaciones además del importe. Aquí
-        // 'Mixto' SÍ es una cesta propia: fue UN botón. Responde a
-        // "¿se pulsó el botón correcto?", no a "¿cuánto hay en el
-        // datáfono?". Es la vista de auditoría, paralela y distinta al
-        // reparto por canal de más abajo. Las dos conviven a propósito.
-        const _boton = String(p.tipoPago || '').trim() || 'Sin método registrado';
-        if (!porBoton[_boton]) porBoton[_boton] = { metodo: _boton, n: 0, importe: 0 };
-        porBoton[_boton].n += 1;
-        porBoton[_boton].importe += importe;
-
-        // v2.6.1 — reparto por canal físico. La parte tarjeta / efectivo /
-        // bizum de un cobro Mixto suma en su canal; ya no hay cesta "Mixto"
-        // ni cesta "Sin especificar" como cajón de sastre.
-        // v2.6.2 — sin excepción por EWCM: el efectivo suma siempre.
-        const rep = _repartirCanales(p);
-        if (rep.tarjeta) porMetodo['Tarjeta'] = (porMetodo['Tarjeta'] || 0) + rep.tarjeta;
-        if (rep.efectivo) porMetodo['Efectivo'] = (porMetodo['Efectivo'] || 0) + rep.efectivo;
-        if (rep.bizum) porMetodo['Bizum'] = (porMetodo['Bizum'] || 0) + rep.bizum;
-        if (Math.abs(rep.anomalia) >= 0.005) {
-          porMetodo[rep.anomaliaLabel] = (porMetodo[rep.anomaliaLabel] || 0) + rep.anomalia;
-        }
+        const metodo = p.tipoPago || 'Sin especificar';
+        porMetodo[metodo] = (porMetodo[metodo] || 0) + importe;
 
         const staffRaw = (p.staff || '').toUpperCase();
         if (staffRaw === 'TIENDA_POS') {
@@ -688,200 +430,9 @@ export const obtenerEstadisticas = webMethod(
       }
 
       // ══════════════════════════════════════════════════════════════
-      // 4. EXTERNOS
-      //   v2.6.0 — 4.A fuente V2 (PagoreservasExternos, por fechaPago)
-      //          + 4.B histórico V1 (SvExternalRecords) sin duplicar
-      //   v2.4   — legacy: solo status PAGADO
+      // 4. EXTERNOS — v2.4: solo status PAGADO
       // ══════════════════════════════════════════════════════════════
-      // ════════════════════════════════════════════════════════════
-      // v2.6.3 — CANJES DE BONO DEL PERIODO
-      // ════════════════════════════════════════════════════════════
-      // Fuente: KamisuiteVoucherRedemptions, filtrada por `redeemDate`.
-      // Es el registro que escribe recepcionProLogic → confirmarCanjeProducto
-      // en el momento del canje, con el `amountSaved` ya calculado. No se
-      // parsea la descripción del pago: el dato está aquí de primera mano.
-      // Patrón de consulta copiado de akiraLogic.web.js → consultarBonos.
-      //
-      // POR QUÉ VA APARTE Y NO EN LOS MÉTODOS DE PAGO. Un canje NO es caja
-      // nueva: ese dinero entró el día que el cliente compró el bono.
-      // `valorConsumido` es valor de tarifa consumido en el periodo, y por
-      // eso NO debe sumarse a las ventas ni a ningún canal de cobro.
-      let canjesBono = { n: 0, valorConsumido: 0, disponible: true };
-      try {
-        let canjes = [];
-        let canjesOffset = 0;
-        let canjesHasMore = true;
-        while (canjesHasMore) {
-          let qc = wixData.query(CMS_VOUCHER_REDEMPTIONS);
-          if (fechaDesde) qc = qc.ge('redeemDate', new Date(fechaDesde));
-          if (fechaHasta) {
-            const hastaC = new Date(fechaHasta);
-            hastaC.setDate(hastaC.getDate() + 1);
-            qc = qc.lt('redeemDate', hastaC);
-          }
-          const rc = await qc.skip(canjesOffset).limit(1000).find({ suppressAuth: true });
-          const itemsC = rc.items || [];
-          canjes = canjes.concat(itemsC);
-          canjesHasMore = itemsC.length === 1000;
-          canjesOffset += 1000;
-          if (canjesOffset > 50000) break;
-        }
-        canjesBono = {
-          n: canjes.length,
-          valorConsumido: Math.round(canjes.reduce((a, r) => a + (Number(r.amountSaved) || 0), 0) * 100) / 100,
-          disponible: true
-        };
-        console.log(`${TAG} Canjes de bono: ${canjesBono.n} | valor consumido ${canjesBono.valorConsumido}€`);
-      } catch (eCanjes) {
-        // Si la colección no existe en este tenant, no se inventa un 0:
-        // se marca como no disponible y el widget no pinta la sección.
-        canjesBono = { n: 0, valorConsumido: 0, disponible: false };
-        console.warn(`${TAG} Canjes de bono no disponibles: ${eCanjes.message}`);
-      }
-
       let externosResult = { citas: 0, ventaBruta: 0, comisionTotal: 0, desglose: [] };
-
-      // Acumuladores comunes a las dos fuentes.
-      let extCitas = 0;
-      let extVentaBruta = 0;
-      let extComisionTotal = 0;
-      const extDesglose = {};
-
-      const acumularExterno = (nombreServicio, precio, comision) => {
-        extCitas++;
-        extVentaBruta += precio;
-        extComisionTotal += comision;
-        if (!extDesglose[nombreServicio]) {
-          extDesglose[nombreServicio] = { nombre: nombreServicio, count: 0, ventaBruta: 0, comision: 0 };
-        }
-        extDesglose[nombreServicio].count++;
-        extDesglose[nombreServicio].ventaBruta += precio;
-        extDesglose[nombreServicio].comision += comision;
-      };
-
-      // bookingIds de PagoreservasExternos vistos en el rango — sirven para
-      // no volver a contar por 4.B una cita que ya se contó por 4.A.
-      const bookingIdsV2 = new Set();
-
-      // ──────────────────────────────────────────────────────────────
-      // 4.A — FUENTE V2: PagoreservasExternos (filtrada por fechaPago)
-      //   Cruce de comisión POR EMPLEADO, replicado literalmente de
-      //   cierreExternosLogic v1.1.0 (backend del Informe del día).
-      // ──────────────────────────────────────────────────────────────
-      try {
-        // Mapa displayName(UPPER) → % comisión.
-        let mapaComisionesPorEmpleado = {};
-
-        try {
-          const extCatResult = await wixData.query(CMS_EXTERNAL_SERVICES)
-            .eq('activeStatus', true)
-            .limit(100)
-            .find({ suppressAuth: true });
-
-          const catalogoExt = extCatResult.items || [];
-
-          const resourceIds = [];
-          for (const it of catalogoExt) {
-            const rid = it.staffResourceId;
-            if (typeof rid === 'string' && rid.length > 0) resourceIds.push(rid);
-          }
-
-          let displayNamePorResourceId = {};
-          if (resourceIds.length) {
-            try {
-              const staffResult = await wixData.query(CMS_STAFF)
-                .hasSome('wixResourceId', resourceIds)
-                .limit(100)
-                .find({ suppressAuth: true });
-
-              for (const s of (staffResult.items || [])) {
-                const rid = s.wixResourceId;
-                if (typeof rid === 'string' && rid.length > 0) {
-                  const dn = s.displayName || s.canonicalName || '';
-                  if (dn) displayNamePorResourceId[rid] = dn;
-                }
-              }
-            } catch (stErr) {
-              console.warn(`${TAG} Error leyendo StaffConfig: ${stErr.message}`);
-            }
-          }
-
-          for (const item of catalogoExt) {
-            const pct = Number(item.commissionPercentage || 0);
-            const rid = item.staffResourceId;
-            const displayName = (typeof rid === 'string' && rid.length > 0)
-              ? (displayNamePorResourceId[rid] || '')
-              : '';
-
-            if (displayName) {
-              const key = displayName.trim().toUpperCase();
-              if (key) mapaComisionesPorEmpleado[key] = pct;
-            } else {
-              const contact = String(item.contactPerson || '').trim().toUpperCase();
-              if (contact) mapaComisionesPorEmpleado[contact] = pct;
-            }
-          }
-        } catch (catErr) {
-          console.warn(`${TAG} Error leyendo ExternalServices (V2): ${catErr.message}`);
-        }
-
-        // Cobros externos del rango. Mismo criterio de fecha que el resto
-        // del informe: fechaPago. Margen ±3h + filtro fino Madrid.
-        const startRangeV2 = new Date(new Date(`${fechaDesde}T00:00:00`).getTime() - 3 * 3600000);
-        const endRangeV2 = new Date(new Date(`${fechaHasta}T23:59:59`).getTime() + 3 * 3600000);
-
-        let allPagosExt = [];
-        let pgOffset = 0;
-        let pgHasMore = true;
-        while (pgHasMore) {
-          const pgResult = await wixData.query(CMS_PAGOS_EXTERNOS)
-            .ge('fechaPago', startRangeV2)
-            .le('fechaPago', endRangeV2)
-            .ascending('fechaPago')
-            .skip(pgOffset)
-            .limit(500)
-            .find({ suppressAuth: true });
-
-          const items = pgResult.items || [];
-          allPagosExt = allPagosExt.concat(items);
-          pgHasMore = items.length === 500;
-          pgOffset += 500;
-          if (pgOffset > 50000) break;
-        }
-
-        const pagosExtRango = allPagosExt.filter(p => {
-          if (!p.fechaPago) return false;
-          const madridDate = new Date(p.fechaPago).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
-          return madridDate >= fechaDesde && madridDate <= fechaHasta;
-        });
-
-        for (const pago of pagosExtRango) {
-          const bid = String(pago.bookingId || '');
-          if (bid) bookingIdsV2.add(bid);
-
-          const precio = Number(pago.importeTotal || 0);
-          const nombreServicio = nombreServicioDesdeDescripcion(pago.descripcion) || 'Servicio externo';
-
-          const staffUpper = String(pago.staff || '').trim().toUpperCase();
-          const pctComision = (staffUpper && mapaComisionesPorEmpleado[staffUpper] !== undefined)
-            ? mapaComisionesPorEmpleado[staffUpper]
-            : 0;
-
-          const comision = Math.round((precio * pctComision / 100) * 100) / 100;
-          acumularExterno(nombreServicio, precio, comision);
-        }
-
-        console.log(`${TAG} Externos V2 (PagoreservasExternos): ${pagosExtRango.length} cobros, bruta=${Math.round(extVentaBruta * 100) / 100}€`);
-      } catch (extV2Err) {
-        console.warn(`${TAG} Error externos V2: ${extV2Err.message}`);
-      }
-
-      // ──────────────────────────────────────────────────────────────
-      // 4.B — HISTÓRICO V1: SvExternalRecords
-      //   Solo las filas SIN gemela en PagoreservasExternos
-      //   (bookingId = 'EXT_' + _id). Cálculo de comisión INTACTO
-      //   respecto a v2.5.3.
-      // ──────────────────────────────────────────────────────────────
       try {
         let mapaComisiones = {};
         let comisionFallback = 0;
@@ -908,7 +459,7 @@ export const obtenerEstadisticas = webMethod(
           extOffset += 100;
         }
 
-        const citasEnRango = allExtRecords.filter(item => {
+        const citasValidas = allExtRecords.filter(item => {
           if (!item.date) return false;
           const d = new Date(item.date);
           const madridDate = d.toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
@@ -916,39 +467,9 @@ export const obtenerEstadisticas = webMethod(
           return true;
         });
 
-        // ── Dedup v2.6.0 ──
-        // Paso 1: descartar las que ya se contaron en 4.A (gemela dentro
-        //         del rango).
-        let candidatas = citasEnRango.filter(item => !bookingIdsV2.has(`EXT_${item._id}`));
-
-        // Paso 2: descartar las que tienen gemela FUERA del rango. Ese
-        //         cobro pertenece a su fecha de pago y se contará en el
-        //         informe de ese periodo; contarlo aquí lo duplicaría
-        //         entre informes. Consulta en bloques de 50 ids.
-        if (candidatas.length) {
-          const idsPendientes = candidatas.map(it => `EXT_${it._id}`);
-          const conGemela = new Set();
-          for (let i = 0; i < idsPendientes.length; i += 50) {
-            const bloque = idsPendientes.slice(i, i + 50);
-            try {
-              const gemResult = await wixData.query(CMS_PAGOS_EXTERNOS)
-                .hasSome('bookingId', bloque)
-                .limit(500)
-                .find({ suppressAuth: true });
-              for (const g of (gemResult.items || [])) {
-                const bid = String(g.bookingId || '');
-                if (bid) conGemela.add(bid);
-              }
-            } catch (gemErr) {
-              console.warn(`${TAG} Error comprobando gemelas V2: ${gemErr.message}`);
-            }
-          }
-          if (conGemela.size) {
-            candidatas = candidatas.filter(it => !conGemela.has(`EXT_${it._id}`));
-          }
-        }
-
-        for (const cita of candidatas) {
+        let ventaBruta = 0, comisionTotal = 0;
+        const desglosePorServicio = {};
+        for (const cita of citasValidas) {
           const precio = Number(cita.totalPrice || 0);
           const catUpper = (cita.category || '').trim().toUpperCase();
           let pctComision = mapaComisiones[catUpper] !== undefined ? mapaComisiones[catUpper] : 0;
@@ -959,28 +480,23 @@ export const obtenerEstadisticas = webMethod(
             if (pctComision === 0 && comisionFallback > 0) pctComision = comisionFallback;
           }
           const comision = Math.round((precio * pctComision / 100) * 100) / 100;
+          ventaBruta += precio;
+          comisionTotal += comision;
           const nombreServicio = cita.modality || cita.category || 'Servicio externo';
-          acumularExterno(nombreServicio, precio, comision);
+          if (!desglosePorServicio[nombreServicio]) desglosePorServicio[nombreServicio] = { nombre: nombreServicio, count: 0, ventaBruta: 0, comision: 0 };
+          desglosePorServicio[nombreServicio].count++;
+          desglosePorServicio[nombreServicio].ventaBruta += precio;
+          desglosePorServicio[nombreServicio].comision += comision;
         }
 
-        console.log(`${TAG} Externos V1 (SvExternalRecords): ${citasEnRango.length} en rango, ${candidatas.length} sin gemela V2`);
-      } catch (extErr) { console.warn(`${TAG} Error externos V1: ${extErr.message}`); }
-
-      // ── Consolidación de las dos fuentes ──
-      externosResult = {
-        citas: extCitas,
-        ventaBruta: Math.round(extVentaBruta * 100) / 100,
-        comisionTotal: Math.round(extComisionTotal * 100) / 100,
-        desglose: Object.values(extDesglose)
-          .map(it => ({
-            nombre: it.nombre,
-            count: it.count,
-            ventaBruta: Math.round(it.ventaBruta * 100) / 100,
-            comision: Math.round(it.comision * 100) / 100
-          }))
-          .sort((a, b) => b.ventaBruta - a.ventaBruta)
-      };
-      console.log(`${TAG} Externos TOTAL: ${externosResult.citas} cobros, bruta=${externosResult.ventaBruta}€, comisión=${externosResult.comisionTotal}€`);
+        externosResult = {
+          citas: citasValidas.length,
+          ventaBruta: Math.round(ventaBruta * 100) / 100,
+          comisionTotal: Math.round(comisionTotal * 100) / 100,
+          desglose: Object.values(desglosePorServicio)
+        };
+        console.log(`${TAG} Externos: ${citasValidas.length} citas PAGADAS, bruta=${externosResult.ventaBruta}€, comisión=${externosResult.comisionTotal}€`);
+      } catch (extErr) { console.warn(`${TAG} Error externos: ${extErr.message}`); }
 
       // ══════════════════════════════════════════════════════════════
       // 5. PRODUCTOS
@@ -1051,35 +567,14 @@ export const obtenerEstadisticas = webMethod(
       }
 
       // ── Ingresos por día (cronológico) — con IVA + día semana + promedio ──
-      // v2.6.0: eje CONTINUO. Antes se construía solo con los días que
-      // tenían cobros, así que un día sin actividad desaparecía del eje.
-      // Ahora se recorre el rango completo y los días sin cobros valen 0.
-      // ingresosPorDia (el objeto de datos reales) NO se toca: el ranking
-      // y los promedios por día de semana siguen calculados solo sobre
-      // días con actividad.
-      const diasConDatos = Object.keys(ingresosPorDia).sort();
-      let diasOrdenados = diasConDatos;
-
-      if (fechaDesde && fechaHasta) {
-        const diasSet = new Set(diasConDatos);
-        let cursor = new Date(`${fechaDesde}T00:00:00.000Z`);
-        const finRango = new Date(`${fechaHasta}T00:00:00.000Z`);
-        let guardDias = 0;
-        while (cursor.getTime() <= finRango.getTime() && guardDias < 1100) {
-          diasSet.add(cursor.toISOString().split('T')[0]);
-          cursor = new Date(cursor.getTime() + 86400000);
-          guardDias++;
-        }
-        diasOrdenados = Array.from(diasSet).sort();
-      }
-
+      const diasOrdenados = Object.keys(ingresosPorDia).sort();
       const datosIngresosDia = {
         labels: diasOrdenados.map(d => { const f = new Date(d); return `${f.getDate()}/${f.getMonth() + 1}`; }),
-        valores: diasOrdenados.map(d => ingresosPorDia[d] || 0),
+        valores: diasOrdenados.map(d => ingresosPorDia[d]),
         diasSemana: diasOrdenados.map(d => DIAS_SEMANA[new Date(d).getDay()]),
         promediosDiaSemana: diasOrdenados.map(d => promedioPorDiaSemana[DIAS_SEMANA[new Date(d).getDay()]] || 0),
-        valoresBase: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d] || 0, vatRate).base),
-        valoresIva: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d] || 0, vatRate).cuota)
+        valoresBase: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d], vatRate).base),
+        valoresIva: diasOrdenados.map(d => desglosarIVA(ingresosPorDia[d], vatRate).cuota)
       };
 
       // ── Ingresos por día (ranking) — con IVA + día semana + promedio ──
@@ -1106,28 +601,7 @@ export const obtenerEstadisticas = webMethod(
       };
 
       // ── Método de pago (sin IVA) ──
-      // v2.6.1 — orden fijo: canales físicos primero, anomalías después.
-      const _labelsMetodo = [];
-      for (const c of CANALES_FISICOS) if (porMetodo[c]) _labelsMetodo.push(c);
-      for (const k of Object.keys(porMetodo)) if (!CANALES_FISICOS.includes(k)) _labelsMetodo.push(k);
-      const datosMetodoPago = {
-        labels: _labelsMetodo,
-        valores: _labelsMetodo.map(k => Math.round(porMetodo[k] * 100) / 100)
-      };
-
-      // v2.6.3 — recuento por botón pulsado, en orden fijo de presentación.
-      const ORDEN_BOTONES = ['Tarjeta', 'Efectivo', 'Bizum', 'Mixto', 'Canje'];
-      const _clavesBoton = ORDEN_BOTONES.filter(k => porBoton[k])
-        .concat(Object.keys(porBoton).filter(k => !ORDEN_BOTONES.includes(k)));
-      const datosBotonPago = _clavesBoton.map(k => ({
-        metodo: k,
-        n: porBoton[k].n,
-        importe: Math.round(porBoton[k].importe * 100) / 100
-      }));
-      const datosBotonTotales = {
-        n: datosBotonPago.reduce((a, b) => a + b.n, 0),
-        importe: Math.round(datosBotonPago.reduce((a, b) => a + b.importe, 0) * 100) / 100
-      };
+      const datosMetodoPago = { labels: Object.keys(porMetodo), valores: Object.values(porMetodo) };
 
       // ── Staff (sin IVA) ──
       const staffOrdenado = Object.entries(porStaff).sort((a, b) => b[1] - a[1]);
@@ -1264,7 +738,7 @@ export const obtenerEstadisticas = webMethod(
           }))
       };
 
-      console.log(`${TAG} OK: ${pagos.length} pagos, ventas=${totalVentas}€ (base=${ivaGlobal.base}€, IVA=${ivaGlobal.cuota}€ @${vatRate}%), propinas=${totalPropinas}€, ext=${externosResult.citas} PAGADAS/${externosResult.ventaBruta}€`);
+      console.log(`${TAG} OK: ${pagos.length} pagos, ventas=${totalVentas}€ (base=${ivaGlobal.base}€, IVA=${ivaGlobal.cuota}€ @${vatRate}%), propinas=${totalPropinas}€, ext=${externosResult.citas} PAGADAS/${externosResult.ventaBruta}€${excludeEfectivo ? ' [EWCM]' : ''}`);
 
       return {
         ok: true, hayDatos: true,
@@ -1281,9 +755,6 @@ export const obtenerEstadisticas = webMethod(
         tablaDesglose,
         porDiaSemana: datosDiaSemana,
         porMetodoPago: datosMetodoPago,
-        porBotonPago: datosBotonPago,               // v2.6.3
-        botonTotales: datosBotonTotales,            // v2.6.3
-        canjesBono,                                 // v2.6.3
         porStaff: datosStaff,
         extras: extrasData,
         propinas: propinasData,
