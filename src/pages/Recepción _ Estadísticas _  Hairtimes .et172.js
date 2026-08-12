@@ -9,22 +9,8 @@
 //   - Nuevo handler 'loadComparativa': recibe dos periodos, llama al backend en paralelo
 //   - Devuelve { type: 'comparativa', periodoA, periodoB } al widget
 //
-// v2.3: EWCM (Export Without Cash Mode)  — ❌ ELIMINADO EN v2.6
 // =====================================================
 
-// v2.6 (12 ago 2026): EWCM ELIMINADO.
-//   - Este page code dejaba pasar `excludeEfectivo` desde el widget
-//     hasta el backend en los tres handlers ('ready', 'load' y
-//     'loadComparativa'), permitiendo generar el informe sin los cobros
-//     en efectivo.
-//   - Se retira por incompatibilidad con Verifactu (obligación enero
-//     2027): el principio es registro íntegro de todas las operaciones,
-//     no exportación selectiva. Backend asociado: estadisticas.web.js
-//     v2.6.2, que ya ignora el parámetro aunque le llegue.
-//   - El widget HTML todavía pinta el interruptor: si el operador lo
-//     activa, este page code ya no lo reenvía y el informe sale
-//     completo. PENDIENTE retirar el interruptor del widget.
-//   - No se toca ningún otro handler ni el contrato postMessage.
 // =====================================================
 
 import { obtenerEstadisticas, obtenerMediaDiaSemanaAnio } from 'backend/estadisticas.web';
