@@ -1,169 +1,30 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  2.1.2
- * FECHA:    11 Agosto 2026
+ * VERSION:  1.5.0
+ * FECHA:    12 Agosto 2026
  *
  * ───────────────────────────────────────────────────────────────────────────
- * CAMBIOS v2.1.1 → v2.1.2 — FICHA TÉCNICA VERIFICADA CONTRA PRODUCCIÓN
+ * CAMBIOS v1.4.5 → v1.5.0 — FILTRO DE CORPUS POR PLANO (asesor/ayuda/asistente)
  * ───────────────────────────────────────────────────────────────────────────
  *
- *   `clientRecordsLogic.web.js` v1.0.1 está en el repo de HAIR-TIMES, no en el
- *   de KALÓNICE: la Recepción con ficha técnica en modal y el CRM migrado
- *   están de momento solo allí (bitácora 11-Ago-2026). Leído y comparado, la
- *   normalización de v2.1.1 se desviaba en tres puntos. Ahora es copia literal
- *   de su `leerAnotaciones`:
+ *   AKIRA pasa a tener planos de utilidad. El plano activo lo fija el alignment
+ *   publicado (AkiraAlignment.modo). Cada documento de AkiraDocuments declara a
+ *   qué plano pertenece (AkiraDocuments.modo). Los documentos de conocimiento
+ *   se filtran por ese plano ANTES de construir el prompt, para que el modo
+ *   AYUDA lea solo el corpus "cómo se usa KAMISUITE" y no contamine al ASESOR.
  *
- *     · FECHA con fallback: recordDate || _createdDate. Sin él, una fila sin
- *       recordDate informado quedaba fuera de todo rango y desaparecía.
- *     · TIPO y ORIGEN normalizados a mayúsculas con sus defectos
- *       (GENERAL / RECEPCION), para no fabricar categorías fantasma en el
- *       desglose por una diferencia de caja.
- *     · Filas SIN TEXTO descartadas: una anotación vacía no es una anotación,
- *       y contarla inflaría el total.
+ *   REGLA VACÍO = ASESOR. El campo 'modo' existe en el CMS pero los documentos
+ *   y el alignment actuales lo tienen vacío. Un 'modo' vacío (en el doc o en el
+ *   alignment) se trata como 'asesor', para no dejar sin corpus lo ya existente.
  *
- * ───────────────────────────────────────────────────────────────────────────
- * CAMBIOS v2.1.0 → v2.1.1 — AVISO DE `source` EN FICHA TÉCNICA
- * ───────────────────────────────────────────────────────────────────────────
- *
- *   Matiz de la bitácora del 11-Ago-2026 que faltaba trasladar al modelo: la
- *   ficha de un cliente es UNA SOLA. Se leen todas sus filas sin filtrar por
- *   `source`, porque lo que anota Recepción PRO se ve en el CRM y al revés;
- *   `source` (RECEPCION / CRM / CLIENTE) registra PROCEDENCIA, no segrega.
- *   El código ya lo hacía; ahora el aviso del modo lo dice, para que AKIRA no
- *   sugiera que hay fichas distintas según la pantalla desde la que se anotó.
- *
- * ───────────────────────────────────────────────────────────────────────────
- * CAMBIOS v2.0.0 → v2.1.0 — FICHA TÉCNICA Y CUIDADO Y SALUD
- * ───────────────────────────────────────────────────────────────────────────
- *
- *   CORRECCIÓN DE UN ERROR DE v2.0.0. Aquella versión dejó fuera la ficha
- *   técnica clasificándola como dato de salud. Era falso, y además el alcance
- *   del producto no lo decide este archivo.
- *
- *   · modo `ficha`  → KamisuiteClientRecords. La FICHA TÉCNICA: fórmula de
- *     tinte, código de color, productos y tiempos aplicados, notas de
- *     trabajo. Documentación de OFICIO para repetir o corregir el trabajo en
- *     la próxima visita, como la ficha de un taller. Filtro de `active` en
- *     memoria (una fila sin el campo informado no debe desaparecer), tipo
- *     filtrable por `group`, y el texto se sirve ENTERO: es la fórmula.
- *
- *   · modo `care`   → ClientCareProfile + CareVisitRecord. Módulo DISTINTO:
- *     expediente evolutivo por zonas (hair, nails, lashes, skin) con
- *     diagnóstico, nivel de daño, productos recomendados y fotos. `diagnosis`
- *     es JSON serializado y se parsea con el mismo criterio que consoleIA
- *     v3.5.8, que es quien lo servía en AKIRA V1.
- *
- *   Campos verificados en careProfileLogic v1.3.0, hairAssessmentLogic y
- *   salonPhotoLogic (los backends que escriben esas filas) y, para la ficha
- *   técnica, en el contrato documentado de clientRecordsLogic v1.0.1.
- *
- * ───────────────────────────────────────────────────────────────────────────
- * CAMBIOS v1.5.0 → v2.0.0 — ORÁCULO: ÍNDICE + FICHA BAJO DEMANDA + 5 MOTORES
- * ───────────────────────────────────────────────────────────────────────────
- *
- *   PROBLEMA QUE RESUELVE. Hasta v1.5.0 cada fuente abierta metía en el prompt
- *   su descripción Y su lista de campos, en TODAS las preguntas. Ese coste se
- *   paga siempre, aunque nadie pregunte por esa fuente, y —más grave— degrada
- *   la elección: con 40 descripciones parecidas delante, el modelo se equivoca
- *   de fuente incluso en preguntas que antes acertaba.
- *
- *   ESTRATEGIA (sin vectores, determinista y auditable):
- *
- *   1) ÍNDICE DE UNA LÍNEA. El prompt ya no lleva campos. Lleva un índice
- *      agrupado por DOMINIO con una frase por fuente y sus ALIAS (las palabras
- *      que dice de verdad la gente del salón: "packs", "fichar", "cubito"…).
- *      El léxico declarado sustituye al embedding: mismo efecto de acercar
- *      "bono" y "pack", pero explícito y sin fallos silenciosos.
- *
- *   2) FICHA BAJO DEMANDA. Nueva herramienta `describir_fuente`: devuelve
- *      campos, eje de fecha, ejes de agrupación y avisos SOLO de la fuente que
- *      el modelo va a usar. El coste pasa a ser proporcional al uso, no al
- *      catálogo. Mismo patrón que ya usaban AkiraDocuments.
- *
- *   3) CATÁLOGO EN CMS. El índice se lee de la colección `AkiraSources` si
- *      existe; el registro embebido queda como FALLBACK y como semilla. Añadir
- *      una fuente = una fila. Activar/desactivar por salón = un booleano. Si
- *      la colección no existe o está vacía, AKIRA funciona igual con el
- *      registro embebido: nunca se queda sin fuentes.
- *
- *   MOTORES TRANSACCIONALES NUEVOS (el descubrimiento es barato, pero leer
- *   cada dominio sigue necesitando su lógica):
- *
- *   · bonos       → KamisuiteVouchers + KamisuiteVoucherRedemptions +
- *                   KamisuitePrimeMemberships + KamisuitePromoCards.
- *                   Mide el PASIVO: servicio cobrado y aún debido (bonos
- *                   emitidos sin consumir). Ninguna pantalla lo cuenta hoy.
- *   · almacen     → KamisuiteStockMoves. Consumo real de producto, no la foto
- *                   de stock (esa ya está como fuente de configuración).
- *   · fichajes    → TimeClockRecords. Horas REALES presentes, frente al
- *                   horario configurado que ya usaba productividad.
- *   · caja        → CashRegister + CashMovements. Arqueos y descuadres.
- *   · facturacion → Invoices. Documentos emitidos, base/cuota, rectificativas.
- *                   Trae ya los campos Verifactu (aeatStatus, currentHash):
- *                   hoy informan 'no_aplica' y el día que se active la
- *                   obligación AKIRA responde sobre remisión a la AEAT sin
- *                   tocar este archivo.
- *
- *   FUENTES DE CONFIGURACIÓN NUEVAS: productosConfig (política comercial de
- *   bonos/PRIME/tarjetas) y campanas (campañas promocionales).
- *
- *   NO INCLUIDO DELIBERADAMENTE. Ficha técnica de clientes (ClientCareProfile,
- *   CareVisitRecord, KamisuiteClientRecords): son datos personales de salud
- *   capilar. Abrirlos a un consultor conversacional cuyo log queda registrado
- *   en AkiraLog es una decisión de LOPD, no de arquitectura, y requiere fijar
- *   antes quién consulta y qué se registra. Ver §NOTA LOPD al final del
- *   registro de fuentes.
- *
- * ───────────────────────────────────────────────────────────────────────────
- * CAMBIOS v1.4.5 → v1.5.0 — MODO EXTERNOS (bruto + comisión + histórico)
- * ───────────────────────────────────────────────────────────────────────────
- *
- *   PROBLEMA. AKIRA no daba ningún dato de servicios externos. El motor solo
- *   conocía KamisuiteReservations y PaymentReservations. Los cobros externos
- *   NO están en PaymentReservations: van a PagoreservasExternos (prefijo
- *   EXT_<reservaId>), colección separada por asepsia jurídica desde
- *   recepcionProLogic v1.0.37. Ninguna consulta llegaba ahí, así que "cuánto
- *   facturó EMY" devolvía cero o nada.
- *
- *   NUEVO MODO `externos` en consultar_datos_salon:
- *
- *   · FUENTE V2 — PagoreservasExternos, filtrada por fechaPago (mismo criterio
- *     que el modo cobros). Campos verificados: bookingId, descripcion,
- *     fechaPago, fechaReserva, importeTotal, nombreCliente, staff, tipoPago.
- *     NO tiene contactId ni desglosemetodopago.
- *
- *   · HISTÓRICO V1 — SvExternalRecords (status PAGADO, campo `date`), la
- *     colección de la época V1 que rellenaba externosLogic. Se incluyen SOLO
- *     las filas que no tienen gemela en PagoreservasExternos
- *     (bookingId = 'EXT_' + _id): desde externosLogic v1.1.3 (mar-2026) el
- *     cobro se escribía en AMBAS, y contarlas dos veces duplicaría la cifra.
- *     Así AKIRA abarca todo el histórico de externos sin inflarlo.
- *     Las filas legacy no llevan profesional (la colección no tiene campo
- *     staff): se marcan con origen 'historico' y no se les puede atribuir
- *     empleado.
- *
- *   · COMISIÓN. Se devuelve SIEMPRE junto al bruto, porque el ingreso real del
- *     salón en un servicio externo es la comisión, no la venta.
- *       - V2: cruce POR EMPLEADO, replicado literalmente de
- *         cierreExternosLogic v1.1.0 (el backend del Informe del día):
- *         ExternalServices.staffResourceId → StaffConfig.wixResourceId →
- *         StaffConfig.displayName, contra PagoreservasExternos.staff.
- *         Fallback compat por contactPerson. SIN fallback global.
- *       - Histórico: cruce por nombre de servicio (category contra
- *         ExternalServices.serviceName, con partes '+' y fallback al primer
- *         % > 0), replicado de estadisticas.web.js v2.5.3, que es como se
- *         calcularon siempre esas filas.
- *     Misma cifra que el Informe del día y que Estadísticas v2.6.0.
- *
- *   · AGREGACIÓN. Reutiliza claveGrupo (dia, mes, diaSemana, staff, tipoPago,
- *     cliente) y añade el eje `servicio`. Cada grupo trae bruto Y comisión.
- *
- *   NOTA. El modo `conversion` sigue cruzando reservas contra
- *   PaymentReservations por KRI_<id>. Las citas externas de
- *   KamisuiteReservations no casan ahí (su pago es EXT_ en la otra colección)
- *   y por tanto aparecen como reservadas y no cobradas. NO se toca en esta
- *   versión: requiere decisión de producto.
+ *   OJO — dos 'modo' distintos que NO deben confundirse:
+ *     · PLANO de utilidad (este cambio): asesor | ayuda | asistente. Vive en
+ *       AkiraAlignment.modo / AkiraDocuments.modo. Enruta el corpus.
+ *     · MODO transaccional de la herramienta de datos: reservas | cobros |
+ *       conversion. Vive en los filtros de la tool. Sin cambios.
+ *   Ni KamisuiteReservations ni PaymentReservations necesitan cambios. No se
+ *   crea ningún campo CMS: 'modo' ya existe en AkiraAlignment y AkiraDocuments.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.4.4 → v1.4.5 — FIX: CATEGORIZAR HISTÓRICO POR KEYWORD, NO CATÁLOGO
@@ -474,7 +335,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '2.1.2';
+const VERSION = '1.5.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -501,40 +362,8 @@ const C_SALON     = 'SalonConfig';
 const C_STAFF     = 'StaffConfig';
 const C_CATALOGO  = 'ServiceCatalog';   // v1.4.2 — mapa label→group para conteo por servicio
 
-// v1.5.0 — Circuito de externos. Dos ledgers separados por asepsia jurídica.
-const C_COBROS_EXT   = 'PagoreservasExternos'; // cobros externos V2 (EXT_<reservaId>)
-const C_EXT_LEGACY   = 'SvExternalRecords';    // registros externos V1 (histórico)
-const C_EXT_SERVICES = 'ExternalServices';     // catálogo de comisiones
-
-// v2.0.0 — Dominios nuevos. Nombres verificados contra los backends que los
-// escriben (especialesVentaLogic, stockLogic, timeClockLogic,
-// cashRegisterLogic, facturacionSalonLogic).
-const C_VOUCHERS     = 'KamisuiteVouchers';
-const C_REDEMPTIONS  = 'KamisuiteVoucherRedemptions';
-const C_PRIME        = 'KamisuitePrimeMemberships';
-const C_PROMOCARDS   = 'KamisuitePromoCards';
-const C_CAMPANAS     = 'KamisuitePromoCampaigns';
-const C_PROD_CONFIG  = 'KamisuiteProductsConfig';
-const C_STOCK_MOVES  = 'KamisuiteStockMoves';
-const C_WAREHOUSE    = 'KamisuiteWarehouse';
-const C_TIMECLOCK    = 'TimeClockRecords';
-const C_CASH_REG     = 'CashRegister';
-const C_CASH_MOV     = 'CashMovements';
-const C_INVOICES     = 'Invoices';
-const C_SOURCES      = 'AkiraSources';         // índice de fuentes (CMS-first)
-
-// v2.1.0 — Ficha técnica y expediente de cuidado.
-// KamisuiteClientRecords: campos según la bitácora del 10-Ago-2026 y el
-// contrato de clientRecordsLogic v1.0.1 / fichaClienteLogic v1.9.13.
-// Care*: campos verificados en careProfileLogic v1.3.0, hairAssessmentLogic
-// y salonPhotoLogic (los tres backends que escriben esas filas).
-const C_CLIENT_RECORDS = 'KamisuiteClientRecords';
-const C_CARE_PROFILE   = 'ClientCareProfile';
-const C_CARE_VISIT     = 'CareVisitRecord';
-
 // ── Constantes de dominio (verificadas en producción) ──
 const PREFIJO_PAGO     = 'KRI_';       // PaymentReservations.bookingId = KRI_<reservaId>
-const PREFIJO_PAGO_EXT = 'EXT_';       // PagoreservasExternos.bookingId = EXT_<reservaId>
 const STATUS_CANCELADA = 'CANCELADA';  // filtro canónico: .ne('status','CANCELADA')
 const FAMILY_BLOQUEO   = 'BLOQUEO';    // no es actividad comercial
 // Techo de filas por consulta. Hair-Times hace ~308 cobros/mes → ~3.700/año.
@@ -1243,1019 +1072,16 @@ async function consultarConversion(f) {
   return res;
 }
 
-// ── MODO 4: EXTERNOS (v1.5.0) ──────────────────────────────────────────────
-//
-// Los servicios externos NO están en PaymentReservations. Viven en su propio
-// ledger, PagoreservasExternos, y antes de la migración en SvExternalRecords.
-// Este modo unifica ambos sin duplicar y devuelve bruto Y comisión.
-//
-// El ingreso del salón en un externo es la COMISIÓN. La venta bruta es del
-// profesional externo. Por eso nunca se suma al modo cobros: se consulta aparte.
-
-/** Mapa de comisiones. Se cachea con el mismo TTL que el mapa de catálogo. */
-let _mapaComExt = null;
-let _mapaComExtTs = 0;
-
-async function _getMapasComisionExterna() {
-  const ahora = Date.now();
-  if (_mapaComExt && (ahora - _mapaComExtTs) < _MAPA_TTL_MS) return _mapaComExt;
-
-  // porEmpleado: displayName(UPPER) → %  (ruta V2, patrón cierreExternosLogic v1.1.0)
-  // porServicio: serviceName(UPPER) → %  (ruta histórica, patrón estadisticas v2.5.3)
-  const mapas = { porEmpleado: {}, porServicio: {}, fallback: 0 };
-
-  try {
-    const res = await wixData.query(C_EXT_SERVICES)
-      .eq('activeStatus', true)
-      .limit(100)
-      .find(AUTH);
-
-    const catalogo = res.items || [];
-
-    // Puente staffResourceId → displayName con una sola query a StaffConfig.
-    const resourceIds = [];
-    for (const it of catalogo) {
-      const rid = it.staffResourceId;
-      if (typeof rid === 'string' && rid.length > 0) resourceIds.push(rid);
-    }
-
-    let displayNamePorResourceId = {};
-    if (resourceIds.length) {
-      try {
-        const st = await wixData.query(C_STAFF)
-          .hasSome('wixResourceId', resourceIds)
-          .limit(100)
-          .find(AUTH);
-        for (const s of (st.items || [])) {
-          const rid = s.wixResourceId;
-          if (typeof rid === 'string' && rid.length > 0) {
-            const dn = s.displayName || s.canonicalName || '';
-            if (dn) displayNamePorResourceId[rid] = dn;
-          }
-        }
-      } catch (eSt) {
-        console.warn(`${TAG} _getMapasComisionExterna StaffConfig:`, eSt.message);
-      }
-    }
-
-    for (const it of catalogo) {
-      const pct = Number(it.commissionPercentage || 0);
-
-      // Ruta V2 — por empleado.
-      const rid = it.staffResourceId;
-      const displayName = (typeof rid === 'string' && rid.length > 0)
-        ? (displayNamePorResourceId[rid] || '')
-        : '';
-      if (displayName) {
-        const k = displayName.trim().toUpperCase();
-        if (k) mapas.porEmpleado[k] = pct;
-      } else {
-        const contact = String(it.contactPerson || '').trim().toUpperCase();
-        if (contact) mapas.porEmpleado[contact] = pct;
-      }
-
-      // Ruta histórica — por nombre de servicio.
-      const svc = String(it.serviceName || '').trim().toUpperCase();
-      if (svc) mapas.porServicio[svc] = pct;
-      if (mapas.fallback === 0 && pct > 0) mapas.fallback = pct;
-    }
-  } catch (e) {
-    console.warn(`${TAG} _getMapasComisionExterna fallo:`, e.message);
-  }
-
-  _mapaComExt = mapas;
-  _mapaComExtTs = ahora;
-  return mapas;
-}
-
-/**
- * Nombre del servicio del primer token de `descripcion`.
- * Formato que escribe marcarPagadoReserva: "Manicura (25€), Pedicura (45€)".
- * Copia literal del helper de cierreExternosLogic v1.1.0.
- */
-function _nombreServicioExterno(descripcion) {
-  const primerToken = String(descripcion || '').split(',')[0].trim();
-  if (!primerToken) return '';
-  const idxParen = primerToken.lastIndexOf('(');
-  return idxParen > 0 ? primerToken.slice(0, idxParen).trim() : primerToken;
-}
-
-/** Normaliza una fila de PagoreservasExternos (ledger V2). */
-function normalizarCobroExterno(p) {
-  const bid = p.bookingId || '';
-  return {
-    id: p._id,
-    bookingId: bid,
-    reservaId: bid.indexOf(PREFIJO_PAGO_EXT) === 0 ? bid.substring(PREFIJO_PAGO_EXT.length) : '',
-    fechaPago: fechaISOenMadrid(p.fechaPago),
-    dowPago: dowMadrid(p.fechaPago),
-    fechaReserva: fechaISOenMadrid(p.fechaReserva),
-    importe: Number(p.importeTotal) || 0,
-    tipoPago: p.tipoPago || '',
-    staff: p.staff || '',
-    descripcion: p.descripcion || '',
-    servicio: _nombreServicioExterno(p.descripcion) || 'Servicio externo',
-    cliente: p.nombreCliente || '',
-    origen: 'v2',
-    comision: 0
-  };
-}
-
-/**
- * Normaliza una fila de SvExternalRecords (histórico V1).
- * Campos verificados en externosLogic v1.1.5: clientName, category, modality,
- * totalPrice, date, status, contactId. NO tiene campo de profesional.
- */
-function normalizarExternoLegacy(r) {
-  return {
-    id: r._id,
-    bookingId: `${PREFIJO_PAGO_EXT}${r._id}`,
-    reservaId: r._id,
-    fechaPago: fechaISOenMadrid(r.date),
-    dowPago: dowMadrid(r.date),
-    fechaReserva: fechaISOenMadrid(r.date),
-    importe: Number(r.totalPrice) || 0,
-    tipoPago: '',
-    staff: '',
-    descripcion: r.modality || r.category || '',
-    servicio: r.modality || r.category || 'Servicio externo',
-    categoria: r.category || '',
-    cliente: r.clientName || '',
-    contactId: r.contactId || '',
-    origen: 'historico',
-    comision: 0
-  };
-}
-
-/** Agregación propia: bruto Y comisión en el total y en cada grupo. */
-function _agregarExternos(filas, agruparPor) {
-  const bruto = filas.reduce((s, r) => s + (Number(r.importe) || 0), 0);
-  const comi = filas.reduce((s, r) => s + (Number(r.comision) || 0), 0);
-  const count = filas.length;
-
-  const base = {
-    numRegistros: count,
-    ventaBrutaExterna: round2(bruto),
-    comisionSalon: round2(comi),
-    // importeTotal se mantiene por coherencia con el resto de modos: es el
-    // bruto. El ingreso del salón es comisionSalon.
-    importeTotal: round2(bruto),
-    ticketMedio: count > 0 ? round2(bruto / count) : 0
-  };
-  if (!agruparPor || agruparPor === 'ninguno') return base;
-
-  const mapa = {};
-  for (const r of filas) {
-    const k = agruparPor === 'servicio'
-      ? (r.servicio || '(sin servicio)')
-      : claveGrupo(r, agruparPor);
-    if (k === null) continue;
-    if (!mapa[k]) mapa[k] = { grupo: k, numRegistros: 0, bruto: 0, comision: 0 };
-    mapa[k].numRegistros++;
-    mapa[k].bruto += Number(r.importe) || 0;
-    mapa[k].comision += Number(r.comision) || 0;
-  }
-  base.desglose = Object.values(mapa)
-    .map(g => ({
-      grupo: g.grupo,
-      numRegistros: g.numRegistros,
-      ventaBrutaExterna: round2(g.bruto),
-      comisionSalon: round2(g.comision),
-      importeTotal: round2(g.bruto),
-      ticketMedio: g.numRegistros > 0 ? round2(g.bruto / g.numRegistros) : 0
-    }))
-    .sort((a, b) => b.ventaBrutaExterna - a.ventaBrutaExterna);
-  return base;
-}
-
-async function consultarExternos(f) {
-  const mapas = await _getMapasComisionExterna();
-
-  // ── Ledger V2: PagoreservasExternos por fechaPago ──
-  let filasV2 = [];
-  let truncadoV2 = false;
-  try {
-    let qv2 = wixData.query(C_COBROS_EXT);
-    if (f.desde) qv2 = qv2.ge('fechaPago', new Date(`${f.desde}T00:00:00.000Z`));
-    if (f.hasta) qv2 = qv2.le('fechaPago', new Date(`${f.hasta}T23:59:59.999Z`));
-    qv2 = qv2.ascending('fechaPago');
-
-    const rawV2 = await findAll(qv2, f.limite);
-    if (rawV2._truncado) truncadoV2 = true;
-
-    filasV2 = rawV2.map(normalizarCobroExterno);
-    if (f.desde) filasV2 = filasV2.filter(r => r.fechaPago >= f.desde);
-    if (f.hasta) filasV2 = filasV2.filter(r => r.fechaPago <= f.hasta);
-  } catch (eV2) {
-    // Salón sin circuito de externos: la colección puede no existir.
-    console.warn(`${TAG} consultarExternos ledger V2 no disponible:`, eV2.message);
-  }
-
-  // bookingIds vistos: sirven para no contar dos veces el histórico.
-  const bookingIdsV2 = {};
-  for (const r of filasV2) if (r.bookingId) bookingIdsV2[r.bookingId] = true;
-
-  for (const r of filasV2) {
-    const k = String(r.staff || '').trim().toUpperCase();
-    const pct = (k && mapas.porEmpleado[k] !== undefined) ? mapas.porEmpleado[k] : 0;
-    r.comision = round2(r.importe * pct / 100);
-  }
-
-  // ── Histórico V1: SvExternalRecords PAGADO por `date`, sin gemela en V2 ──
-  let filasV1 = [];
-  let truncadoV1 = false;
-  try {
-    let qv1 = wixData.query(C_EXT_LEGACY).eq('status', 'PAGADO');
-    if (f.desde) qv1 = qv1.ge('date', new Date(`${f.desde}T00:00:00.000Z`));
-    if (f.hasta) qv1 = qv1.le('date', new Date(`${f.hasta}T23:59:59.999Z`));
-    qv1 = qv1.ascending('date');
-
-    const rawV1 = await findAll(qv1, f.limite);
-    if (rawV1._truncado) truncadoV1 = true;
-
-    let candidatas = rawV1.map(normalizarExternoLegacy);
-    if (f.desde) candidatas = candidatas.filter(r => r.fechaPago >= f.desde);
-    if (f.hasta) candidatas = candidatas.filter(r => r.fechaPago <= f.hasta);
-
-    // Paso 1: fuera las que ya han entrado por el ledger V2 en este periodo.
-    candidatas = candidatas.filter(r => !bookingIdsV2[r.bookingId]);
-
-    // Paso 2: fuera las que tienen gemela en PagoreservasExternos aunque su
-    // cobro caiga fuera del periodo (si no, se contarían en dos informes).
-    if (candidatas.length) {
-      const conGemela = {};
-      const ids = candidatas.map(r => r.bookingId);
-      for (let i = 0; i < ids.length; i += 50) {
-        const bloque = ids.slice(i, i + 50);
-        try {
-          const gem = await wixData.query(C_COBROS_EXT)
-            .hasSome('bookingId', bloque)
-            .limit(500)
-            .find(AUTH);
-          for (const g of (gem.items || [])) {
-            const bid = String(g.bookingId || '');
-            if (bid) conGemela[bid] = true;
-          }
-        } catch (eGem) {
-          console.warn(`${TAG} consultarExternos gemelas:`, eGem.message);
-        }
-      }
-      candidatas = candidatas.filter(r => !conGemela[r.bookingId]);
-    }
-
-    for (const r of candidatas) {
-      const catUpper = String(r.categoria || '').trim().toUpperCase();
-      let pct = mapas.porServicio[catUpper] !== undefined ? mapas.porServicio[catUpper] : 0;
-      if (pct === 0) {
-        const partes = catUpper.split('+').map(p => p.trim());
-        for (const parte of partes) {
-          if (mapas.porServicio[parte] !== undefined) { pct = mapas.porServicio[parte]; break; }
-        }
-        if (pct === 0 && mapas.fallback > 0) pct = mapas.fallback;
-      }
-      r.comision = round2(r.importe * pct / 100);
-    }
-
-    filasV1 = candidatas;
-  } catch (eV1) {
-    // Un salón que nunca tuvo externos V1 no tiene la colección: no es error.
-    console.warn(`${TAG} consultarExternos histórico no disponible:`, eV1.message);
-  }
-
-  let filas = filasV2.concat(filasV1);
-  filas = aplicarFiltros(filas, f, 'dowPago');
-
-  const res = _agregarExternos(filas, f.agruparPor);
-
-  if (truncadoV2 || truncadoV1) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más registros de los que se pueden leer de una vez. Advierte al usuario de que las cifras son parciales y sugiérele acotar el periodo.';
-  }
-
-  res.registrosHistoricos = filasV1.length;
-  if (filasV1.length > 0) {
-    res.notaHistorico = 'Parte de los registros vienen del histórico anterior a la migración y no tienen profesional asignado: no se pueden desglosar por empleado.';
-  }
-  res.clientesUnicos = new Set(filas.map(r => r.cliente).filter(Boolean)).size;
-  res.muestra = filas.slice(0, 40).map(r => ({
-    fecha: r.fechaPago, servicio: r.servicio, staff: r.staff || '(histórico)',
-    cliente: r.cliente, ventaBruta: r.importe, comision: r.comision,
-    tipoPago: r.tipoPago, origen: r.origen
-  }));
-  return res;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MOTORES TRANSACCIONALES v2.0.0 — BONOS · ALMACÉN · FICHAJES · CAJA · FACTURAS
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Todos siguen el mismo contrato que los modos previos: query por rango,
-// recorte exacto por día de Madrid, aplicarFiltros, agregación, muestra.
-// Cada uno declara su EJE DE FECHA propio, porque cada dominio tiene el suyo.
-
-/** Rango [desde,hasta] en Date UTC, patrón idéntico al resto del archivo. */
-function _rangoUTC(f) {
-  return {
-    ini: f.desde ? new Date(`${f.desde}T00:00:00.000Z`) : null,
-    fin: f.hasta ? new Date(`${f.hasta}T23:59:59.999Z`) : null
-  };
-}
-
-// ── MODO: BONOS (fidelización) ─────────────────────────────────────────────
-//
-// El dato que ninguna pantalla da hoy: el PASIVO. Un bono vendido es servicio
-// cobrado y todavía DEBIDO. Mientras quedan usos, el salón tiene una deuda en
-// servicio. Se calcula prorrateando lo pagado por los usos que restan.
-async function consultarBonos(f) {
-  const { ini, fin } = _rangoUTC(f);
-  const hoyISO = fechaISOenMadrid(new Date());
-
-  // ── Bonos emitidos en el rango (issueDate) ──
-  let q = wixData.query(C_VOUCHERS);
-  if (ini) q = q.ge('issueDate', ini);
-  if (fin) q = q.le('issueDate', fin);
-  q = q.ascending('issueDate');
-
-  const raw = await findAll(q, f.limite);
-  let bonos = raw.map(b => {
-    const total = Number(b.totalUses) || 0;
-    const rest = Number(b.remainingUses) || 0;
-    const pagado = Number(b.paidPrice) || 0;
-    const expira = fechaISOenMadrid(b.expirationDate);
-    return {
-      id: b._id,
-      codigo: b.code || '',
-      cliente: b.clientName || '',
-      contactId: b.contactId || '',
-      servicio: b.serviceLabel || '',
-      fecha: fechaISOenMadrid(b.issueDate),
-      fechaPago: fechaISOenMadrid(b.issueDate),
-      dowPago: dowMadrid(b.issueDate),
-      expiracion: expira,
-      importe: pagado,
-      precioTarifa: Number(b.retailPrice) || 0,
-      usosTotales: total,
-      usosRestantes: rest,
-      usosConsumidos: Math.max(0, total - rest),
-      // Pasivo: parte proporcional de lo cobrado que aún no se ha prestado.
-      pasivo: total > 0 ? round2(pagado * rest / total) : 0,
-      caducado: !!(expira && expira < hoyISO),
-      status: b.status || '',
-      metodoPago: b.paymentMethod || '',
-      tipoPago: b.paymentMethod || '',
-      staff: '',
-      tipo: 'BONO'
-    };
-  });
-
-  if (f.desde) bonos = bonos.filter(r => r.fecha >= f.desde);
-  if (f.hasta) bonos = bonos.filter(r => r.fecha <= f.hasta);
-  bonos = aplicarFiltros(bonos, f, 'dowPago');
-
-  const res = agregar(bonos, 'importe', f.agruparPor);
-  if (raw._truncado) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más registros de los que se pueden leer de una vez. Advierte al usuario y sugiere acotar el periodo.';
-  }
-
-  res.bonosEmitidos = bonos.length;
-  res.importeCobradoBonos = round2(bonos.reduce((s, r) => s + r.importe, 0));
-  res.usosTotales = bonos.reduce((s, r) => s + r.usosTotales, 0);
-  res.usosConsumidos = bonos.reduce((s, r) => s + r.usosConsumidos, 0);
-  res.usosPendientes = bonos.reduce((s, r) => s + r.usosRestantes, 0);
-  res.tasaConsumoPct = res.usosTotales > 0
-    ? round2((res.usosConsumidos / res.usosTotales) * 100) : 0;
-  res.pasivoPendiente = round2(bonos.reduce((s, r) => s + r.pasivo, 0));
-  res.explicacionPasivo = 'pasivoPendiente = servicio ya cobrado y todavía NO prestado (parte proporcional de los bonos con usos restantes). Es una deuda en servicio, no un ingreso disponible.';
-  res.caducadosConSaldo = bonos.filter(r => r.caducado && r.usosRestantes > 0).length;
-  res.importeCaducadoSinConsumir = round2(
-    bonos.filter(r => r.caducado && r.usosRestantes > 0).reduce((s, r) => s + r.pasivo, 0)
-  );
-
-  // ── Canjes del rango (redeemDate). Miden actividad, no emisión. ──
-  try {
-    let qr = wixData.query(C_REDEMPTIONS);
-    if (ini) qr = qr.ge('redeemDate', ini);
-    if (fin) qr = qr.le('redeemDate', fin);
-    const rawR = await findAll(qr, f.limite);
-    const canjes = (rawR || []).filter(r => {
-      const d = fechaISOenMadrid(r.redeemDate);
-      if (f.desde && d < f.desde) return false;
-      if (f.hasta && d > f.hasta) return false;
-      return true;
-    });
-    res.canjesEnPeriodo = canjes.length;
-    res.ahorroClientesPorCanjes = round2(
-      canjes.reduce((s, r) => s + (Number(r.amountSaved) || 0), 0)
-    );
-    res.notaCanjes = 'ahorroClientesPorCanjes es el valor de tarifa consumido con bonos en el periodo: NO es caja nueva, ese dinero se cobró al emitir el bono.';
-  } catch (eR) {
-    console.warn(`${TAG} consultarBonos canjes:`, eR.message);
-  }
-
-  // ── PRIME y tarjetas promocionales emitidas en el rango ──
-  try {
-    let qp = wixData.query(C_PRIME);
-    if (ini) qp = qp.ge('issueDate', ini);
-    if (fin) qp = qp.le('issueDate', fin);
-    const rawP = await findAll(qp, f.limite);
-    const primes = (rawP || []).filter(p => {
-      const d = fechaISOenMadrid(p.issueDate);
-      if (!d) return false;
-      if (f.desde && d < f.desde) return false;
-      if (f.hasta && d > f.hasta) return false;
-      return true;
-    });
-    res.membresiasPrimeEmitidas = primes.length;
-    res.importePrime = round2(primes.reduce((s, p) => s + (Number(p.paidPrice) || 0), 0));
-    res.primeActivasHoy = primes.filter(p => {
-      const e = fechaISOenMadrid(p.expirationDate);
-      return String(p.status || '').toUpperCase() === 'ACTIVA' && (!e || e >= hoyISO);
-    }).length;
-  } catch (eP) {
-    console.warn(`${TAG} consultarBonos prime:`, eP.message);
-  }
-
-  try {
-    let qc = wixData.query(C_PROMOCARDS);
-    if (ini) qc = qc.ge('issueDate', ini);
-    if (fin) qc = qc.le('issueDate', fin);
-    const rawC = await findAll(qc, f.limite);
-    const cards = (rawC || []).filter(c => {
-      const d = fechaISOenMadrid(c.issueDate);
-      if (!d) return false;
-      if (f.desde && d < f.desde) return false;
-      if (f.hasta && d > f.hasta) return false;
-      return true;
-    });
-    res.tarjetasPromoEmitidas = cards.length;
-    res.importeTarjetasPromo = round2(cards.reduce((s, c) => s + (Number(c.paidPrice) || 0), 0));
-    res.tarjetasRegalo = cards.filter(c => c.isGift === true).length;
-  } catch (eC) {
-    console.warn(`${TAG} consultarBonos tarjetas:`, eC.message);
-  }
-
-  res.muestra = bonos.slice(0, 40).map(r => ({
-    fecha: r.fecha, codigo: r.codigo, cliente: r.cliente, servicio: r.servicio,
-    pagado: r.importe, usos: `${r.usosConsumidos}/${r.usosTotales}`,
-    expira: r.expiracion, status: r.status, pasivo: r.pasivo
-  }));
-  return res;
-}
-
-// ── MODO: ALMACÉN (consumo real) ───────────────────────────────────────────
-// La FOTO de stock es configuración (fuente `productos`). Esto es el LIBRO:
-// qué se movió, cuánto y quién. Eje de fecha: `date`.
-async function consultarAlmacen(f) {
-  const { ini, fin } = _rangoUTC(f);
-
-  let q = wixData.query(C_STOCK_MOVES);
-  if (ini) q = q.ge('date', ini);
-  if (fin) q = q.le('date', fin);
-  q = q.ascending('date');
-
-  const raw = await findAll(q, f.limite);
-  let filas = (raw || []).map(m => ({
-    id: m._id,
-    fecha: fechaISOenMadrid(m.date),
-    fechaPago: fechaISOenMadrid(m.date),
-    dow: dowMadrid(m.date),
-    dowPago: dowMadrid(m.date),
-    producto: m.productName || '',
-    servicio: m.productName || '',
-    tipoMovimiento: m.moveType || '',
-    motivo: m.reason || '',
-    unidades: Number(m.quantity) || 0,
-    staff: m.staffName || '',
-    staffName: m.staffName || '',
-    notas: m.notes || '',
-    importe: 0   // el coste se resuelve abajo contra el almacén
-  }));
-
-  if (f.desde) filas = filas.filter(r => r.fecha >= f.desde);
-  if (f.hasta) filas = filas.filter(r => r.fecha <= f.hasta);
-  filas = aplicarFiltros(filas, f, 'dow');
-
-  // Coste unitario desde KamisuiteWarehouse (type='producto' lleva unitCost).
-  const costes = {};
-  try {
-    const qw = wixData.query(C_WAREHOUSE).limit(500);
-    const rawW = await findAll(qw, 1000);
-    for (const p of (rawW || [])) {
-      const n = normalizarTexto(p.productName);
-      if (n && typeof p.unitCost === 'number') costes[n] = p.unitCost;
-    }
-  } catch (eW) {
-    console.warn(`${TAG} consultarAlmacen costes:`, eW.message);
-  }
-  for (const r of filas) {
-    const c = costes[normalizarTexto(r.producto)];
-    if (typeof c === 'number') r.importe = round2(r.unidades * c);
-  }
-
-  const res = agregar(filas, 'importe', f.agruparPor === 'servicio' ? 'servicio' : f.agruparPor);
-  if (raw._truncado) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más movimientos de los que se pueden leer de una vez. Advierte al usuario y sugiere acotar el periodo.';
-  }
-  res.movimientos = filas.length;
-  res.unidadesMovidas = filas.reduce((s, r) => s + r.unidades, 0);
-  res.costeTotalMovido = round2(filas.reduce((s, r) => s + r.importe, 0));
-  res.notaCoste = 'El coste sale del unitCost del almacén. Si un producto no lo tiene configurado, su coste cuenta como 0.';
-
-  const porTipo = {};
-  for (const r of filas) {
-    const k = r.tipoMovimiento || '(sin tipo)';
-    if (!porTipo[k]) porTipo[k] = { tipo: k, movimientos: 0, unidades: 0, coste: 0 };
-    porTipo[k].movimientos++;
-    porTipo[k].unidades += r.unidades;
-    porTipo[k].coste += r.importe;
-  }
-  res.porTipoMovimiento = Object.values(porTipo)
-    .map(t => ({ ...t, coste: round2(t.coste) }))
-    .sort((a, b) => b.unidades - a.unidades);
-
-  res.muestra = filas.slice(0, 40).map(r => ({
-    fecha: r.fecha, producto: r.producto, tipo: r.tipoMovimiento,
-    motivo: r.motivo, unidades: r.unidades, coste: r.importe, staff: r.staff
-  }));
-  return res;
-}
-
-// ── MODO: FICHAJES (presencia real) ────────────────────────────────────────
-// TimeClockRecords guarda EVENTOS (entrada/salida/pausa/vuelta), no jornadas.
-// Las horas se reconstruyen emparejando entrada→salida y restando pausas.
-// isVoided marca los anulados: fuera siempre.
-async function consultarFichajes(f) {
-  const { ini, fin } = _rangoUTC(f);
-
-  let q = wixData.query(C_TIMECLOCK);
-  if (ini) q = q.ge('timestamp', ini);
-  if (fin) q = q.le('timestamp', fin);
-  q = q.ascending('timestamp');
-
-  const raw = await findAll(q, f.limite);
-  let eventos = (raw || [])
-    .filter(e => e.isVoided !== true)
-    .map(e => ({
-      id: e._id,
-      staffId: e.staffId || '',
-      staff: e.staffName || '',
-      staffName: e.staffName || '',
-      tipo: e.eventType || '',
-      ts: e.timestamp ? new Date(e.timestamp).getTime() : 0,
-      fecha: e.dateIso || fechaISOenMadrid(e.timestamp),
-      dow: dowMadrid(e.timestamp),
-      dowPago: dowMadrid(e.timestamp),
-      autoClose: e.autoClose === true
-    }));
-
-  if (f.desde) eventos = eventos.filter(r => r.fecha >= f.desde);
-  if (f.hasta) eventos = eventos.filter(r => r.fecha <= f.hasta);
-  eventos = aplicarFiltros(eventos, f, 'dow');
-
-  // Reconstrucción de jornadas: una por empleado y día.
-  const jornadas = {};
-  const ordenados = eventos.slice().sort((a, b) => a.ts - b.ts);
-  for (const e of ordenados) {
-    const k = `${e.staffId || e.staff}|${e.fecha}`;
-    if (!jornadas[k]) {
-      jornadas[k] = {
-        staff: e.staff, staffName: e.staff, fecha: e.fecha, dow: e.dow, dowPago: e.dow,
-        _entrada: 0, _pausa: 0, minutos: 0, minutosPausa: 0,
-        cerrada: false, autoCerrada: false, importe: 0
-      };
-    }
-    const j = jornadas[k];
-    if (e.tipo === 'entrada') { j._entrada = e.ts; }
-    else if (e.tipo === 'salida') {
-      if (j._entrada) { j.minutos += Math.round((e.ts - j._entrada) / 60000); j._entrada = 0; j.cerrada = true; }
-      if (e.autoClose) j.autoCerrada = true;
-    }
-    else if (e.tipo === 'pausa') { j._pausa = e.ts; }
-    else if (e.tipo === 'vuelta') {
-      if (j._pausa) { j.minutosPausa += Math.round((e.ts - j._pausa) / 60000); j._pausa = 0; }
-    }
-  }
-
-  const filas = Object.values(jornadas).map(j => {
-    const netos = Math.max(0, j.minutos - j.minutosPausa);
-    return {
-      staff: j.staff, staffName: j.staffName, fecha: j.fecha, dow: j.dow, dowPago: j.dow,
-      minutosPresencia: netos,
-      horasPresencia: round2(netos / 60),
-      minutosPausa: j.minutosPausa,
-      jornadaCerrada: j.cerrada,
-      autoCerrada: j.autoCerrada,
-      importe: round2(netos / 60)   // agregable: horas
-    };
-  });
-
-  const res = agregar(filas, 'importe', f.agruparPor);
-  if (res.importeTotal != null) { res.horasTotales = res.importeTotal; delete res.importeTotal; }
-  if (res.ticketMedio != null) { res.mediaHorasPorJornada = res.ticketMedio; delete res.ticketMedio; }
-  if (Array.isArray(res.desglose)) {
-    res.desglose = res.desglose.map(g => ({
-      grupo: g.grupo, jornadas: g.numRegistros,
-      horas: g.importeTotal, mediaHorasPorJornada: g.ticketMedio
-    }));
-  }
-  if (raw._truncado) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más fichajes de los que se pueden leer de una vez. Advierte al usuario y sugiere acotar el periodo.';
-  }
-  res.jornadas = filas.length;
-  res.eventosLeidos = eventos.length;
-  res.jornadasSinCerrar = filas.filter(j => !j.jornadaCerrada).length;
-  res.jornadasAutoCerradas = filas.filter(j => j.autoCerrada).length;
-  res.notaFichajes = 'Las horas se reconstruyen emparejando entrada con salida y descontando pausas. Una jornada sin salida registrada cuenta 0 horas: por eso jornadasSinCerrar puede explicar un total bajo. Los fichajes anulados quedan excluidos.';
-  res.muestra = filas.slice(0, 40).map(j => ({
-    fecha: j.fecha, staff: j.staff, horas: j.horasPresencia,
-    pausaMin: j.minutosPausa, cerrada: j.jornadaCerrada, autoCerrada: j.autoCerrada
-  }));
-  return res;
-}
-
-// ── MODO: CAJA (arqueo) ────────────────────────────────────────────────────
-// CashRegister = una fila por día. Eje de fecha: registerDate.
-async function consultarCaja(f) {
-  const { ini, fin } = _rangoUTC(f);
-
-  let q = wixData.query(C_CASH_REG);
-  if (ini) q = q.ge('registerDate', ini);
-  if (fin) q = q.le('registerDate', fin);
-  q = q.ascending('registerDate');
-
-  const raw = await findAll(q, f.limite);
-  let filas = (raw || []).map(c => ({
-    id: c._id,
-    fecha: fechaISOenMadrid(c.registerDate),
-    fechaPago: fechaISOenMadrid(c.registerDate),
-    dow: dowMadrid(c.registerDate),
-    dowPago: dowMadrid(c.registerDate),
-    fondoInicial: Number(c.openingBalance) || 0,
-    cobrosEfectivo: Number(c.cashPaymentsTotal) || 0,
-    entradasManuales: Number(c.manualEntriesTotal) || 0,
-    salidasManuales: Number(c.manualExitsTotal) || 0,
-    retiradas: Number(c.withdrawalsTotal) || 0,
-    efectivoEsperado: Number(c.expectedCash) || 0,
-    efectivoContado: Number(c.countedCash) || 0,
-    descuadre: Number(c.difference) || 0,
-    notaDescuadre: c.differenceNote || '',
-    estado: c.status || '',
-    cerradaPor: c.closedBy || '',
-    staff: c.closedBy || '',
-    importe: Number(c.difference) || 0
-  }));
-
-  if (f.desde) filas = filas.filter(r => r.fecha >= f.desde);
-  if (f.hasta) filas = filas.filter(r => r.fecha <= f.hasta);
-  filas = aplicarFiltros(filas, f, 'dow');
-
-  const res = agregar(filas, 'importe', f.agruparPor);
-  if (res.importeTotal != null) { res.descuadreAcumulado = res.importeTotal; delete res.importeTotal; }
-  if (res.ticketMedio != null) delete res.ticketMedio;
-  if (raw._truncado) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más días de los que se pueden leer de una vez. Advierte al usuario y sugiere acotar el periodo.';
-  }
-
-  res.diasConCaja = filas.length;
-  res.diasCerrados = filas.filter(c => String(c.estado).toLowerCase() === 'closed').length;
-  res.diasAbiertos = filas.filter(c => String(c.estado).toLowerCase() === 'open').length;
-  res.cobrosEfectivoTotal = round2(filas.reduce((s, c) => s + c.cobrosEfectivo, 0));
-  res.retiradasTotal = round2(filas.reduce((s, c) => s + c.retiradas, 0));
-  res.diasConDescuadre = filas.filter(c => Math.abs(c.descuadre) > 0.009).length;
-  res.mayorDescuadre = filas.reduce((m, c) => Math.abs(c.descuadre) > Math.abs(m) ? c.descuadre : m, 0);
-  res.notaDescuadre = 'El descuadre solo tiene sentido en días CERRADOS con recuento hecho. Un día abierto o sin contar aparece con descuadre 0 sin que eso signifique que cuadra.';
-
-  res.muestra = filas.slice(0, 40).map(c => ({
-    fecha: c.fecha, fondoInicial: c.fondoInicial, efectivo: c.cobrosEfectivo,
-    esperado: c.efectivoEsperado, contado: c.efectivoContado,
-    descuadre: c.descuadre, estado: c.estado, cerradaPor: c.cerradaPor
-  }));
-  return res;
-}
-
-// ── MODO: FACTURACIÓN (documentos emitidos) ────────────────────────────────
-// Invoices: tickets y facturas con su desglose fiscal. Eje: issueDate.
-// Los campos Verifactu ya existen y hoy informan 'no_aplica'.
-async function consultarFacturacion(f) {
-  const { ini, fin } = _rangoUTC(f);
-
-  let q = wixData.query(C_INVOICES);
-  if (ini) q = q.ge('issueDate', ini);
-  if (fin) q = q.le('issueDate', fin);
-  q = q.ascending('issueDate');
-
-  const raw = await findAll(q, f.limite);
-  let filas = (raw || []).map(d => ({
-    id: d._id,
-    numero: d.invoiceNumber || '',
-    serie: d.seriesCode || '',
-    modo: d.modo || '',
-    fecha: fechaISOenMadrid(d.issueDate),
-    fechaPago: fechaISOenMadrid(d.issueDate),
-    dow: dowMadrid(d.issueDate),
-    dowPago: dowMadrid(d.issueDate),
-    cliente: d.clientName || '',
-    nifCliente: d.clientVatId || '',
-    concepto: d.concept || '',
-    base: Number(d.baseAmount) || 0,
-    tipoIva: Number(d.vatRate) || 0,
-    cuotaIva: Number(d.vatAmount) || 0,
-    importe: Number(d.totalAmount) || 0,
-    tipoPago: d.paymentMethod || '',
-    estado: d.status || '',
-    rectificaA: d.rectifiesInvoiceNumber || '',
-    aeatStatus: d.aeatStatus || '',
-    tieneHash: !!(d.currentHash && String(d.currentHash).length > 0),
-    staff: ''
-  }));
-
-  if (f.desde) filas = filas.filter(r => r.fecha >= f.desde);
-  if (f.hasta) filas = filas.filter(r => r.fecha <= f.hasta);
-  filas = aplicarFiltros(filas, f, 'dow');
-
-  const res = agregar(filas, 'importe', f.agruparPor);
-  if (raw._truncado) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más documentos de los que se pueden leer de una vez. Advierte al usuario y sugiere acotar el periodo.';
-  }
-
-  res.documentosEmitidos = filas.length;
-  res.baseImponibleTotal = round2(filas.reduce((s, d) => s + d.base, 0));
-  res.cuotaIvaTotal = round2(filas.reduce((s, d) => s + d.cuotaIva, 0));
-  res.totalFacturado = round2(filas.reduce((s, d) => s + d.importe, 0));
-  res.rectificativas = filas.filter(d => d.rectificaA).length;
-
-  const porModo = {};
-  for (const d of filas) {
-    const k = d.modo || '(sin tipo)';
-    if (!porModo[k]) porModo[k] = { tipo: k, documentos: 0, total: 0 };
-    porModo[k].documentos++;
-    porModo[k].total += d.importe;
-  }
-  res.porTipoDocumento = Object.values(porModo)
-    .map(t => ({ ...t, total: round2(t.total) }))
-    .sort((a, b) => b.total - a.total);
-
-  // Verifactu: informativo. Hoy 'no_aplica' en todas las filas.
-  const conHash = filas.filter(d => d.tieneHash).length;
-  res.verifactu = {
-    documentosConHuella: conHash,
-    documentosSinHuella: filas.length - conHash,
-    nota: conHash === 0
-      ? 'Verifactu todavía no está activo: ningún documento lleva huella ni ha sido remitido a la AEAT. Es lo esperado hoy.'
-      : 'Hay documentos con huella Verifactu generada.'
-  };
-
-  res.muestra = filas.slice(0, 40).map(d => ({
-    fecha: d.fecha, numero: d.numero, tipo: d.modo, cliente: d.cliente,
-    base: d.base, iva: d.cuotaIva, total: d.importe, estado: d.estado,
-    rectificaA: d.rectificaA
-  }));
-  return res;
-}
-
-// ── MODO: FICHA TÉCNICA (v2.1.0) ───────────────────────────────────────────
-//
-// KamisuiteClientRecords. Documentación de OFICIO del servicio: fórmulas de
-// tinte, códigos de color, productos y tiempos aplicados, notas de trabajo.
-// Sirve para repetir o corregir el trabajo en la próxima visita, igual que la
-// ficha de un taller. Modelo inmutable: una fila por anotación, nunca se
-// sobrescribe; retirar es active=false.
-//
-// El filtro de `active` va EN MEMORIA a propósito: una fila sin el campo
-// informado no debe desaparecer por un .eq(active,true). Mismo criterio que
-// clientRecordsLogic v1.0.1 y fichaClienteLogic v1.9.13.
-async function consultarFicha(f) {
-  const { ini, fin } = _rangoUTC(f);
-
-  let q = wixData.query(C_CLIENT_RECORDS);
-  if (ini) q = q.ge('recordDate', ini);
-  if (fin) q = q.le('recordDate', fin);
-  q = q.descending('recordDate');
-
-  const raw = await findAll(q, f.limite);
-
-  // Normalización COPIADA de clientRecordsLogic v1.0.1 (leerAnotaciones):
-  // fallback de fecha a _createdDate, tipo y origen en mayúsculas con sus
-  // defectos, y descarte de las filas sin texto.
-  const TIPO_DEFECTO_FICHA = 'GENERAL';
-  const ORIGEN_DEFECTO_FICHA = 'RECEPCION';
-
-  let filas = (raw || [])
-    .filter(r => r && r.active !== false)
-    .map(r => {
-      const fechaBase = r.recordDate || r._createdDate;
-      const tipo = String(r.recordType || '').toUpperCase() || TIPO_DEFECTO_FICHA;
-      return {
-        id: r._id,
-        fecha: fechaISOenMadrid(fechaBase),
-        fechaPago: fechaISOenMadrid(fechaBase),
-        dow: dowMadrid(fechaBase),
-        dowPago: dowMadrid(fechaBase),
-        tipo,
-        servicio: tipo,
-        texto: String(r.recordText || ''),
-        cliente: r.clientName || '',
-        contactId: r.contactId || '',
-        telefono: r.clientPhone || '',
-        autor: r.author || '',
-        staff: r.author || '',
-        staffName: r.author || '',
-        reservaId: r.bookingId || '',
-        procedencia: String(r.source || '').toUpperCase() || ORIGEN_DEFECTO_FICHA,
-        importe: 1   // agregable: cuenta anotaciones
-      };
-    })
-    .filter(r => r.texto);   // una anotación sin texto no es una anotación
-
-  if (f.desde) filas = filas.filter(r => r.fecha >= f.desde);
-  if (f.hasta) filas = filas.filter(r => r.fecha <= f.hasta);
-
-  // Filtro por tipo de anotación. Reutiliza `group` (COLOR/TRATAMIENTO/GENERAL).
-  if (f.group) {
-    const tipos = (Array.isArray(f.group) ? f.group : [f.group]).map(t => normalizarTexto(t));
-    filas = filas.filter(r => tipos.indexOf(normalizarTexto(r.tipo)) !== -1);
-  }
-  filas = aplicarFiltros(filas, f, 'dow');
-
-  const res = agregar(filas, 'importe', f.agruparPor);
-  if (res.importeTotal != null) { res.anotaciones = res.importeTotal; delete res.importeTotal; }
-  if (res.ticketMedio != null) delete res.ticketMedio;
-  if (Array.isArray(res.desglose)) {
-    res.desglose = res.desglose.map(g => ({ grupo: g.grupo, anotaciones: g.numRegistros }));
-  }
-  if (raw._truncado) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más anotaciones de las que se pueden leer de una vez. Advierte al usuario y sugiere acotar el periodo.';
-  }
-
-  const porTipo = {};
-  for (const r of filas) {
-    const k = r.tipo || '(sin tipo)';
-    porTipo[k] = (porTipo[k] || 0) + 1;
-  }
-  res.porTipo = Object.keys(porTipo)
-    .map(k => ({ tipo: k, anotaciones: porTipo[k] }))
-    .sort((a, b) => b.anotaciones - a.anotaciones);
-
-  const porOrigen = {};
-  for (const r of filas) {
-    const k = r.procedencia || '(sin origen)';
-    porOrigen[k] = (porOrigen[k] || 0) + 1;
-  }
-  res.porOrigen = Object.keys(porOrigen)
-    .map(k => ({ origen: k, anotaciones: porOrigen[k] }))
-    .sort((a, b) => b.anotaciones - a.anotaciones);
-
-  res.clientesConAnotaciones = new Set(
-    filas.map(r => r.contactId || r.cliente).filter(Boolean)
-  ).size;
-
-  // El texto es el valor de esta fuente: es la fórmula. Se sirve entero.
-  res.muestra = filas.slice(0, 40).map(r => ({
-    fecha: r.fecha, cliente: r.cliente, tipo: r.tipo,
-    texto: r.texto, autor: r.autor, origen: r.procedencia
-  }));
-  return res;
-}
-
-// ── MODO: CARE (Cuidado y Salud) ───────────────────────────────────────────
-//
-// ClientCareProfile (1 fila por cliente) + CareVisitRecord (1 por visita y
-// zona) + CareMedia (fotos). Módulo DISTINTO de la ficha técnica: aquí vive
-// el expediente evolutivo con diagnóstico por zonas y fotos antes/después.
-// `diagnosis` es JSON serializado; se parsea igual que en consoleIA v3.5.8.
-async function consultarCare(f) {
-  const { ini, fin } = _rangoUTC(f);
-
-  let q = wixData.query(C_CARE_VISIT);
-  if (ini) q = q.ge('visitDate', ini);
-  if (fin) q = q.le('visitDate', fin);
-  q = q.descending('visitDate');
-
-  const raw = await findAll(q, f.limite);
-
-  let filas = (raw || []).map(v => {
-    let diag = null;
-    if (v.diagnosis) {
-      try {
-        const d = typeof v.diagnosis === 'string' ? JSON.parse(v.diagnosis) : v.diagnosis;
-        diag = {
-          nivelDano: d.nivelDano,
-          problemas: d.problemas,
-          observaciones: typeof d.observaciones === 'string' ? d.observaciones.substring(0, 200) : d.observaciones,
-          recomendaciones: d.recomendacionesTratamiento,
-          productos: d.recomendacionesProductos
-        };
-      } catch (_) { /* diagnóstico no estructurado: se ignora */ }
-    }
-    return {
-      id: v._id,
-      fecha: fechaISOenMadrid(v.visitDate),
-      fechaPago: fechaISOenMadrid(v.visitDate),
-      dow: dowMadrid(v.visitDate),
-      dowPago: dowMadrid(v.visitDate),
-      contactId: v.contactId || '',
-      zona: v.zone || '',
-      servicio: v.zone || '',
-      diagnostico: diag,
-      nivelDano: diag && diag.nivelDano != null ? diag.nivelDano : null,
-      problemas: diag && diag.problemas ? diag.problemas : null,
-      productosRecomendados: v.productsRecommended || '',
-      reservaId: v.bookingId || '',
-      staff: v.staffId || '',
-      procedencia: v.source || '',
-      tieneFoto: !!(v.visitImage && String(v.visitImage).length > 0),
-      importe: 1   // agregable: cuenta visitas de cuidado
-    };
-  });
-
-  if (f.desde) filas = filas.filter(r => r.fecha >= f.desde);
-  if (f.hasta) filas = filas.filter(r => r.fecha <= f.hasta);
-
-  // Filtro por zona (hair / nails / lashes / skin) vía `group`.
-  if (f.group) {
-    const zonas = (Array.isArray(f.group) ? f.group : [f.group]).map(z => normalizarTexto(z));
-    filas = filas.filter(r => zonas.indexOf(normalizarTexto(r.zona)) !== -1);
-  }
-  filas = aplicarFiltros(filas, f, 'dow');
-
-  const res = agregar(filas, 'importe', f.agruparPor);
-  if (res.importeTotal != null) { res.visitasCuidado = res.importeTotal; delete res.importeTotal; }
-  if (res.ticketMedio != null) delete res.ticketMedio;
-  if (Array.isArray(res.desglose)) {
-    res.desglose = res.desglose.map(g => ({ grupo: g.grupo, visitas: g.numRegistros }));
-  }
-  if (raw._truncado) {
-    res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más visitas de cuidado de las que se pueden leer de una vez. Advierte al usuario y sugiere acotar el periodo.';
-  }
-
-  const porZona = {};
-  for (const r of filas) {
-    const k = r.zona || '(sin zona)';
-    porZona[k] = (porZona[k] || 0) + 1;
-  }
-  res.porZona = Object.keys(porZona)
-    .map(k => ({ zona: k, visitas: porZona[k] }))
-    .sort((a, b) => b.visitas - a.visitas);
-
-  const porDano = {};
-  for (const r of filas) {
-    if (r.nivelDano == null) continue;
-    const k = String(r.nivelDano);
-    porDano[k] = (porDano[k] || 0) + 1;
-  }
-  res.porNivelDano = Object.keys(porDano)
-    .map(k => ({ nivelDano: k, visitas: porDano[k] }))
-    .sort((a, b) => b.visitas - a.visitas);
-
-  res.clientesConExpediente = new Set(filas.map(r => r.contactId).filter(Boolean)).size;
-  res.visitasConFoto = filas.filter(r => r.tieneFoto).length;
-  res.visitasConDiagnostico = filas.filter(r => r.diagnostico).length;
-
-  // Notas del perfil base (una fila por cliente). Solo si se acota a un cliente.
-  if (f.cliente || f.contactId) {
-    try {
-      const ids = Array.from(new Set(filas.map(r => r.contactId).filter(Boolean))).slice(0, 50);
-      if (ids.length) {
-        const perf = await wixData.query(C_CARE_PROFILE)
-          .hasSome('contactId', ids)
-          .limit(50)
-          .find(AUTH);
-        res.perfiles = (perf.items || []).map(p => ({
-          contactId: p.contactId,
-          notas: p.notes || '',
-          seguimientoRequerido: p.followUpRequired === true
-        }));
-      }
-    } catch (eP) {
-      console.warn(`${TAG} consultarCare perfiles:`, eP.message);
-    }
-  }
-
-  res.muestra = filas.slice(0, 40).map(r => ({
-    fecha: r.fecha, zona: r.zona, nivelDano: r.nivelDano,
-    problemas: r.problemas, productosRecomendados: r.productosRecomendados,
-    origen: r.procedencia, tieneFoto: r.tieneFoto
-  }));
-  return res;
-}
-
 /** Router del motor. Único punto de entrada de la herramienta. */
 async function ejecutarConsulta(filtros) {
   const f = filtros || {};
   const modo = f.modo || 'reservas';
   const t0 = Date.now();
   let datos;
-  if (modo === 'cobros')            datos = await consultarCobros(f);
-  else if (modo === 'conversion')   datos = await consultarConversion(f);
-  else if (modo === 'servicios')    datos = await consultarServicios(f);
-  else if (modo === 'externos')     datos = await consultarExternos(f);
-  else if (modo === 'bonos')        datos = await consultarBonos(f);
-  else if (modo === 'almacen')      datos = await consultarAlmacen(f);
-  else if (modo === 'fichajes')     datos = await consultarFichajes(f);
-  else if (modo === 'caja')         datos = await consultarCaja(f);
-  else if (modo === 'facturacion')  datos = await consultarFacturacion(f);
-  else if (modo === 'ficha')        datos = await consultarFicha(f);
-  else if (modo === 'care')         datos = await consultarCare(f);
-  else                              datos = await consultarReservas(f);
+  if (modo === 'cobros')          datos = await consultarCobros(f);
+  else if (modo === 'conversion') datos = await consultarConversion(f);
+  else if (modo === 'servicios')  datos = await consultarServicios(f);
+  else                            datos = await consultarReservas(f);
   console.log(`${TAG} consulta modo=${modo} desde=${f.desde || '-'} hasta=${f.hasta || '-'} family=${f.family || '-'} group=${f.group || '-'} dow=[${(f.diasSemana || []).join(',')}] agrupa=${f.agruparPor || '-'} → ${Date.now() - t0}ms`);
   return { modo, filtrosAplicados: f, ...datos };
 }
@@ -2415,8 +1241,6 @@ const FUENTES_CONFIG = {
 
   servicios: {
     coleccion: 'ServiceCatalog',
-    dominio: 'COMERCIAL',
-    alias: ['servicio', 'servicios', 'precio', 'tarifa', 'catalogo', 'duracion', 'fases'],
     descripcion: 'Catálogo de servicios del salón: precio de tarifa, duración, familia, grupo, fases técnicas, complementos, variantes, bonos y descuentos promocionales configurados. Úsalo para saber a qué precio ESTÁ un servicio (tarifa), no cuánto se cobró (eso son los cobros).',
     filtroDefecto: { active: true },
     orden: 'order',
@@ -2434,8 +1258,6 @@ const FUENTES_CONFIG = {
 
   personal: {
     coleccion: 'StaffConfig',
-    dominio: 'PERSONAL',
-    alias: ['empleado', 'empleados', 'staff', 'profesional', 'horario', 'plantilla'],
     descripcion: 'Profesionales del salón: horario semanal de trabajo, horas semanales, porcentaje de comisión, si es personal externo, y nivel de acceso. Úsalo para saber cuándo trabaja alguien o cuál es su capacidad horaria.',
     filtroDefecto: { active: true },
     limite: 60,
@@ -2451,8 +1273,6 @@ const FUENTES_CONFIG = {
 
   salon: {
     coleccion: 'SalonConfig',
-    dominio: 'SALON',
-    alias: ['salon', 'iva', 'horario de apertura', 'datos fiscales', 'modulos'],
     descripcion: 'Configuración general del salón: nombre, IVA aplicable, horarios de apertura, módulos activos (tienda, fidelización, WhatsApp), datos fiscales y de contacto.',
     filaUnica: true,
     limite: 1,
@@ -2471,8 +1291,6 @@ const FUENTES_CONFIG = {
 
   productos: {
     coleccion: 'KamisuiteWarehouse',
-    dominio: 'ALMACEN',
-    alias: ['producto', 'productos', 'stock', 'inventario', 'almacen', 'existencias'],
     descripcion: 'Almacén de productos: nombre, tipo, coste unitario, cantidad en stock y stock mínimo. Úsalo para consultas de inventario, valor del almacén o productos bajo mínimos.',
     filtroDefecto: { active: true },
     orden: 'productName',
@@ -2484,8 +1302,6 @@ const FUENTES_CONFIG = {
 
   clientes: {
     fuenteApi: 'Wix Contacts (CRM)',
-    dominio: 'CLIENTES',
-    alias: ['cliente', 'clientes', 'telefono', 'email', 'contacto', 'ficha de contacto'],
     descripcion: 'Ficha de contacto de los clientes del salón: nombre completo, teléfono y email. Úsalo cuando pidan los datos de contacto de una persona ("dame el teléfono de X", "el email de Y"). SIEMPRE con `busqueda`: son cientos de contactos. Para el HISTORIAL de visitas o gasto de un cliente usa consultar_datos_salon con el filtro cliente, no esta fuente.',
     loader: _loaderClientes,
     requiereBusqueda: true,
@@ -2498,39 +1314,10 @@ const FUENTES_CONFIG = {
 
   externos: {
     coleccion: 'ExternalServices',
-    dominio: 'EXTERNOS',
-    alias: ['externo', 'externos', 'colaborador', 'comision', 'comisiones', 'uñas', 'estetica'],
     descripcion: 'Catálogo de servicios externos (los que presta personal no propio del salón) y el porcentaje de comisión que el salón retiene de cada uno.',
     filtroDefecto: { activeStatus: true },
     limite: 60,
     campos: ['serviceName', 'contactPerson', 'commissionPercentage'],
-    objetos: {},
-    sensibles: []
-  },
-
-  // ── v2.0.0 ──
-  productosConfig: {
-    coleccion: 'KamisuiteProductsConfig',
-    dominio: 'FIDELIZACION',
-    alias: ['politica de bonos', 'validez', 'caducidad', 'prime', 'configuracion de bonos'],
-    descripcion: 'Política comercial de bonos, tarjeta PRIME y tarjetas promocionales: meses de validez, precios y si los bonos exigen ser PRIME. Es la CONFIGURACIÓN, no las ventas.',
-    filaUnica: true,
-    limite: 1,
-    campos: [
-      'voucherValidityMonths', 'vouchersSkipPrime', 'primeAnnualPrice',
-      'primeDurationMonths', 'primeActive', 'vouchersActive', 'promoCardsActive'
-    ],
-    objetos: {},
-    sensibles: []
-  },
-
-  campanas: {
-    coleccion: 'KamisuitePromoCampaigns',
-    dominio: 'FIDELIZACION',
-    alias: ['campaña', 'campañas', 'promocion', 'promociones', 'tarjeta regalo', 'gift card'],
-    descripcion: 'Campañas promocionales configuradas: servicio al que aplican, precio de campaña, precio de mercado y fechas de vigencia. Para las tarjetas VENDIDAS usa el modo bonos.',
-    limite: 60,
-    campos: ['name', 'serviceLabel', 'serviceSetupUid', 'retailPrice', 'promoPrice', 'startDate', 'endDate', 'active'],
     objetos: {},
     sensibles: []
   }
@@ -2538,32 +1325,13 @@ const FUENTES_CONFIG = {
   // ── PARA AÑADIR UNA FUENTE NUEVA ──
   // Copiar el patrón de arriba. NADA MÁS que tocar: el input_schema, el
   // prompt del modelo y el router se generan solos desde este objeto.
-  // Desde v2.0.0, además, basta con dar de alta la fila en AkiraSources para
-  // publicarla o retirarla por salón sin desplegar.
   //
-  // ───────────────────────────────────────────────────────────────────────
-  // §FICHA TÉCNICA — QUÉ ES (corrección de Jal, 12-Ago-2026)
-  // ───────────────────────────────────────────────────────────────────────
-  // v2.0.0 dejó fuera KamisuiteClientRecords tratándola como dato de salud.
-  // Era FALSO y v2.1.0 lo corrige: la FICHA TÉCNICA tiene UN SOLO propósito,
-  // registrar la información TÉCNICA DEL SERVICIO —fórmula de tinte, código
-  // de color, productos y tiempos aplicados, notas de trabajo— para poder
-  // repetir o corregir el trabajo en la próxima visita. Es documentación de
-  // oficio, como la ficha de un taller. No es historial clínico ni requiere
-  // trato especial: está en modo `ficha`, sin recortes.
-  //
-  // Cuidado y Salud (ClientCareProfile / CareVisitRecord / CareMedia) es un
-  // MÓDULO DISTINTO, con su propio propósito: expediente evolutivo por zonas
-  // con diagnóstico y fotos. Está en modo `care`. No confundir ambos.
-  //
-  // AKIRA es una herramienta INTERNA del salón, con acceso restringido por
-  // accessLevel, que consulta la misma persona que ya tiene estos datos en
-  // pantalla. Preguntar a AKIRA no abre ningún canal que no estuviera ya
-  // abierto. AKIRA V1 (consoleIA, categoría 'cuidadoysalud') ya los servía.
-  //
-  // Diferidas hasta que Jal las pida:
-  //   ClientLopdSignatures · CommunicationLog · MarketingCampaigns
-  //   B2BProfiles · HairSalonServices · ChangeLogServices
+  // Diferidas hasta que Jal las pida (cada fuente abierta = más contexto que
+  // el modelo debe digerir, y peores respuestas si se abren todas de golpe):
+  //   Invoices · InvoiceCounters · KamisuiteVouchers · KamisuitePrimeMemberships
+  //   KamisuitePromoCards · KamisuiteProductsConfig · ClientCareProfile
+  //   CareVisitRecord · TimeClockRecords · CommunicationLog · CashRegister
+  //   CashMovements · HairSalonServices · MarketingCampaigns · B2BProfiles
 };
 
 /**
@@ -2680,19 +1448,8 @@ async function consultarConfig(params) {
  * Añadir una fuente al registro la hace visible al modelo automáticamente:
  * el enum y las descripciones salen de aquí, no de un literal.
  */
-function _buildToolConfig(indiceFuentes) {
-  // v2.0.0 — el enum respeta el índice: una fuente desactivada en AkiraSources
-  // desaparece de la herramienta, no solo del prompt. Si no hay índice (fallo
-  // de CMS en el arranque), se usan todas las embebidas.
-  let claves = Object.keys(FUENTES_CONFIG);
-  if (Array.isArray(indiceFuentes) && indiceFuentes.length > 0) {
-    const activas = {};
-    for (const f of indiceFuentes) if (f.tipo === 'config') activas[f.key] = true;
-    const filtradas = claves.filter(k => activas[k]);
-    if (filtradas.length > 0) claves = filtradas;
-  }
-  // El listado va en UNA línea por fuente: la ficha completa la da
-  // describir_fuente, no este enum.
+function _buildToolConfig() {
+  const claves = Object.keys(FUENTES_CONFIG);
   const listado = claves
     .map(k => {
       const f = FUENTES_CONFIG[k];
@@ -2735,298 +1492,6 @@ function _buildToolConfig(indiceFuentes) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// v2.0.0 — CATÁLOGO DE MODOS TRANSACCIONALES
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Cada modo declara aquí su ficha. El enum de la herramienta, el índice del
-// prompt y describir_fuente salen TODOS de este objeto: una sola verdad.
-// Añadir un modo = una entrada aquí + su función en el router. Nada más.
-
-const MODOS_DATOS = {
-  reservas: {
-    dominio: 'AGENDA',
-    alias: ['reserva', 'reservas', 'cita', 'citas', 'agenda', 'ocupacion', 'huecos', 'prevision'],
-    resumen: 'Lo COMPROMETIDO: todo lo agendado, pasado y futuro. Incluye cancelaciones y no-shows.',
-    ejeFecha: 'fechaReserva',
-    campos: ['fecha', 'family', 'group', 'staff', 'cliente', 'precio', 'duracion', 'status', 'origen', 'minutosOcupados', 'minutosProceso'],
-    ejes: ['staff', 'family', 'group', 'dia', 'diaSemana', 'mes', 'cliente', 'origen', 'status'],
-    avisos: 'BLOQUEO y canceladas quedan fuera salvo que se pidan. minutosOcupados NO incluye el tiempo de PROCESO: el profesional está libre durante él.'
-  },
-  cobros: {
-    dominio: 'DINERO',
-    alias: ['cobro', 'cobros', 'facturacion', 'ingresos', 'ventas', 'caja del dia', 'metodo de pago', 'ticket medio'],
-    resumen: 'Lo CONSUMADO: dinero realmente cobrado del salón. NO incluye servicios externos.',
-    ejeFecha: 'fechaPago',
-    campos: ['fechaPago', 'importe', 'tipoPago', 'staff', 'cliente', 'descripcion'],
-    ejes: ['staff', 'dia', 'diaSemana', 'mes', 'tipoPago', 'cliente'],
-    avisos: 'Los servicios externos NO están aquí: van en el modo externos. Sumarlos requiere pedir los dos.'
-  },
-  conversion: {
-    dominio: 'DINERO',
-    alias: ['conversion', 'no show', 'no-show', 'fuga', 'sin cobrar', 'perdido'],
-    resumen: 'El DELTA entre reservado y cobrado: tasa de conversión, no-shows y fugas de caja.',
-    ejeFecha: 'fechaReserva',
-    campos: ['reservas', 'cobradas', 'tasaConversionPct', 'comprometido', 'cobrado', 'perdido'],
-    ejes: ['staff', 'family', 'group', 'mes'],
-    avisos: 'Cruza contra el ledger propio. Las citas externas no casan y aparecen como no cobradas: no uses este modo para juzgar a un profesional externo.'
-  },
-  servicios: {
-    dominio: 'COMERCIAL',
-    alias: ['servicio', 'servicios hechos', 'cuantos cortes', 'cuantos tintes', 'que se hizo'],
-    resumen: 'Cuenta SERVICIOS INDIVIDUALES cobrados, incluidos los que van de complemento. Abarca todo el histórico.',
-    ejeFecha: 'fechaPago',
-    campos: ['servicio', 'group', 'cantidad', 'importe'],
-    ejes: ['group', 'servicio', 'mes', 'dia', 'staff'],
-    avisos: 'Una reserva de color puede contener un corte: este modo lo cuenta como corte, el modo reservas no.'
-  },
-  externos: {
-    dominio: 'EXTERNOS',
-    alias: ['externo', 'externos', 'colaborador', 'uñas', 'manicura', 'pedicura', 'pestañas', 'depilacion', 'comision'],
-    resumen: 'Servicios prestados por personal NO propio. Devuelve venta bruta Y comisión del salón. Incluye histórico.',
-    ejeFecha: 'fechaPago',
-    campos: ['fechaPago', 'servicio', 'staff', 'cliente', 'ventaBrutaExterna', 'comisionSalon', 'tipoPago'],
-    ejes: ['staff', 'servicio', 'dia', 'diaSemana', 'mes', 'tipoPago', 'cliente'],
-    avisos: 'El ingreso del salón es la COMISIÓN, no el bruto. Nunca sumes el bruto a la facturación propia. Las filas del histórico no llevan profesional.'
-  },
-  bonos: {
-    dominio: 'FIDELIZACION',
-    alias: ['bono', 'bonos', 'pack', 'packs', 'sesiones', 'prime', 'tarjeta regalo', 'canje', 'canjes', 'saldo'],
-    resumen: 'Bonos, PRIME y tarjetas promocionales: emisión, consumo, caducidad y PASIVO pendiente.',
-    ejeFecha: 'issueDate (emisión) · redeemDate (canjes)',
-    campos: ['codigo', 'cliente', 'servicio', 'pagado', 'usosTotales', 'usosRestantes', 'expiracion', 'status', 'pasivoPendiente', 'canjesEnPeriodo'],
-    ejes: ['cliente', 'dia', 'diaSemana', 'mes', 'tipoPago'],
-    avisos: 'pasivoPendiente es servicio COBRADO y aún NO prestado: deuda, no ingreso disponible. El ahorro por canjes no es caja nueva: ese dinero entró al emitir el bono.'
-  },
-  almacen: {
-    dominio: 'ALMACEN',
-    alias: ['consumo', 'gasto de producto', 'movimiento', 'movimientos', 'cubito', 'entrada de material', 'merma'],
-    resumen: 'Libro de MOVIMIENTOS de almacén: qué producto se movió, cuánto, por qué y quién. Para el stock actual usa la configuración.',
-    ejeFecha: 'date',
-    campos: ['fecha', 'producto', 'tipoMovimiento', 'motivo', 'unidades', 'coste', 'staff'],
-    ejes: ['servicio', 'staff', 'dia', 'mes', 'diaSemana'],
-    avisos: 'El coste sale del unitCost configurado en el almacén. Un producto sin coste configurado suma 0.'
-  },
-  fichajes: {
-    dominio: 'PERSONAL',
-    alias: ['fichaje', 'fichajes', 'fichar', 'horas', 'presencia', 'entrada y salida', 'absentismo', 'jornada'],
-    resumen: 'Horas REALES de presencia reconstruidas de los fichajes, frente al horario configurado.',
-    ejeFecha: 'timestamp',
-    campos: ['fecha', 'staff', 'horasPresencia', 'minutosPausa', 'jornadaCerrada', 'autoCerrada'],
-    ejes: ['staff', 'dia', 'diaSemana', 'mes'],
-    avisos: 'Una jornada sin salida registrada cuenta 0 horas. Revisa jornadasSinCerrar antes de concluir que alguien trabajó poco.'
-  },
-  caja: {
-    dominio: 'DINERO',
-    alias: ['caja', 'arqueo', 'descuadre', 'cuadre', 'fondo', 'efectivo contado', 'cierre de caja'],
-    resumen: 'Arqueo diario: fondo inicial, efectivo esperado, contado y descuadre.',
-    ejeFecha: 'registerDate',
-    campos: ['fecha', 'fondoInicial', 'cobrosEfectivo', 'efectivoEsperado', 'efectivoContado', 'descuadre', 'estado', 'cerradaPor'],
-    ejes: ['dia', 'diaSemana', 'mes', 'staff'],
-    avisos: 'El descuadre solo significa algo en días CERRADOS con recuento. Un día abierto sale con descuadre 0 sin cuadrar realmente.'
-  },
-  facturacion: {
-    dominio: 'FISCAL',
-    alias: ['factura', 'facturas', 'ticket', 'tickets', 'iva', 'base imponible', 'rectificativa', 'verifactu', 'aeat', 'hacienda'],
-    resumen: 'Documentos fiscales emitidos: tickets y facturas, con base, cuota de IVA y estado Verifactu.',
-    ejeFecha: 'issueDate',
-    campos: ['numero', 'serie', 'modo', 'cliente', 'base', 'cuotaIva', 'importe', 'estado', 'rectificaA', 'aeatStatus'],
-    ejes: ['dia', 'mes', 'tipoPago', 'cliente'],
-    avisos: 'No todo cobro genera documento: solo los emitidos. Verifactu aún no está activo, así que ningún documento lleva huella; es lo esperado.'
-  },
-  ficha: {
-    dominio: 'FICHA TECNICA',
-    alias: ['ficha', 'ficha tecnica', 'formula', 'formulas', 'tinte', 'color', 'codigo de color', 'que le hice', 'que lleva', 'anotacion', 'anotaciones'],
-    resumen: 'FICHA TÉCNICA del servicio: fórmulas de tinte, códigos de color, productos y tiempos aplicados y notas de trabajo. Documentación de oficio para repetir o corregir el trabajo en la próxima visita.',
-    ejeFecha: 'recordDate',
-    campos: ['fecha', 'cliente', 'tipo', 'texto', 'autor', 'origen', 'reservaId'],
-    ejes: ['cliente', 'staff', 'servicio', 'dia', 'mes', 'diaSemana'],
-    avisos: 'El tipo (COLOR / TRATAMIENTO / GENERAL) se filtra con `group`. La ficha del cliente es UNA SOLA: se leen todas las filas sin filtrar por origen, porque lo que anota Recepción PRO se ve en el CRM y al revés; `origen` (RECEPCION / CRM / CLIENTE) registra procedencia, no segrega. Modelo inmutable: una fila por anotación, nunca se sobrescribe; las retiradas no aparecen. El TEXTO es el valor: es la fórmula, sírvelo entero y literal, sin resumirlo ni reinterpretarlo. Esta fuente no lleva importes.'
-  },
-  care: {
-    dominio: 'CUIDADO Y SALUD',
-    alias: ['cuidado', 'cuidado y salud', 'expediente', 'diagnostico', 'valoracion', 'nivel de daño', 'cabello', 'uñas', 'pestañas', 'piel', 'antes y despues'],
-    resumen: 'Expediente de Cuidado y Salud: visitas por zona (hair, nails, lashes, skin) con diagnóstico, nivel de daño, productos recomendados y fotos.',
-    ejeFecha: 'visitDate',
-    campos: ['fecha', 'zona', 'nivelDano', 'problemas', 'productosRecomendados', 'origen', 'tieneFoto', 'notas del perfil'],
-    ejes: ['cliente', 'servicio', 'dia', 'mes', 'diaSemana'],
-    avisos: 'La zona se filtra con `group` (hair, nails, lashes, skin). Es un módulo DISTINTO de la ficha técnica: aquí está el expediente evolutivo, no la fórmula del servicio. Las notas del perfil base solo se devuelven si se acota a un cliente.'
-  }
-};
-
-const MODOS_CLAVES = Object.keys(MODOS_DATOS);
-
-// ═══════════════════════════════════════════════════════════════════════════
-// v2.0.0 — ÍNDICE DE FUENTES (CMS-first, con el registro embebido de fallback)
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// El prompt lleva SOLO el índice: dominio, clave, una frase y los alias. Los
-// campos NO viajan: se piden con describir_fuente cuando hacen falta.
-//
-// La colección AkiraSources permite añadir/activar/desactivar fuentes sin
-// desplegar. Si no existe o está vacía, se usa lo embebido: AKIRA nunca se
-// queda sin fuentes por un fallo de CMS.
-
-let _indiceCache = null;
-let _indiceCacheTs = 0;
-
-function _indiceEmbebido() {
-  const filas = [];
-  for (const k of MODOS_CLAVES) {
-    const m = MODOS_DATOS[k];
-    filas.push({
-      key: k, tipo: 'dato', dominio: m.dominio,
-      resumen: m.resumen, alias: (m.alias || []).join(', '), activo: true
-    });
-  }
-  for (const k of Object.keys(FUENTES_CONFIG)) {
-    const c = FUENTES_CONFIG[k];
-    filas.push({
-      key: k, tipo: 'config', dominio: c.dominio || 'OTROS',
-      resumen: c.descripcion || '', alias: (c.alias || []).join(', '), activo: true
-    });
-  }
-  return filas;
-}
-
-async function _getIndiceFuentes() {
-  const ahora = Date.now();
-  if (_indiceCache && (ahora - _indiceCacheTs) < _MAPA_TTL_MS) return _indiceCache;
-
-  let filas = _indiceEmbebido();
-
-  try {
-    const res = await wixData.query(C_SOURCES)
-      .eq('activo', true)
-      .ascending('dominio')
-      .limit(200)
-      .find(AUTH);
-
-    const items = res.items || [];
-    if (items.length > 0) {
-      // El CMS manda: sustituye el resumen/alias/dominio de las claves que
-      // conozca y desactiva las que no estén. Las claves desconocidas se
-      // ignoran (no hay motor que las lea).
-      const porKey = {};
-      for (const it of items) {
-        const k = String(it.key || '').trim();
-        if (k) porKey[k] = it;
-      }
-      filas = filas
-        .filter(f => porKey[f.key])
-        .map(f => {
-          const it = porKey[f.key];
-          return {
-            ...f,
-            dominio: it.dominio || f.dominio,
-            resumen: it.resumen || f.resumen,
-            alias: it.alias || f.alias
-          };
-        });
-      console.log(`${TAG} índice desde AkiraSources: ${filas.length} fuentes activas`);
-    }
-  } catch (e) {
-    // Colección inexistente en este salón: se usa lo embebido. No es error.
-    console.warn(`${TAG} AkiraSources no disponible, usando índice embebido:`, e.message);
-  }
-
-  _indiceCache = filas;
-  _indiceCacheTs = ahora;
-  return filas;
-}
-
-/** Índice compacto para el prompt: agrupado por dominio, una línea por fuente. */
-function _formatearIndice(filas) {
-  const porDominio = {};
-  for (const f of filas) {
-    const d = f.dominio || 'OTROS';
-    if (!porDominio[d]) porDominio[d] = [];
-    porDominio[d].push(f);
-  }
-  const out = [];
-  for (const d of Object.keys(porDominio).sort()) {
-    out.push(`[${d}]`);
-    for (const f of porDominio[d]) {
-      const via = f.tipo === 'dato'
-        ? `consultar_datos_salon modo="${f.key}"`
-        : `consultar_configuracion_salon fuente="${f.key}"`;
-      const alias = f.alias ? ` — se dice: ${f.alias}` : '';
-      out.push(`  · ${via}: ${f.resumen}${alias}`);
-    }
-  }
-  return out.join('\n');
-}
-
-/** Ficha completa de una fuente. Es lo que devuelve describir_fuente. */
-async function describirFuente(params) {
-  const clave = String((params || {}).fuente || '').trim();
-  const filas = await _getIndiceFuentes();
-  const activas = filas.map(f => f.key);
-
-  if (!clave || activas.indexOf(clave) === -1) {
-    return {
-      error: `Fuente "${clave}" no disponible.`,
-      fuentesDisponibles: activas
-    };
-  }
-
-  const m = MODOS_DATOS[clave];
-  if (m) {
-    return {
-      fuente: clave,
-      tipo: 'dato',
-      herramienta: 'consultar_datos_salon',
-      comoLlamar: `consultar_datos_salon con modo="${clave}"`,
-      dominio: m.dominio,
-      resumen: m.resumen,
-      ejeDeFecha: m.ejeFecha,
-      camposDevueltos: m.campos,
-      ejesDeAgrupacion: m.ejes,
-      avisos: m.avisos
-    };
-  }
-
-  const c = FUENTES_CONFIG[clave];
-  if (c) {
-    return {
-      fuente: clave,
-      tipo: 'configuracion',
-      herramienta: 'consultar_configuracion_salon',
-      comoLlamar: `consultar_configuracion_salon con fuente="${clave}"`,
-      dominio: c.dominio || 'OTROS',
-      resumen: c.descripcion,
-      ejeDeFecha: null,
-      camposDevueltos: c.campos || [],
-      requiereBusqueda: !!c.requiereBusqueda,
-      avisos: c.requiereBusqueda
-        ? 'Son demasiados registros: hay que pasar el parámetro `busqueda`.'
-        : 'No tiene fecha: describe el estado actual, no un periodo.'
-    };
-  }
-
-  return { error: `Fuente "${clave}" sin ficha.`, fuentesDisponibles: activas };
-}
-
-const TOOL_DESCRIBIR = {
-  name: 'describir_fuente',
-  description:
-    'Devuelve la FICHA de una fuente: qué campos trae, por qué fecha se filtra, ' +
-    'por qué ejes se puede desglosar y qué avisos tiene. Úsala cuando el índice ' +
-    'no te baste para saber si una fuente responde la pregunta, o antes de pedir ' +
-    'un desglose por un eje del que no estés seguro. Es barata: no devuelve datos ' +
-    'del negocio, solo la descripción de la fuente.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      fuente: {
-        type: 'string',
-        description: 'Clave de la fuente tal y como aparece en el ÍNDICE DE FUENTES del system.'
-      }
-    },
-    required: ['fuente']
-  }
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
 // DEFINICIÓN DE LA HERRAMIENTA (tool use nativo de Anthropic)
 // ═══════════════════════════════════════════════════════════════════════════
 // Sustituye al classify de V1. Sonnet elige filtros; NUNCA calcula cifras.
@@ -3043,14 +1508,12 @@ const TOOL_CONSULTAR = {
     properties: {
       modo: {
         type: 'string',
-        // v2.0.0 — enum y descripción GENERADOS desde MODOS_DATOS. Añadir un
-        // modo allí lo publica aquí solo. Las descripciones largas ya no
-        // viven en el prompt: están en describir_fuente.
-        enum: MODOS_CLAVES,
+        enum: ['reservas', 'cobros', 'conversion', 'servicios'],
         description:
-          'Qué leer. Resumen de cada modo:\n' +
-          MODOS_CLAVES.map(k => `· ${k}: ${MODOS_DATOS[k].resumen}`).join('\n') +
-          '\nSi dudas de los campos o ejes de un modo, llama antes a describir_fuente.'
+          'reservas = lo COMPROMETIDO (agenda, ocupación, previsión, carga de trabajo; incluye futuro). Cuenta RESERVAS enteras, categorizadas por su servicio principal. ' +
+          'cobros = lo CONSUMADO (dinero realmente cobrado, métodos de pago, caja). ' +
+          'conversion = el DELTA entre ambos (tasa de conversión, no-shows, reservas sin cobrar, fugas). ' +
+          'servicios = cuenta SERVICIOS INDIVIDUALES realmente COBRADOS por categoría, incluidos los que van como complemento. Lee del ledger de cobros, así que ABARCA TODO EL HISTÓRICO (también meses anteriores a la migración) y refleja solo lo cobrado (sin cancelaciones). Usa este modo para "¿cuántos cortes/servicios de X se hicieron/facturaron?". Es el modo correcto para categoría de servicio en cualquier periodo pasado.'
       },
       desde: { type: 'string', description: 'Fecha inicio YYYY-MM-DD. Cópiala de la tabla FECHAS del system; no la calcules.' },
       hasta: { type: 'string', description: 'Fecha fin YYYY-MM-DD, inclusive.' },
@@ -3068,12 +1531,12 @@ const TOOL_CONSULTAR = {
         description: 'Días de la semana: 0=domingo, 1=lunes … 6=sábado. Ej: [1,2] = lunes y martes.'
       },
       origen: { type: 'string', enum: ['web', 'recepcion'], description: 'Canal de la reserva. Solo modo reservas/conversion.' },
-      tipoPago: { type: 'string', description: 'Método de pago (efectivo, tarjeta…). Solo modos cobros y externos.' },
+      tipoPago: { type: 'string', description: 'Método de pago (efectivo, tarjeta…). Solo modo cobros.' },
       cliente: { type: 'string', description: 'Nombre de cliente (coincidencia parcial).' },
       agruparPor: {
         type: 'string',
         enum: ['ninguno', 'staff', 'family', 'group', 'dia', 'diaSemana', 'mes', 'tipoPago', 'cliente', 'origen', 'status', 'servicio'],
-        description: 'Eje de desglose del resultado. "group" desglosa por categoría. "servicio" desglosa por nombre de servicio (modos servicios y externos). "ninguno" devuelve solo los totales.'
+        description: 'Eje de desglose del resultado. "group" desglosa por categoría. "servicio" (solo modo servicios) desglosa por nombre de servicio. "ninguno" devuelve solo los totales.'
       },
       incluirCanceladas: { type: 'boolean', description: 'Por defecto false. true para analizar cancelaciones.' },
       incluirBloqueos: { type: 'boolean', description: 'Por defecto false. true solo para analizar bloqueos de agenda.' }
@@ -3116,20 +1579,18 @@ async function _postAnthropic(apiKey, body, timeoutMs, label) {
  * Bucle de tool use. Sonnet pide datos → JS ejecuta el motor → Sonnet narra.
  * Máx. 4 vueltas: permite comparativas (dos periodos) sin bucle infinito.
  */
-async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages, timeoutMs, indiceFuentes) {
+async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages, timeoutMs) {
   const startMs = Date.now();
   const convo = messages.slice();
   let cacheStats = { hit: 0, create: 0, input: 0, output: 0 };
   let consultas = 0;
 
-  // v2.0.0: 5 vueltas. describir_fuente puede añadir un salto antes de los
-  // datos, y una pregunta que cruza dominios encadena varias consultas.
-  for (let vuelta = 0; vuelta < 5; vuelta++) {
+  for (let vuelta = 0; vuelta < 4; vuelta++) {
     const data = await _postAnthropic(apiKey, {
       model,
       max_tokens: MAX_TOKENS,
       system: systemBlocks,
-      tools: [TOOL_CONSULTAR, _buildToolConfig(indiceFuentes), TOOL_DESCRIBIR],
+      tools: [TOOL_CONSULTAR, _buildToolConfig()],
       messages: convo
     }, timeoutMs, model);
 
@@ -3160,8 +1621,6 @@ async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages,
         // un caso aquí y declararla en el array `tools` de _postAnthropic.
         if (tu.name === 'consultar_configuracion_salon') {
           out = await consultarConfig(tu.input || {});
-        } else if (tu.name === 'describir_fuente') {
-          out = await describirFuente(tu.input || {});
         } else {
           out = await ejecutarConsulta(tu.input || {});
         }
@@ -3186,14 +1645,14 @@ async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages,
   return { respuesta, timeMs: Date.now() - startMs, cacheStats, consultas };
 }
 
-async function _callClaudeConFallback(apiKey, systemBlocks, messages, indiceFuentes) {
+async function _callClaudeConFallback(apiKey, systemBlocks, messages) {
   try {
-    const r = await _callClaudeConHerramientas(MODEL_PRIMARY, apiKey, systemBlocks, messages, PRIMARY_TIMEOUT_MS, indiceFuentes);
+    const r = await _callClaudeConHerramientas(MODEL_PRIMARY, apiKey, systemBlocks, messages, PRIMARY_TIMEOUT_MS);
     return { ...r, modeloUsado: MODEL_PRIMARY };
   } catch (err1) {
     console.warn(`${TAG} Sonnet falló, cayendo a Haiku: ${err1.message}`);
     try {
-      const r = await _callClaudeConHerramientas(MODEL_FALLBACK, apiKey, systemBlocks, messages, FALLBACK_TIMEOUT_MS, indiceFuentes);
+      const r = await _callClaudeConHerramientas(MODEL_FALLBACK, apiKey, systemBlocks, messages, FALLBACK_TIMEOUT_MS);
       return { ...r, modeloUsado: MODEL_FALLBACK };
     } catch (err2) {
       throw new Error(`Sonnet:[${err1.message}] Haiku:[${err2.message}]`);
@@ -3253,6 +1712,25 @@ async function _getDocumentos() {
   }
 }
 
+// ── Plano de utilidad de AKIRA (asesor | ayuda | asistente) ──
+// NO es el modo transaccional (reservas|cobros|conversion) de la herramienta de
+// datos. Este 'modo' vive en AkiraAlignment/AkiraDocuments y enruta QUÉ corpus
+// de conocimiento ve AKIRA según el plano publicado.
+const PLANO_DEFECTO = 'asesor';
+
+function _normPlano(v) {
+  const s = (v === null || v === undefined) ? '' : String(v).trim().toLowerCase();
+  return s || PLANO_DEFECTO;   // vacío (doc o alignment) = asesor
+}
+
+// Filtra los documentos de conocimiento por el plano del alignment publicado.
+// Regla acordada: modo vacío se trata como 'asesor', para no dejar sin corpus
+// a los documentos ya existentes que aún no tienen 'modo' relleno.
+function _filtrarDocsPorPlano(docs, config) {
+  const planoActivo = _normPlano(config && config.modo);
+  return (docs || []).filter(d => _normPlano(d && d.modo) === planoActivo);
+}
+
 /** Familias reales presentes en el CMS. Cero hardcoding: se leen del dato. */
 async function _getFamilias() {
   try {
@@ -3308,7 +1786,7 @@ async function _getGroups() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function _buildSystemBlocks(ctx) {
-  const { config, documentos, salon, staff, familias, groups, fechas, indiceFuentes, modo } = ctx;
+  const { config, documentos, salon, staff, familias, groups, fechas, modo } = ctx;
   const stable = [];
 
   // ── IDENTIDAD ──
@@ -3383,12 +1861,6 @@ function _buildSystemBlocks(ctx) {
     '   se cobró: tasa de conversión, no-shows, fugas de caja. Ninguna de las dos',
     '   fuentes por separado responde esto.',
     '',
-    '4. EXTERNOS (modo "externos") — los servicios que presta personal NO propio del',
-    '   salón (uñas, pestañas, depilación…). Se llevan en un ledger aparte y NO están',
-    '   incluidos en el modo cobros. De un servicio externo, el salón NO ingresa la',
-    '   venta: ingresa una COMISIÓN sobre ella. Por eso este modo devuelve las dos',
-    '   cifras, ventaBrutaExterna y comisionSalon, y son cosas distintas.',
-    '',
     'PROCESO: en coloración y tratamientos, el producto actúa sobre el cabello durante',
     'un tiempo en el que el profesional queda LIBRE y puede atender a otra clienta. Ese',
     'tiempo NO ocupa agenda. Por eso "minutosOcupados" y "minutosProceso" se devuelven',
@@ -3400,40 +1872,21 @@ function _buildSystemBlocks(ctx) {
     'huecos bloqueados en agenda, y quedan excluidas salvo que se pidan explícitamente.'
   ].join('\n'));
 
-  // ── ÍNDICE DE FUENTES (v2.0.0) ──
-  // Una línea por fuente, agrupada por dominio, con los alias que usa la gente
-  // del salón. Los CAMPOS no viajan aquí: se piden con describir_fuente.
-  if (Array.isArray(indiceFuentes) && indiceFuentes.length > 0) {
-    stable.push(
-      '--- ÍNDICE DE FUENTES ---\n' +
-      'Esto es TODO lo que AKIRA puede consultar. Elige la fuente por su dominio y por\n' +
-      'las palabras que la gente usa ("se dice:"). Si no estás seguro de los campos o\n' +
-      'de los ejes de desglose de una fuente, llama primero a describir_fuente.\n\n' +
-      _formatearIndice(indiceFuentes)
-    );
-  }
-
   // ── REGLAS DE USO DE LA HERRAMIENTA ──
   stable.push([
     '--- REGLAS DE TRABAJO (INQUEBRANTABLES) ---',
     '1. NUNCA des una cifra que no venga de una herramienta. No calcules sumas,',
     '   medias ni porcentajes de cabeza: pídelos y nárralos. Los cálculos ya',
     '   vienen hechos en la respuesta.',
-    '1b. Tienes TRES herramientas y son complementarias:',
-    '   · consultar_datos_salon → qué PASÓ o pasará. Tiene fecha. Elige el',
-    '     `modo` según el dominio (agenda, dinero, fidelización, almacén,',
-    '     personal, fiscal).',
+    '1b. Tienes DOS herramientas y son complementarias:',
+    '   · consultar_datos_salon → qué PASÓ o pasará (reservas, cobros,',
+    '     conversión). Tiene fecha.',
     '   · consultar_configuracion_salon → cómo está MONTADO el salón (precios',
-    '     de tarifa, horarios del personal, almacén, política de bonos). NO',
-    '     tiene fecha.',
-    '   · describir_fuente → la FICHA de una fuente: campos, eje de fecha,',
-    '     ejes de desglose y avisos. No devuelve datos del negocio y es barata.',
-    '     Úsala cuando el ÍNDICE no te baste para decidir, en vez de probar a',
-    '     ciegas o de dar por hecho un campo que quizá no exista.',
-    '   Cuando la pregunta cruce varios dominios, llama a las que hagan falta.',
-    '   Ejemplos de cruce: precio de tarifa contra lo cobrado de verdad; horas',
-    '   de horario contra horas realmente fichadas; coste de producto contra',
-    '   ingreso del servicio que lo consume.',
+    '     de tarifa, horarios del personal, almacén, ajustes). NO tiene fecha.',
+    '   Cuando la pregunta cruce ambas, llama a las dos. Ejemplos: comparar el',
+    '   precio de tarifa con lo cobrado de verdad; contrastar las horas de',
+    '   horario de un profesional con las que tiene ocupadas; valorar si un',
+    '   servicio rinde según su duración configurada.',
     '2. NUNCA calcules fechas. Copia las de la tabla FECHAS de este system.',
     '3. Si necesitas comparar dos periodos, llama a la herramienta dos veces.',
     '4. Si la herramienta devuelve numRegistros 0, dilo con claridad: no hay datos',
@@ -3462,49 +1915,7 @@ function _buildSystemBlocks(ctx) {
     '   reservas con group (cuenta la cita entera, por su servicio principal).',
     '   "¿Cuántos servicios/cuántos cortes se hicieron?" → modo servicios (cuenta',
     '   cada servicio individual, incluido el que va de complemento dentro de una',
-    '   reserva de otra categoría). Elige el modo según lo que se pregunta.',
-    '10. EXTERNOS. Cualquier pregunta sobre servicios externos o sobre un',
-    '   profesional externo va al modo "externos". El modo cobros NO los',
-    '   contiene: si lo usas para eso, darás cero y será falso.',
-    '10b. Al responder de externos da SIEMPRE las dos cifras y distínguelas sin',
-    '   ambigüedad: la venta bruta (lo que pagó la clienta, que no es ingreso',
-    '   del salón) y la comisión (lo que el salón se queda de verdad). Si te',
-    '   preguntan "cuánto ha facturado" un externo, la respuesta útil es la',
-    '   comisión, mencionando el bruto del que sale.',
-    '10c. NUNCA sumes la venta bruta externa a la facturación del salón: la',
-    '   inflarías. Si te piden el total del negocio, suma cobros propios +',
-    '   comisión de externos, y dilo explícitamente.',
-    '10d. El modo externos incluye el histórico anterior a la migración. Esas',
-    '   filas antiguas no llevan profesional asignado, así que un desglose por',
-    '   empleado de periodos antiguos puede salir incompleto: si la respuesta',
-    '   trae notaHistorico, trasládalo.',
-    '11. BONOS Y PASIVO. Un bono vendido es servicio COBRADO y todavía DEBIDO.',
-    '   El campo pasivoPendiente es esa deuda en servicio: NO es dinero',
-    '   disponible ni ingreso del periodo. Y el ahorro por canjes tampoco es',
-    '   caja nueva: ese dinero entró el día que se vendió el bono. Cuando',
-    '   informes de bonos, separa siempre lo cobrado por emisión de lo',
-    '   consumido en servicio.',
-    '12. NO MEZCLES DOMINIOS EN UN TOTAL. Cobros propios, comisión de externos,',
-    '   emisión de bonos y documentos fiscales miden cosas distintas y se',
-    '   solapan entre sí (un bono se cobra una vez y se consume después; una',
-    '   factura documenta un cobro que ya está en cobros). Si te piden "el',
-    '   total del negocio", di de qué se compone en vez de sumar cifras que',
-    '   contarían dos veces lo mismo.',
-    '13. Cada fuente trae sus propios avisos (notaCoste, notaFichajes,',
-    '   notaDescuadre, notaCanjes…). Son advertencias sobre cómo leer el dato:',
-    '   si el resultado trae uno y afecta a tu conclusión, dilo.',
-    '14. FICHA TÉCNICA (modo "ficha"). Es la documentación de OFICIO del',
-    '   servicio: la fórmula de tinte, el código de color, los productos y',
-    '   tiempos aplicados y las notas de trabajo. Sirve para repetir o',
-    '   corregir el trabajo en la siguiente visita, igual que la ficha de un',
-    '   taller. Cuando te pregunten "qué le hice", "qué fórmula lleva" o "qué',
-    '   color usamos", ese es el modo. Sirve el TEXTO ENTERO Y LITERAL: es la',
-    '   fórmula, y resumirla o reinterpretarla la inutiliza. El tipo (COLOR,',
-    '   TRATAMIENTO, GENERAL) se filtra con `group`.',
-    '14b. CUIDADO Y SALUD (modo "care") es un módulo DISTINTO: expediente',
-    '   evolutivo por zonas (hair, nails, lashes, skin) con diagnóstico,',
-    '   nivel de daño, productos recomendados y fotos. No lo confundas con la',
-    '   ficha técnica ni mezcles sus datos: son dos cosas separadas.'
+    '   reserva de otra categoría). Elige el modo según lo que se pregunta.'
   ].join('\n'));
 
   // ── GUARDRAILS DEL DUEÑO (AkiraAlignment) ──
@@ -3708,19 +2119,22 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
       return null;
     });
 
-    const [config, documentos, salon, staff, familias, groups, indiceFuentes] = await Promise.all([
+    const [config, documentos, salon, staff, familias, groups] = await Promise.all([
       _getAlignment(),
       _getDocumentos(),
       _getSalonConfig(),
       _getStaff(),
       _getFamilias(),
-      _getGroups(),
-      _getIndiceFuentes()      // v2.0.0 — índice de fuentes (CMS-first)
+      _getGroups()
     ]);
+
+    // Filtrado del corpus por el plano publicado (asesor/ayuda/asistente).
+    // Vacío = asesor (regla acordada): los docs sin 'modo' siguen visibles.
+    const documentosDelPlano = _filtrarDocsPorPlano(documentos, config);
 
     const fechas = resolverFechas();
     const prepMs = Date.now() - tIn;
-    console.log(`${TAG} PREP ${prepMs}ms: align=${config ? 'OK' : 'null'} docs=${documentos.length} staff=${staff.length} fams=${familias.length} groups=${groups.length}`);
+    console.log(`${TAG} PREP ${prepMs}ms: align=${config ? 'OK' : 'null'} plano=${_normPlano(config && config.modo)} docs=${documentos.length}→${documentosDelPlano.length} staff=${staff.length} fams=${familias.length} groups=${groups.length}`);
 
     const apiKey = await apiKeyPromise;
     if (!apiKey) {
@@ -3728,8 +2142,7 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
     }
 
     const systemBlocks = _buildSystemBlocks({
-      config, documentos, salon, staff, familias, groups, fechas,
-      indiceFuentes, modo: modo || 'consultor'
+      config, documentos: documentosDelPlano, salon, staff, familias, groups, fechas, modo: modo || 'consultor'
     });
 
     // ── SESIÓN E HISTORIAL ──
@@ -3748,7 +2161,7 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
     // ── ANTHROPIC con tool use + failover ──
     let r;
     try {
-      r = await _callClaudeConFallback(apiKey, systemBlocks, messages, indiceFuentes);
+      r = await _callClaudeConFallback(apiKey, systemBlocks, messages);
     } catch (err) {
       console.error(`${TAG} ambos modelos fallaron:`, err.message);
       try { await sessionPromise; } catch (_) {}
