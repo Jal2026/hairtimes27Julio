@@ -11,7 +11,27 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
     /* ═══════════════════════════════════════════════════════
-       ESTADÍSTICAS KAMISUITE v2.6.1 — Light theme
+       ESTADÍSTICAS KAMISUITE v2.6.2 — Light theme
+       ═════════════════════════════════════════════════════
+       v2.6.2 (12 ago 2026): MEDIOS DE PAGO EN DOS VISTAS + CANJES.
+         - El gráfico "Por Método de Pago" pasa a titularse "Importes
+           reales por canal": desde el backend v2.6.1 los mixtos ya van
+           repartidos, y el título anterior no lo decía.
+         - Bloque nuevo "🔢 Cobros por botón pulsado": tabla con número
+           de pulsaciones e importe por botón (Tarjeta / Efectivo /
+           Bizum / Mixto / Canje). Vista de auditoría: aquí 'Mixto' SÍ
+           es una fila propia porque fue UN botón. Requiere backend
+           estadisticas.web.js v2.6.3 (`porBotonPago`, `botonTotales`);
+           con un backend anterior el bloque avisa de que no hay datos
+           y el resto de la pantalla sigue igual.
+         - Recuadro nuevo de CANJES DE BONO (número y valor de tarifa
+           consumido, de `canjesBono`). Va aparte de los medios de pago
+           a propósito: un canje no es caja nueva. Solo se pinta si el
+           backend lo marca disponible y hay al menos un canje.
+         - Pie explicativo bajo cada una de las dos tablas, para que
+           nadie lea una diferencia por canal como un descuadre.
+         - NO se toca: layout, paleta, tipografía, resto de gráficas,
+           comparativa, presets, KPIs, ni la exportación a PDF/Excel.
        ═════════════════════════════════════════════════════
        v2.6.1 (12 ago 2026): EWCM ELIMINADO.
          - Retirado por completo el interruptor "Export Without Cash
@@ -373,7 +393,7 @@
     // VARIABLES GLOBALES
     // ═══════════════════════════════════════════════════════════════════════
 
-    const WIDGET_VERSION = '2.6.1';
+    const WIDGET_VERSION = '2.6.2';
 
     let chartIngresos = null;
     let chartMetodo = null;
@@ -883,7 +903,7 @@
           <div class="chart-data-table" id="dataIngresos"></div>
         </div>
         <div class="grafico-container"${compB ? ' style="grid-column: 1 / -1;"' : ''}>
-          <h3>💳 Por Método de Pago</h3>
+          <h3>💳 Importes reales por canal</h3>
           <div class="${compB ? 'compar-pair' : ''}">
             <div>
               ${compB ? '<h4 style="color:var(--text-secondary);">' + _labelA + '</h4>' : ''}
@@ -892,6 +912,10 @@
             </div>
             ${compB ? '<div><h4 style="color:#6B5B95;">' + _labelB + '</h4><div class="grafico-wrapper"><canvas id="chartMetodoB"></canvas></div><div class="chart-data-table" id="dataMetodoB"></div></div>' : ''}
           </div>
+        </div>
+        <div class="grafico-container">
+          <h3>🔢 Cobros por botón pulsado</h3>
+          <div class="chart-data-table" id="dataBoton"></div>
         </div>
         <div class="grafico-container"${compB ? ' style="grid-column: 1 / -1;"' : ''}>
           <h3>👤 Por Staff</h3>
@@ -1002,7 +1026,47 @@
           h += `<tr><td>${data.porMetodoPago.labels[i]}</td><td>${eur(v)}</td><td>${pct(p)}</td></tr>`;
         }
         h += `<tr class="total-row"><td>Total</td><td>${eur(totalMet)}</td><td></td></tr></tbody></table>`;
+        h += `<div style="font-size:11px;color:var(--text-secondary);margin-top:6px;line-height:1.45;">Los cobros mixtos están repartidos: cada canal incluye su parte. Tarjeta = tarjeta pura + parte tarjeta de los mixtos, e igual con efectivo y bizum. Es lo que debe cuadrar con el datáfono, el cajón y el extracto.</div>`;
         document.getElementById('dataMetodo').innerHTML = h;
+      }
+
+      // v2.6.2 — Cobros por botón pulsado + canjes de bono.
+      // Vista de AUDITORÍA, paralela a la de canales: cuenta pulsaciones,
+      // no dinero por canal. Por eso 'Mixto' es una fila propia — fue UN
+      // botón — y no se reparte. El TOTAL coincide con el de arriba;
+      // las cifras por fila no tienen por qué, y eso no es un descuadre.
+      {
+        const cont = document.getElementById('dataBoton');
+        const filas = Array.isArray(data.porBotonPago) ? data.porBotonPago : null;
+        if (!cont) {
+          // nada que pintar
+        } else if (!filas || !filas.length) {
+          cont.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);padding:6px 0;">Sin cobros registrados en el periodo.</div>';
+        } else {
+          const ICO = { 'Tarjeta': '💳', 'Efectivo': '💵', 'Bizum': '📲', 'Mixto': '🔀', 'Canje': '🎟️' };
+          const tot = data.botonTotales || {
+            n: filas.reduce((a, b) => a + b.n, 0),
+            importe: filas.reduce((a, b) => a + b.importe, 0)
+          };
+          let h = '<table><thead><tr><th>Botón</th><th>Nº cobros</th><th>Importe</th><th>%</th></tr></thead><tbody>';
+          for (const f of filas) {
+            const pc = tot.importe > 0 ? (f.importe / tot.importe * 100) : 0;
+            const ico = ICO[f.metodo] || '⚠️';
+            h += `<tr><td>${ico} ${f.metodo}</td><td>${f.n}</td><td>${eur(f.importe)}</td><td>${pct(pc)}</td></tr>`;
+          }
+          h += `<tr class="total-row"><td>Total</td><td>${tot.n}</td><td>${eur(tot.importe)}</td><td></td></tr></tbody></table>`;
+          h += `<div style="font-size:11px;color:var(--text-secondary);margin-top:6px;line-height:1.45;">Cuántas veces se pulsó cada botón de cobro. Un cobro mixto cuenta como UNA pulsación de Mixto y su importe no se reparte: para ver dónde acabó ese dinero, mira el bloque de canales.</div>`;
+
+          const cb = data.canjesBono;
+          if (cb && cb.disponible && cb.n > 0) {
+            h += `<div style="margin-top:14px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;">
+              <div style="font-size:12px;font-weight:700;color:var(--text-secondary);letter-spacing:.4px;margin-bottom:6px;">🎟️ CANJES DE BONO</div>
+              <div style="font-size:13px;"><b>${cb.n}</b> ${cb.n === 1 ? 'canje' : 'canjes'} · <b>${eur(cb.valorConsumido)}</b> de valor de tarifa consumido</div>
+              <div style="font-size:11px;color:var(--text-secondary);margin-top:5px;line-height:1.45;">No es caja nueva: ese dinero entró el día que el cliente compró el bono. Por eso no suma a las ventas ni a ningún canal de cobro.</div>
+            </div>`;
+          }
+          cont.innerHTML = h;
+        }
       }
 
       // Staff — SIN IVA
