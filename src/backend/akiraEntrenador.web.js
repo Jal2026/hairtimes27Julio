@@ -2,8 +2,18 @@
 // KAMISUITE — Backend: akiraEntrenador.web.js
 // Módulo: Entrenador AKIRA (patrón EGAEL)
 // =====================================================
-// VERSION: 1.0.0
-// FECHA: 23 Abril 2026
+// VERSION: 1.1.0
+// FECHA: 12 Agosto 2026
+//
+// CAMBIOS v1.0.0 → v1.1.0:
+//   - crearDocumento: se ELIMINA el campo 'title' del insert. NO existe en
+//     AkiraDocuments (verificado con cmsFieldReader): se escribía a la nada.
+//     'titulo' siempre se guardó, así que la creación nunca estuvo rota.
+//   - crearDocumento: acepta 'modo' (plano de utilidad: asesor|ayuda|asistente)
+//     y lo persiste. Por defecto 'asesor' — mantiene compatibilidad con la UI
+//     actual, que no envía 'modo'. Permite etiquetar los documentos de AYUDA.
+//   - cargarConfigEntrenador: devuelve 'modo' de cada documento para la UI.
+//   Sin cambios en el CMS: 'modo' ya existe en AkiraDocuments.
 //
 // FUNCIONES PÚBLICAS (webMethods):
 //   cargarConfigEntrenador() — carga alignment + documentos para la UI
@@ -11,7 +21,7 @@
 //   publicarAlignment({ alignmentId }) — publica versión
 //   testAkira({ message, configOverride }) — prueba respuesta con config
 //   generarPromptAkira({ descripcion }) — genera prompt base con IA
-//   crearDocumento({ titulo, tipo, contenido, resumen }) — crea recurso
+//   crearDocumento({ titulo, tipo, contenido, resumen, modo }) — crea recurso
 //   toggleDocumento({ documentoId, activo }) — activa/desactiva
 //   eliminarDocumento({ documentoId }) — elimina recurso
 //
@@ -35,7 +45,7 @@ import { fetch } from 'wix-fetch';
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const TAG = `[AkiraEntrenador][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -237,6 +247,7 @@ export const cargarConfigEntrenador = webMethod(
         titulo: d.titulo,
         tipo: d.tipo,
         resumen: d.resumen,
+        modo: d.modo || 'asesor',
         activo: d.activo,
         orden: d.orden
       }));
@@ -458,11 +469,15 @@ export const generarPromptAkira = webMethod(
 
 export const crearDocumento = webMethod(
   Permissions.SiteMember,
-  async ({ titulo, tipo, contenido, resumen }) => {
+  async ({ titulo, tipo, contenido, resumen, modo }) => {
     try {
       if (!titulo) return { ok: false, error: 'titulo requerido' };
       if (!contenido) return { ok: false, error: 'contenido requerido' };
-      console.log(`${TAG} crearDocumento: "${titulo}" (${tipo})`);
+      // Plano de utilidad del documento (asesor|ayuda|asistente). La UI actual
+      // no lo envía → 'asesor' por defecto (compatibilidad). 'title' NO existe
+      // en la colección (verificado): no se escribe.
+      const planoDoc = (modo && String(modo).trim()) ? String(modo).trim().toLowerCase() : 'asesor';
+      console.log(`${TAG} crearDocumento: "${titulo}" (${tipo}) [modo=${planoDoc}]`);
 
       // Obtener orden máximo actual
       const maxOrden = await wixData.query('AkiraDocuments')
@@ -472,11 +487,11 @@ export const crearDocumento = webMethod(
       const nextOrden = maxOrden.items.length > 0 ? (maxOrden.items[0].orden || 0) + 1 : 1;
 
       const doc = await wixData.insert('AkiraDocuments', {
-        title: titulo,
         titulo,
         tipo: tipo || 'otro',
         contenido,
         resumen: resumen || titulo,
+        modo: planoDoc,
         activo: true,
         orden: nextOrden
       }, AUTH);
@@ -490,6 +505,7 @@ export const crearDocumento = webMethod(
           titulo: doc.titulo,
           tipo: doc.tipo,
           resumen: doc.resumen,
+          modo: doc.modo,
           activo: doc.activo,
           orden: doc.orden
         }
