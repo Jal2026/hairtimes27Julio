@@ -1,6 +1,45 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.6.0
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.6.2
 // =====================================================
+// v2.6.2: EWCM ELIMINADO (12 ago 2026)
+//   - Se retira por completo el modo "Export Without Cash Mode"
+//     (parámetro `excludeEfectivo`, introducido en v2.3), que permitía
+//     generar el informe de estadísticas ocultando los cobros en
+//     efectivo.
+//   - Motivo: un informe que omite selectivamente los ingresos en
+//     metálico es incompatible con la obligación Verifactu que entra en
+//     vigor en enero de 2027, cuyo principio es justamente el contrario:
+//     registro íntegro, inalterable y encadenado de TODAS las
+//     operaciones. Mantener el interruptor en el producto era un riesgo
+//     que no compensa ninguna comodidad de exportación.
+//   - Qué se ha quitado: el bloque de filtrado previo al pipeline, la
+//     excepción del canal Efectivo en el desglose por método de pago, y
+//     los sufijos [EWCM] de los logs.
+//   - La firma sigue aceptando `excludeEfectivo` para no romper a un
+//     llamante que aún lo envíe, pero NO HACE NADA: se ignora y se
+//     registra un console.warn para poder localizar y limpiar al
+//     llamante. El informe trabaja SIEMPRE con la totalidad de cobros.
+//   - Page code asociado: `Recepción _ Estadísticas _  Hairtimes .et172.js`
+//     v2.6 deja de reenviarlo. PENDIENTE: el widget HTML conserva el
+//     interruptor en la interfaz — hay que retirarlo también.
+//
+// v2.6.1: REPARTO POR CANAL FÍSICO en "Por Método de Pago" (12 ago 2026)
+//   - El donut agrupaba por `tipoPago` en crudo: la cesta "Tarjeta"
+//     contenía SOLO los cobros 100% tarjeta y el importe íntegro de cada
+//     Mixto caía en una cesta propia imposible de contrastar contra el
+//     datáfono. Igual con Efectivo y Bizum.
+//   - Ahora cada cobro se parte en los tres canales contrastables
+//     leyendo `desglosemetodopago`. Helper _repartirCanales, copia
+//     literal del de cierreLogicExtendido v1.2.0.
+//   - Queda OBSOLETO el comentario de v2.3 "Pagos MIXTO se incluyen
+//     completos (desglose no disponible en CMS)": el campo existe desde
+//     que lo escriben recepcionProLogic, tiendaProductos y
+//     servicesPublicSync, y es editable en el Editor de Cobros.
+//   - Lo que no se puede repartir sin inventar sale con etiqueta propia
+//     y visible (⚠️ Mixto sin desglose / descuadrado / etc.).
+//   - NO se toca: totalIngresos, totalVentas, IVA, propinas, servicios,
+//     staff, externos, productos POS, ni ninguna otra sección.
+//
 // v2.6.0: Externos V2 + eje de días continuo + paginación
 //
 //   1) EXTERNOS — la fuente pasa a ser PagoreservasExternos (ledger V2)
@@ -68,11 +107,12 @@
 //   - Filtro cambiado de excluir BLOQUEADO a incluir solo PAGADO
 //   - Citas CONFIRMADA (no cobradas) ya no inflan venta bruta ni comisiones
 //
-// v2.3: EWCM (Export Without Cash Mode)
+// v2.3: EWCM (Export Without Cash Mode)  — ❌ ELIMINADO EN v2.6.2
 //   - Nuevo parámetro excludeEfectivo
 //   - Filtra registros con tipoPago === 'EFECTIVO' antes de procesar
 //   - Pagos MIXTO se incluyen completos (desglose no disponible en CMS)
 //   - Todo el pipeline trabaja con el array ya filtrado
+//   >>> Funcionalidad retirada. Ver cabecera v2.6.2.
 //
 // v2.0: Rewrite completo
 //   - Merge variantes nombre ST (Tinte AP + Tinte aplicación → Tinte)
@@ -88,7 +128,92 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const TAG = '[Stats v2.6.0]';
+
+// =====================================================
+// REPARTO POR CANAL FÃSICO DE COBRO â v2.6.1
+// =====================================================
+// Copia LITERAL del helper homÃ³nimo de cierreLogicExtendido.web.js
+// v1.2.0. Se duplica a propÃ³sito: los imports entre backends .web.js
+// devuelven vacÃ­o en silencio, asÃ­ que cada backend lleva el suyo.
+// Si se cambia aquÃ­, cambiar tambiÃ©n allÃ­.
+//
+// Los tres Ãºnicos canales contrastables contra algo fÃ­sico:
+//     TARJETA  â liquidaciÃ³n del datÃ¡fono
+//     EFECTIVO â cajÃ³n / arqueo de caja
+//     BIZUM    â extracto de la cuenta
+// No hay cesta "otros" ni cesta "Mixto". Lo que no se puede repartir
+// sin inventar se marca como anomalÃ­a visible.
+//
+// Lectura de `desglosemetodopago`: patrÃ³n copiado de
+// cashRegisterLogic.web.js â calcularEfectivoEsperado (en producciÃ³n).
+// Formato canÃ³nico: '{"Tarjeta":N,"Efectivo":N,"Bizum":N}' (claves > 0).
+//
+// Invariante: tarjeta + efectivo + bizum + anomalia === importeTotal.
+function _repartirCanales(p) {
+  const out = { tarjeta: 0, efectivo: 0, bizum: 0, anomalia: 0, anomaliaLabel: '', canje: false };
+
+  const importe = Number(p.importeTotal) || 0;
+  const tipoCrudo = String(p.tipoPago || '').trim();
+  const t = tipoCrudo.toLowerCase();
+
+  if (t === 'tarjeta')  { out.tarjeta  = importe; return out; }
+  if (t === 'efectivo') { out.efectivo = importe; return out; }
+  if (t === 'bizum')    { out.bizum    = importe; return out; }
+
+  if (t === 'canje') {
+    if (Math.abs(importe) < 0.005) { out.canje = true; return out; }
+    out.anomalia = importe;
+    out.anomaliaLabel = '⚠️ Canje con importe';
+    return out;
+  }
+
+  if (t === 'mixto') {
+    let d = null;
+    try {
+      d = p.desglosemetodopago ? JSON.parse(p.desglosemetodopago) : null;
+    } catch (e) {
+      d = null;
+    }
+
+    if (!d || typeof d !== 'object') {
+      out.anomalia = importe;
+      out.anomaliaLabel = '⚠️ Mixto sin desglose';
+      return out;
+    }
+
+    const lower = {};
+    for (const k of Object.keys(d)) lower[String(k).trim().toLowerCase()] = Number(d[k]) || 0;
+    const ta = lower.tarjeta  || 0;
+    const ef = lower.efectivo || 0;
+    const bi = lower.bizum    || 0;
+    const suma = ta + ef + bi;
+
+    if (suma <= 0) {
+      out.anomalia = importe;
+      out.anomaliaLabel = '⚠️ Mixto sin desglose';
+      return out;
+    }
+
+    if (Math.abs(suma - importe) >= 0.01) {
+      out.anomalia = importe;
+      out.anomaliaLabel = '⚠️ Mixto descuadrado';
+      return out;
+    }
+
+    out.tarjeta  = ta;
+    out.efectivo = ef;
+    out.bizum    = bi;
+    return out;
+  }
+
+  out.anomalia = importe;
+  out.anomaliaLabel = '⚠️ ' + (tipoCrudo || 'Sin método');
+  return out;
+}
+
+const CANALES_FISICOS = ['Tarjeta', 'Efectivo', 'Bizum'];
+
+const TAG = '[Stats v2.6.2]';
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
 const CMS_EXTERNAL_RECORDS = 'SvExternalRecords';
@@ -122,7 +247,14 @@ export const obtenerEstadisticas = webMethod(
   Permissions.Anyone,
   async ({ fechaDesde, fechaHasta, excludeEfectivo }) => {
     try {
-      console.log(`${TAG} Estadísticas: ${fechaDesde} → ${fechaHasta}${excludeEfectivo ? ' [EWCM]' : ''}`);
+      console.log(`${TAG} Estadísticas: ${fechaDesde} → ${fechaHasta}`);
+
+      // v2.6.2 — El parámetro se sigue aceptando en la firma para no
+      // romper a un llamante que aún lo envíe, pero NO HACE NADA. Se
+      // avisa por consola para poder localizar y limpiar al llamante.
+      if (excludeEfectivo) {
+        console.warn(`${TAG} ⚠️ Recibido excludeEfectivo=true. El modo EWCM fue ELIMINADO en v2.6.2: el parámetro se IGNORA y el informe incluye todos los cobros, efectivo incluido. Revisar el llamante y quitar el envío.`);
+      }
 
       // ── Helpers ──
       const normCat = (c) => (c || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
@@ -238,16 +370,10 @@ export const obtenerEstadisticas = webMethod(
       console.log(`${TAG} Registros brutos: ${pagos.length}`);
 
       // ══════════════════════════════════════════════════════════════
-      // v2.3: EWCM — Filtrar pagos en efectivo
+      // v2.6.2 — EWCM ELIMINADO. Aquí vivía el filtro que sacaba los
+      // cobros en efectivo del informe. No se sustituye por nada: el
+      // informe trabaja SIEMPRE con la totalidad de los cobros.
       // ══════════════════════════════════════════════════════════════
-      if (excludeEfectivo) {
-        const antesFiltro = pagos.length;
-        pagos = pagos.filter(p => {
-          const tipo = (p.tipoPago || '').toUpperCase();
-          return tipo !== 'EFECTIVO';
-        });
-        console.log(`${TAG} EWCM: ${antesFiltro} → ${pagos.length} registros (${antesFiltro - pagos.length} efectivo excluidos)`);
-      }
 
       // ══════════════════════════════════════════════════════════════
       // 2. MAPAS desde queryServices: categoría + duración
@@ -406,8 +532,17 @@ export const obtenerEstadisticas = webMethod(
           diasUnicosPorDiaSemana[diaSemana].add(dia);
         }
 
-        const metodo = p.tipoPago || 'Sin especificar';
-        porMetodo[metodo] = (porMetodo[metodo] || 0) + importe;
+        // v2.6.1 — reparto por canal físico. La parte tarjeta / efectivo /
+        // bizum de un cobro Mixto suma en su canal; ya no hay cesta "Mixto"
+        // ni cesta "Sin especificar" como cajón de sastre.
+        // v2.6.2 — sin excepción por EWCM: el efectivo suma siempre.
+        const rep = _repartirCanales(p);
+        if (rep.tarjeta) porMetodo['Tarjeta'] = (porMetodo['Tarjeta'] || 0) + rep.tarjeta;
+        if (rep.efectivo) porMetodo['Efectivo'] = (porMetodo['Efectivo'] || 0) + rep.efectivo;
+        if (rep.bizum) porMetodo['Bizum'] = (porMetodo['Bizum'] || 0) + rep.bizum;
+        if (Math.abs(rep.anomalia) >= 0.005) {
+          porMetodo[rep.anomaliaLabel] = (porMetodo[rep.anomaliaLabel] || 0) + rep.anomalia;
+        }
 
         const staffRaw = (p.staff || '').toUpperCase();
         if (staffRaw === 'TIENDA_POS') {
@@ -878,7 +1013,14 @@ export const obtenerEstadisticas = webMethod(
       };
 
       // ── Método de pago (sin IVA) ──
-      const datosMetodoPago = { labels: Object.keys(porMetodo), valores: Object.values(porMetodo) };
+      // v2.6.1 — orden fijo: canales físicos primero, anomalías después.
+      const _labelsMetodo = [];
+      for (const c of CANALES_FISICOS) if (porMetodo[c]) _labelsMetodo.push(c);
+      for (const k of Object.keys(porMetodo)) if (!CANALES_FISICOS.includes(k)) _labelsMetodo.push(k);
+      const datosMetodoPago = {
+        labels: _labelsMetodo,
+        valores: _labelsMetodo.map(k => Math.round(porMetodo[k] * 100) / 100)
+      };
 
       // ── Staff (sin IVA) ──
       const staffOrdenado = Object.entries(porStaff).sort((a, b) => b[1] - a[1]);
@@ -1015,7 +1157,7 @@ export const obtenerEstadisticas = webMethod(
           }))
       };
 
-      console.log(`${TAG} OK: ${pagos.length} pagos, ventas=${totalVentas}€ (base=${ivaGlobal.base}€, IVA=${ivaGlobal.cuota}€ @${vatRate}%), propinas=${totalPropinas}€, ext=${externosResult.citas} PAGADAS/${externosResult.ventaBruta}€${excludeEfectivo ? ' [EWCM]' : ''}`);
+      console.log(`${TAG} OK: ${pagos.length} pagos, ventas=${totalVentas}€ (base=${ivaGlobal.base}€, IVA=${ivaGlobal.cuota}€ @${vatRate}%), propinas=${totalPropinas}€, ext=${externosResult.citas} PAGADAS/${externosResult.ventaBruta}€`);
 
       return {
         ok: true, hayDatos: true,
