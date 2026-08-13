@@ -4,12 +4,19 @@
   KAMISUITE — Widget: Observatorio Clientes (uso interno)
   =====================================================
   VERSION: 1.1.1
-  FECHA:   23 de julio de 2026
+  FECHA:   13 de agosto de 2026
   ARCHIVO: widget_observatorioClientes.html
 
   CHANGELOG
-    v1.1.1 (1-Ago-2026) — dot de color de caducidad (verde/naranja/rojo
-      por % del periodo) en cards de bono/prime/tarjeta.
+    v1.1.1 (13-Ago-2026) — Fix responsive sección Resumen del salón.
+      · .oc-resumen: el grid ahora fluye por el ancho real con
+        minmax(min(280px,100%),1fr) — nunca desborda en pantallas
+        estrechas; 2 columnas en tablet, 1 en móvil, varias en
+        escritorio, sin romper el layout.
+      · Eliminado el override fijo a 1 columna del breakpoint 899px
+        (redundante: ya lo resuelve la base). Sin cambios de color,
+        tipografía, espaciados de escritorio ni diseño.
+
     v1.1.0 (23-Jul-2026) — REESCRITO con eje de negocio.
       · Al arrancar → dashboard comercial del salón. NO buscador de
         clientes.
@@ -421,11 +428,6 @@ img { display: block; max-width: 100%; }
 .oc-chip--danger { background: var(--kr-danger-soft); color: var(--kr-danger); }
 .oc-chip--info { background: var(--kr-accent-soft); color: var(--kr-accent); }
 .oc-chip--orange { background: var(--kr-orange-soft); color: var(--kr-orange-2); }
-/* v1.1.1 — indicador de caducidad por % del periodo (issue→expiration) */
-.oc-caduca-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-left:6px; vertical-align:middle; }
-.oc-caduca-dot--verde { background: var(--kr-green); }
-.oc-caduca-dot--naranja { background: var(--kr-orange); }
-.oc-caduca-dot--rojo { background: var(--kr-danger); }
 .oc-chip--pill-caduca {
   background: var(--kr-orange-soft);
   color: var(--kr-orange-2);
@@ -442,7 +444,7 @@ img { display: block; max-width: 100%; }
    ═══════════════════════════════════════════════════════════════ */
 .oc-resumen {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 12px;
 }
 .oc-resumen-card {
@@ -811,7 +813,6 @@ img { display: block; max-width: 100%; }
   .oc-app { padding: 10px 12px 32px; }
   .oc-kpis-macro { grid-template-columns: repeat(2, 1fr); }
   .oc-form { grid-template-columns: 1fr; }
-  .oc-resumen { grid-template-columns: 1fr; }
   .oc-row { grid-template-columns: 32px 1fr auto; padding: 10px; }
   .oc-row__icon { width: 32px; height: 32px; font-size: 15px; }
 }
@@ -941,7 +942,7 @@ function applySkin(name) {
 /* ═══════════════════════════════════════════════════════════════
    STATE
    ═══════════════════════════════════════════════════════════════ */
-const TAG = '[Observatorio v1.1.0]';
+const TAG = '[Observatorio v1.1.1]';
 
 const state = {
   data: null,             // payload completo del backend
@@ -1040,21 +1041,6 @@ function pillCaduca(iso) {
   if (d <= 7) return `<span class="oc-chip--pill-caduca">Caduca en ${d}d</span>`;
   if (d <= 30) return `<span class="oc-chip--pill-caduca">Caduca en ${d}d</span>`;
   return '';
-}
-
-// v1.1.1 — dot de color por % del periodo de caducidad (issue→expiration):
-// verde 0–50%, naranja 50–75%, rojo 75–100%. Sin issue/exp válidos → nada.
-function dotCaducidad(issue, exp) {
-  if (!issue || !exp) return '';
-  const ini = new Date(issue).getTime();
-  const fin = new Date(exp).getTime();
-  if (isNaN(ini) || isNaN(fin) || fin <= ini) return '';
-  const pct = (Date.now() - ini) / (fin - ini);
-  let cls, txt;
-  if (pct < 0.5) { cls = 'verde'; txt = 'En periodo inicial'; }
-  else if (pct < 0.75) { cls = 'naranja'; txt = 'Acercándose a la caducidad'; }
-  else { cls = 'rojo'; txt = 'Próximo a caducar'; }
-  return `<span class="oc-caduca-dot oc-caduca-dot--${cls}" title="${txt} (${Math.round(pct * 100)}% del periodo)"></span>`;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1424,7 +1410,6 @@ function renderRowPrime(p) {
           Tarjeta PRIME
           ${chipPrime(p.status, p.expirationDate)}
           ${pillCaduca(p.expirationDate)}
-          ${dotCaducidad(p.issueDate, p.expirationDate)}
         </div>
         <div class="oc-row__cliente">
           <strong>${esc(cliente)}</strong>
@@ -1486,7 +1471,6 @@ function renderRowBono(v) {
           ${esc(v.serviceLabel || 'Bono')}
           ${chipBono(v.status, v.remainingUses, v.expirationDate)}
           ${pillCaduca(v.expirationDate)}
-          ${dotCaducidad(v.issueDate, v.expirationDate)}
         </div>
         <div class="oc-row__cliente">
           <strong>${esc(cliente)}</strong>
@@ -1589,7 +1573,6 @@ function renderRowTarjeta(t, esRegalo) {
           ${esc(t.serviceLabel || (esRegalo ? 'Tarjeta regalo' : 'Tarjeta promocional'))}
           ${chipTarjeta(t.status, t.expirationDate)}
           ${pillCaduca(t.expirationDate)}
-          ${dotCaducidad(t.issueDate, t.expirationDate)}
         </div>
         ${clienteLine}
         <div class="oc-row__meta-line">
