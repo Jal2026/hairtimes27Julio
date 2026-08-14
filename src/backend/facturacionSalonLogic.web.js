@@ -1,10 +1,33 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.6
-// TAG: facturacion-salon-v1.0.6
+// VERSION: 1.0.7
+// TAG: facturacion-salon-v1.0.7
 // =============================================================
 // CHANGELOG:
+// v1.0.7 (2026-08-14) — ÍNDICE DE DOCUMENTOS para listados.
+//   NEW listarIndiceDocumentos(): devuelve UNA fila ligera por documento
+//   vigente {key, modo, invoiceNumber}, para que el Editor de Cobros
+//   pueda marcar en la LISTA qué cobros ya tienen ticket o factura sin
+//   abrir la ficha de cada uno.
+//
+//   CLAVE DE CRUCE: `key` = sourceKey (que es el bookingId del cobro en
+//   PaymentReservations, tanto en reservas 'KRI_<id>' como en ventas de
+//   tienda). Para filas anteriores a v1.0.4 —cuando sourceKey aún no
+//   existía— se reconstruye como 'KRI_' + reservaId. Así el widget cruza
+//   por un único campo que ya tiene en cada fila del listado.
+//
+//   NO devuelve pdfUrl A PROPÓSITO: _resolverPdfUrlHttps llama a
+//   mediaManager.getDownloadUrl con caducidad de 3600s. Resolver cientos
+//   de URLs al pintar la lista sería caro y además habrían caducado al
+//   pulsarlas. El PDF se resuelve de una en una, al hacer clic, con los
+//   obtenerDocumento* que ya existían.
+//
+//   Excluye status='rectificada' (mismo criterio que la idempotencia):
+//   un ticket reemplazado por factura no debe marcarse en la lista.
+//   Paginación con el patrón de listarPaymentReservations.
+//   Cero cambios en el resto del archivo.
+//
 // v1.0.6 (2026-08-14) — COMPATIBILIDAD CON LA ANULACIÓN DE COBROS
 //   (paymentReservationsLogic v1.4.0). CAMBIO OBLIGATORIO: desplegar
 //   ESTA versión ANTES o A LA VEZ que la v1.4.0 del backend de cobros.
@@ -222,7 +245,7 @@ import { jsPDF } from 'jspdf';
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.6';
+const VERSION = '1.0.7';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -1266,6 +1289,49 @@ export const obtenerDocumentoVenta = webMethod(
     } catch (e) {
       console.error(`${TAG} ❌ obtenerDocumentoVenta: ${e.message}`);
       return { ok: false, version: VERSION, error: e.message };
+    }
+  }
+);
+
+// =============================================================
+// v1.0.7 — Índice ligero de documentos vigentes para listados.
+// Una fila por documento: { key, modo, invoiceNumber }.
+// `key` cruza contra PaymentReservations.bookingId.
+// =============================================================
+export const listarIndiceDocumentos = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    try {
+      let items = [];
+      let r = await wixData.query(COL_INVOICES)
+        .ne('status', 'rectificada')
+        .limit(1000)
+        .find(CMS_OPTS);
+      items = items.concat(r.items);
+      while (r.hasNext()) {
+        r = await r.next();
+        items = items.concat(r.items);
+      }
+
+      const out = [];
+      for (const inv of items) {
+        // sourceKey se rellena desde v1.0.4 en TODAS las filas nuevas.
+        // Las anteriores solo tienen reservaId → se reconstruye la clave.
+        const key = String(inv.sourceKey || '')
+          || (inv.reservaId ? `${PREFIJO_PAGO}${inv.reservaId}` : '');
+        if (!key || !inv.invoiceNumber) continue;
+        out.push({
+          key,
+          modo: inv.modo || '',
+          invoiceNumber: inv.invoiceNumber
+        });
+      }
+
+      console.log(`${TAG} 📇 Índice de documentos: ${out.length} vigentes sobre ${items.length} filas`);
+      return { ok: true, version: VERSION, items: out, total: out.length };
+    } catch (e) {
+      console.error(`${TAG} ❌ listarIndiceDocumentos: ${e.message}`);
+      return { ok: false, version: VERSION, error: e.message, items: [] };
     }
   }
 );
