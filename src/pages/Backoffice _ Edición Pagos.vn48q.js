@@ -1,8 +1,24 @@
 // ═══════════════════════════════════════════════════════════════
-// Page Code — Reservas y Pagos Editor  v2.3.0
+// Page Code — Reservas y Pagos Editor  v2.4.0
 // Bridge entre widget HTML y paymentReservationsLogic.web.js
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v2.4.0 (14-ago-2026) — MARCA DE DOCUMENTO EN EL LISTADO.
+//     Dos handlers nuevos sobre facturacionSalonLogic v1.0.7:
+//       'indiceDocumentos' → 'indiceDocumentosResult'
+//         Índice completo {key, modo, invoiceNumber} para que el widget
+//         pinte en cada fila si ya tiene ticket o factura. Se pide UNA
+//         vez por carga de lista, no una por fila.
+//       'abrirDocPago'     → 'docPagoAbrir'
+//         Resuelve el PDF de UN cobro y lo devuelve. Es un handler
+//         SEPARADO de 'obtenerDocPago' a propósito: aquel alimenta el
+//         modal (pinta el bloque Documento fiscal) y este solo sirve
+//         para abrir el PDF desde el listado, sin abrir ficha. Si se
+//         reutilizara el mismo mensaje, la respuesta repintaría un modal
+//         que no está abierto.
+//     Requiere facturacionSalonLogic v1.0.7.
+//     Contrapartida en widget: edicionpagoswidget v2.6.0.
+//
 //   v2.3.0 (14-ago-2026) — EMISIÓN DE TICKET / FACTURA desde el Editor.
 //     Motivo: un cliente que vuelve días después a pedir su factura se
 //     localiza aquí en segundos (todos los cobros, con buscador y
@@ -78,7 +94,8 @@ import {
   generarFacturaCita,
   obtenerDocumentoVenta,
   generarTicketVenta,
-  generarFacturaVenta
+  generarFacturaVenta,
+  listarIndiceDocumentos
 } from 'backend/facturacionSalonLogic.web';
 
 // v2.3.0 — Familia de un cobro a partir de su bookingId.
@@ -271,6 +288,52 @@ $w.onReady(function () {
         }
       } catch (err) {
         widget.postMessage({ type: 'docPago', payload: { existe: false, error: err.message || 'Error inesperado' } });
+      }
+    }
+
+    // ── v2.4.0 — Índice de documentos para marcar el listado ──
+    if (msg.type === 'indiceDocumentos') {
+      try {
+        const result = await listarIndiceDocumentos();
+        widget.postMessage({
+          type: 'indiceDocumentosResult',
+          payload: { items: (result && result.items) || [] }
+        });
+      } catch (err) {
+        // Fallo no bloqueante: la lista se pinta igual, solo sin marcas.
+        widget.postMessage({ type: 'indiceDocumentosResult', payload: { items: [], error: err.message } });
+      }
+    }
+
+    // ── v2.4.0 — Abrir el PDF de un cobro DESDE EL LISTADO ──
+    if (msg.type === 'abrirDocPago') {
+      try {
+        const { bookingId } = msg.payload || {};
+        const fam = familiaDeCobro(bookingId);
+        if (!fam) {
+          widget.postMessage({ type: 'docPagoAbrir', payload: { bookingId, error: 'Cobro sin bookingId.' } });
+          return;
+        }
+        const result = (fam.tipo === 'cita')
+          ? await obtenerDocumentoReserva({ reservaId: fam.reservaId })
+          : await obtenerDocumentoVenta({ sourceKey: fam.sourceKey });
+        if (result && result.ok && result.existe && result.documento) {
+          widget.postMessage({
+            type: 'docPagoAbrir',
+            payload: {
+              bookingId,
+              pdfUrl: result.documento.pdfUrl || '',
+              invoiceNumber: result.documento.invoiceNumber || ''
+            }
+          });
+        } else {
+          widget.postMessage({
+            type: 'docPagoAbrir',
+            payload: { bookingId, error: (result && result.error) || 'No se encontró el documento' }
+          });
+        }
+      } catch (err) {
+        widget.postMessage({ type: 'docPagoAbrir', payload: { error: err.message || 'Error inesperado' } });
       }
     }
 
