@@ -1,8 +1,33 @@
 // ═══════════════════════════════════════════════════════════════
-// Page Code — Reservas y Pagos Editor  v2.2.0
+// Page Code — Reservas y Pagos Editor  v2.3.0
 // Bridge entre widget HTML y paymentReservationsLogic.web.js
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v2.3.0 (14-ago-2026) — EMISIÓN DE TICKET / FACTURA desde el Editor.
+//     Motivo: un cliente que vuelve días después a pedir su factura se
+//     localiza aquí en segundos (todos los cobros, con buscador y
+//     filtros); en Recepción PRO hay que dar con el día y la cita.
+//
+//     Tres handlers nuevos que envuelven facturacionSalonLogic v1.0.6:
+//       'obtenerDocPago'     → 'docPago'
+//       'generarTicketPago'  → 'ticketPagoGenerado'
+//       'generarFacturaPago' → 'facturaPagoGenerada'
+//
+//     EL ROUTING VIVE AQUÍ, no en el widget. El widget manda siempre el
+//     bookingId de la fila y este page code decide la familia:
+//       · 'KRI_…' → cita  → *Cita({ reservaId: bookingId.slice(4) })
+//       · resto   → venta → *Venta({ sourceKey: bookingId })
+//         (TIENDA con orderId de Wix Stores, ESP_ de venta manual)
+//     Así el widget no duplica una regla de negocio que ya vive en el
+//     backend, y añadir una familia nueva se hace en un solo sitio.
+//
+//     Errores y 'duplicado' se propagan tal cual: el widget los pinta.
+//     No se interpreta ni se reescribe ningún mensaje del backend.
+//
+//     Requiere facturacionSalonLogic v1.0.6 (el fix de _pagoVigente es
+//     OBLIGATORIO: sin él, una fila anulada puede acabar facturada).
+//     Contrapartida en widget: edicionpagoswidget v2.4.0.
+//
 //   v2.2.0 (14-ago-2026) — ANULACIÓN DE COBROS. Nuevo handler
 //     'anular' → anularPaymentReservation({_id, motivo, usuario}).
 //     Responde 'anulado' / 'anularError'.
@@ -45,6 +70,29 @@ import {
   getAvisosBorradoReserva,
   eliminarReservaCompleta
 } from 'backend/paymentReservationsLogic.web';
+
+// v2.3.0 — Emisión de documentos de venta (facturacionSalonLogic v1.0.6)
+import {
+  obtenerDocumentoReserva,
+  generarTicketCita,
+  generarFacturaCita,
+  obtenerDocumentoVenta,
+  generarTicketVenta,
+  generarFacturaVenta
+} from 'backend/facturacionSalonLogic.web';
+
+// v2.3.0 — Familia de un cobro a partir de su bookingId.
+// 'KRI_' = cita interna (4 chars, mismo prefijo que recepcionProLogic
+// y paymentReservationsLogic). Cualquier otro prefijo es venta sin cita.
+const PREFIJO_CITA = 'KRI_';
+function familiaDeCobro(bookingId) {
+  const b = String(bookingId || '');
+  if (b.startsWith(PREFIJO_CITA)) {
+    const reservaId = b.slice(4);
+    return reservaId ? { tipo: 'cita', reservaId } : null;
+  }
+  return b ? { tipo: 'venta', sourceKey: b } : null;
+}
 
 $w.onReady(function () {
   const widget = $w('#htmlPaymentReservations');
@@ -191,6 +239,77 @@ $w.onReady(function () {
           type: 'anularError',
           message: err.message || 'Error inesperado'
         });
+      }
+    }
+
+    // ── v2.3.0 — ¿Tiene ya documento este cobro? ──
+    // El widget lo llama al abrir el modal para decidir entre pintar
+    // los botones [Ticket] [Factura] o el badge "Ya facturado".
+    if (msg.type === 'obtenerDocPago') {
+      try {
+        const { bookingId } = msg.payload || {};
+        const fam = familiaDeCobro(bookingId);
+        if (!fam) {
+          widget.postMessage({ type: 'docPago', payload: { existe: false, sinClave: true } });
+          return;
+        }
+        const result = (fam.tipo === 'cita')
+          ? await obtenerDocumentoReserva({ reservaId: fam.reservaId })
+          : await obtenerDocumentoVenta({ sourceKey: fam.sourceKey });
+        if (result && result.ok) {
+          widget.postMessage({
+            type: 'docPago',
+            payload: { existe: !!result.existe, documento: result.documento || null }
+          });
+        } else {
+          // No es un error de usuario: el modal se abre igual, solo que
+          // sin saber si hay documento. Se avisa sin bloquear.
+          widget.postMessage({
+            type: 'docPago',
+            payload: { existe: false, error: (result && result.error) || 'No se pudo consultar' }
+          });
+        }
+      } catch (err) {
+        widget.postMessage({ type: 'docPago', payload: { existe: false, error: err.message || 'Error inesperado' } });
+      }
+    }
+
+    // ── v2.3.0 — Emitir TICKET (factura simplificada) ──
+    if (msg.type === 'generarTicketPago') {
+      try {
+        const { bookingId } = msg.payload || {};
+        const fam = familiaDeCobro(bookingId);
+        if (!fam) {
+          widget.postMessage({ type: 'ticketPagoGenerado', payload: { ok: false, error: 'Cobro sin bookingId: no se puede emitir documento.' } });
+          return;
+        }
+        const result = (fam.tipo === 'cita')
+          ? await generarTicketCita({ reservaId: fam.reservaId })
+          : await generarTicketVenta({ sourceKey: fam.sourceKey });
+        widget.postMessage({ type: 'ticketPagoGenerado', payload: result || { ok: false, error: 'Sin respuesta del backend' } });
+      } catch (err) {
+        widget.postMessage({ type: 'ticketPagoGenerado', payload: { ok: false, error: err.message || 'Error inesperado' } });
+      }
+    }
+
+    // ── v2.3.0 — Emitir FACTURA COMPLETA ──
+    // vatId / legalName son opcionales: si no vienen, el backend los
+    // busca en el CRM del contacto. Si tampoco están ahí devuelve un
+    // error claro y el widget despliega el formulario para capturarlos.
+    if (msg.type === 'generarFacturaPago') {
+      try {
+        const { bookingId, vatId, legalName } = msg.payload || {};
+        const fam = familiaDeCobro(bookingId);
+        if (!fam) {
+          widget.postMessage({ type: 'facturaPagoGenerada', payload: { ok: false, error: 'Cobro sin bookingId: no se puede emitir documento.' } });
+          return;
+        }
+        const result = (fam.tipo === 'cita')
+          ? await generarFacturaCita({ reservaId: fam.reservaId, vatId, legalName })
+          : await generarFacturaVenta({ sourceKey: fam.sourceKey, vatId, legalName });
+        widget.postMessage({ type: 'facturaPagoGenerada', payload: result || { ok: false, error: 'Sin respuesta del backend' } });
+      } catch (err) {
+        widget.postMessage({ type: 'facturaPagoGenerada', payload: { ok: false, error: err.message || 'Error inesperado' } });
       }
     }
 
