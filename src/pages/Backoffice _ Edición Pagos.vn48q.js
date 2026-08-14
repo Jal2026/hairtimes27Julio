@@ -1,8 +1,29 @@
 // ═══════════════════════════════════════════════════════════════
-// Page Code — Reservas y Pagos Editor  v2.1.0
+// Page Code — Reservas y Pagos Editor  v2.2.0
 // Bridge entre widget HTML y paymentReservationsLogic.web.js
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v2.2.0 (14-ago-2026) — ANULACIÓN DE COBROS. Nuevo handler
+//     'anular' → anularPaymentReservation({_id, motivo, usuario}).
+//     Responde 'anulado' / 'anularError'.
+//
+//     OJO: este page code NO es un pass-through ciego. El handler
+//     'delete' desestructura {_id} del payload, así que cualquier
+//     campo nuevo enviado por el widget se perdería aquí. Por eso
+//     el handler 'anular' desestructura los TRES campos explícita-
+//     mente. Si mañana se añade un cuarto (p.ej. adjuntar el
+//     justificante), hay que tocar también este archivo.
+//
+//     El handler 'delete' se CONSERVA intacto por retrocompatibi-
+//     lidad durante el despliegue: con page code v2.2.0 ya pegado
+//     y widget v2.2.0 todavía en producción, el botón Borrar sigue
+//     funcionando. Una vez el widget v2.3.0 esté desplegado en
+//     TODOS los salones, este handler y el import de
+//     eliminarPaymentReservation pueden retirarse.
+//
+//     Requiere backend paymentReservationsLogic v1.4.0.
+//     Contrapartida en widget: edicionpagoswidget v2.3.0.
+//
 //   v2.1.0 (1-ago-2026) — HARD DELETE. Nuevos handlers 'avisosBorrado'
 //     (getAvisosBorradoReserva) y 'hardDelete' (eliminarReservaCompleta).
 //     Contrato CRUD previo intacto.
@@ -20,6 +41,7 @@ import {
   listarPaymentReservations,
   actualizarPaymentReservation,
   eliminarPaymentReservation,
+  anularPaymentReservation,
   getAvisosBorradoReserva,
   eliminarReservaCompleta
 } from 'backend/paymentReservationsLogic.web';
@@ -101,7 +123,7 @@ $w.onReady(function () {
       }
     }
 
-    // ── Eliminar registro ──
+    // ── Eliminar registro (LEGACY — ver nota v2.2.0 en cabecera) ──
     if (msg.type === 'delete') {
       try {
         const { _id } = msg.payload || {};
@@ -127,6 +149,46 @@ $w.onReady(function () {
       } catch (err) {
         widget.postMessage({
           type: 'deleteError',
+          message: err.message || 'Error inesperado'
+        });
+      }
+    }
+
+    // ── ANULAR COBRO (v2.2.0) ──
+    // Sustituye funcionalmente a 'delete' desde el widget v2.3.0.
+    // El cobro NO se borra: se marca ANULADO y se crea la fila de
+    // reversión. motivo es obligatorio (lo valida también el backend).
+    if (msg.type === 'anular') {
+      try {
+        const { _id, motivo, usuario } = msg.payload || {};
+        if (!_id) {
+          widget.postMessage({
+            type: 'anularError',
+            message: '_id no proporcionado'
+          });
+          return;
+        }
+        const result = await anularPaymentReservation({ _id, motivo, usuario });
+        if (result && result.success) {
+          widget.postMessage({
+            type: 'anulado',
+            payload: {
+              anuladoId: result.anuladoId,
+              reversionId: result.reversionId,
+              importeRevertido: result.importeRevertido,
+              reservaRevertida: result.reservaRevertida,
+              avisos: result.avisos
+            }
+          });
+        } else {
+          widget.postMessage({
+            type: 'anularError',
+            message: (result && result.error) || 'Error anulando el cobro'
+          });
+        }
+      } catch (err) {
+        widget.postMessage({
+          type: 'anularError',
           message: err.message || 'Error inesperado'
         });
       }
