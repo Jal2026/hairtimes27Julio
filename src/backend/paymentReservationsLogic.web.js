@@ -1,8 +1,53 @@
 // ═══════════════════════════════════════════════════════════════
-// paymentReservationsLogic.web.js  v1.3.3
+// paymentReservationsLogic.web.js  v1.4.0
 // KAMISUITE — CRUD PaymentReservations + verificación de contactIds
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v1.4.0 (14-ago-2026) — ANULACIÓN DE COBROS (sustituye al borrado
+//     físico desde el Editor). NEW anularPaymentReservation: el cobro
+//     original NUNCA se borra; se marca estadoCobro='ANULADO' con
+//     fechaAnulacion / usuarioAnulacion / motivoAnulacion, y se inserta
+//     una fila de REVERSION con importeTotal negado, mismo bookingId,
+//     mismo tipoPago y desglose negado. La reserva vuelve a
+//     'CONFIRMADA' reutilizando literal el bloque de v1.3.1.
+//
+//     POR QUÉ DOS FILAS Y NO UNA MARCA:
+//       cierreLogicExtendido (Q2) consulta PaymentReservations por
+//       fechaPago y suma importeTotal agrupando por tipoPago. NO conoce
+//       estadoCobro. Marcar la original sin fila compensatoria dejaría
+//       el importe contando en el cierre para siempre. Con la reversión
+//       el neto sale solo y cierreLogicExtendido NO se toca.
+//
+//     FECHA DE LA REVERSIÓN:
+//       fechaPago de la fila REVERSION = fecha de la anulación, NO la
+//       del cobro original. Anulación el mismo día → neto 0€ en ese
+//       cierre. Anulación posterior → el día original conserva su
+//       importe (ya se cerró y se reportó) y el día de la anulación
+//       registra el negativo. Es el tratamiento contable correcto: no
+//       se reescribe un cierre ya emitido.
+//
+//     CAMPOS NUEVOS EN EL CMS PaymentReservations (crear a mano):
+//       estadoCobro     Texto  ''/'ACTIVO' | 'ANULADO' | 'REVERSION'
+//       anulacionDe     Texto  _id del cobro original (solo REVERSION)
+//       fechaAnulacion  Fecha
+//       usuarioAnulacion Texto
+//       motivoAnulacion Texto
+//     ATENCIÓN RETROCOMPATIBILIDAD: todas las filas históricas tienen
+//     estadoCobro VACÍO. Vacío === ACTIVO en toda lectura (_esActivo).
+//
+//     _avisosDeReserva: nCobros/totalCobros pasan a contar SOLO cobros
+//     activos; se añade nAnulados. El widget v2.2.0 ignora el campo
+//     nuevo sin romperse.
+//
+//     eliminarPaymentReservation (v1.3.1) queda EXPORTADA e INTACTA
+//     por retrocompatibilidad, pero el Editor ya no la usa. Único
+//     consumidor era el page code 'Backoffice _ Edición Pagos'
+//     (verificado por grep sobre los 164 .js del repo).
+//     eliminarReservaCompleta (v1.3.3) NO se toca: sigue siendo la
+//     salida de emergencia y sigue borrando físicamente.
+//
+//     Contrapartidas: page code v2.2.0 + widget v2.3.0.
+//
 //   v1.3.3 (1-ago-2026) — HARD DELETE de reserva desde el Editor
 //     "Reservas y Pagos". NEW getAvisosBorradoReserva (avisos previos)
 //     + eliminarReservaCompleta: liberan los huecos de calendario +
@@ -100,7 +145,44 @@ import { sessions } from 'wix-bookings-backend'; // v1.3.3 — liberar huecos de
 
 const COLLECTION = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations'; // v1.3.1 — reversión de status al borrar cobro KRI_
-const TAG = '[PaymentReservations][v1.3.3]';
+const TAG = '[PaymentReservations][v1.4.0]';
+
+// ── v1.4.0 — Estados de cobro ───────────────────────────────────
+// OJO: las filas anteriores a v1.4.0 tienen estadoCobro VACÍO.
+// Vacío se interpreta SIEMPRE como ACTIVO (ver _esActivo).
+const EST_ACTIVO = 'ACTIVO';
+const EST_ANULADO = 'ANULADO';
+const EST_REVERSION = 'REVERSION';
+
+// Vacío / null / undefined / 'ACTIVO' → cobro vivo.
+function _esActivo(item) {
+  const e = String((item && item.estadoCobro) || '').trim().toUpperCase();
+  return e === '' || e === EST_ACTIVO;
+}
+
+// Niega el desglose Mixto conservando el formato canónico:
+//   JSON.stringify({Tarjeta:N, Efectivo:N, Bizum:N}) con solo keys > 0.
+// La fila de REVERSION lleva los mismos métodos en negativo para que
+// cierreLogicExtendido devuelva cada bucket (Tarjeta/Efectivo/Bizum)
+// a su sitio. Ante cualquier problema de parseo devuelve '' — no
+// inventamos un desglose.
+function _negarDesglose(raw) {
+  const txt = (raw == null) ? '' : String(raw).trim();
+  if (!txt) return '';
+  try {
+    const o = JSON.parse(txt);
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return '';
+    const out = {};
+    for (const k of Object.keys(o)) {
+      const n = Number(o[k]);
+      if (Number.isFinite(n) && n !== 0) out[k] = -n;
+    }
+    return Object.keys(out).length ? JSON.stringify(out) : '';
+  } catch (e) {
+    console.warn(`${TAG} \u26a0\ufe0f _negarDesglose: desglose no parseable, se deja vac\u00edo`);
+    return '';
+  }
+}
 
 // Nombres concretos a loggear para debug (vacío = sin debug dirigido).
 // Se compara normalizado contra el nombreCliente del item.
@@ -220,6 +302,11 @@ export const actualizarPaymentReservation = webMethod(
 
 // ───────────────────────────────────────────────────────────────
 // v1.3.0 — eliminarPaymentReservation(_id)
+// ⚠️ v1.4.0 — YA NO LA USA EL EDITOR DE COBROS. El botón "Borrar"
+//    del modal se sustituyó por "ANULAR COBRO" → anularPaymentReservation.
+//    Se conserva exportada e intacta por retrocompatibilidad (y por si
+//    hiciera falta una limpieza puntual de filas huérfanas de pruebas).
+//    NO usarla para corregir cobros reales: borra sin dejar rastro.
 // ───────────────────────────────────────────────────────────────
 // Borra UNA fila del CMS PaymentReservations.
 // Operación irreversible. NO toca el booking en Wix Bookings (eso es
@@ -304,6 +391,191 @@ export const eliminarPaymentReservation = webMethod(
   }
 );
 
+
+// ═══════════════════════════════════════════════════════════════
+// v1.4.0 — anularPaymentReservation({ _id, motivo, usuario })
+// ═══════════════════════════════════════════════════════════════
+// Sustituye al borrado físico en el Editor de Cobros.
+//
+// El cobro original NUNCA se borra. Se hace lo siguiente:
+//   1. Se inserta una fila de REVERSION con importeTotal negado,
+//      mismo bookingId, mismo tipoPago y desglose negado.
+//      fechaPago de la reversión = AHORA (fecha de la anulación).
+//   2. Se marca el original con estadoCobro='ANULADO' + metadatos
+//      de auditoría (fechaAnulacion, usuarioAnulacion, motivoAnulacion).
+//   3. Se revierte KamisuiteReservations.status a 'CONFIRMADA'
+//      (bloque literal de v1.3.1, misma política de fallback).
+//   4. Se consulta Invoices por reservaId y se devuelve el número de
+//      documento si lo hay — NO bloquea: informa. Con factura emitida
+//      la vía correcta es la rectificativa, pero dejar al salón sin
+//      poder anular el cobro sería peor.
+//
+// ORDEN DE ESCRITURA (deliberado):
+//   Primero el insert de la reversión, después el update del original.
+//   Si el insert falla → no se ha tocado nada, se aborta limpio.
+//   Si el update falla → se hace rollback del insert (remove) y se
+//   aborta. Así nunca queda un negativo suelto sin su original marcado.
+//
+// Efecto en cadena (verificado en código de producción):
+//   · Recepción PRO      → cita naranja al pulsar ↻ (lee status).
+//   · Rendimiento Prod.  → deja de contarla (gate status==='PAGADO').
+//   · Cierre Financiero  → neto 0€ si se anula el mismo día.
+//   · Observatorio       → importe fuera del acumulado.
+//
+// NO deshace canjes de bono/tarjeta (KamisuiteVouchers sigue con el
+// uso consumido) ni puntos Loyalty. Se devuelven como avisos.
+//
+// Devuelve:
+//   { success:true, anuladoId, reversionId, importeRevertido,
+//     reservaRevertida, avisos:{ factura, hayCanje } }
+//   { success:false, error }
+// ═══════════════════════════════════════════════════════════════
+export const anularPaymentReservation = webMethod(
+  Permissions.Anyone,
+  async ({ _id, motivo, usuario } = {}) => {
+    try {
+      if (!_id || typeof _id !== 'string') {
+        return { success: false, error: '_id inválido' };
+      }
+
+      const motivoTxt = String(motivo || '').trim();
+      if (!motivoTxt) {
+        return { success: false, error: 'El motivo de anulación es obligatorio.' };
+      }
+      const usuarioTxt = String(usuario || '').trim() || '(no identificado)';
+
+      // ── 0. Leer el cobro original ──────────────────────────────
+      let item;
+      try {
+        item = await wixData.get(COLLECTION, _id, { suppressAuth: true });
+      } catch (e) {
+        return { success: false, error: 'Registro no encontrado' };
+      }
+      if (!item) {
+        return { success: false, error: 'Registro no encontrado' };
+      }
+
+      // No se anula lo ya anulado, ni una fila de reversión.
+      const estadoActual = String(item.estadoCobro || '').trim().toUpperCase();
+      if (estadoActual === EST_ANULADO) {
+        return { success: false, error: 'Este cobro ya está anulado.' };
+      }
+      if (estadoActual === EST_REVERSION) {
+        return { success: false, error: 'Esta fila es una reversión de otra anulación. No se puede anular.' };
+      }
+
+      const importeOriginal = Number(item.importeTotal || 0);
+      const nombreLog = item.nombreCliente || '(sin nombre)';
+      const ahora = new Date();
+
+      // ── 1. Insertar la fila de REVERSION ───────────────────────
+      // Hereda bookingId, tipoPago, staff, contactId, fechaReserva y
+      // nombreCliente para que TODAS las consultas existentes por
+      // bookingId / staff / fechaPago la encuentren sin adaptación.
+      const filaReversion = {
+        bookingId: item.bookingId || '',
+        nombreCliente: item.nombreCliente || '',
+        importeTotal: -importeOriginal,
+        tipoPago: item.tipoPago || '',
+        desglosemetodopago: _negarDesglose(item.desglosemetodopago),
+        descripcion: `↩️ ANULACIÓN de ${item.descripcion || '(sin descripción)'}`,
+        fechaPago: ahora,
+        fechaReserva: item.fechaReserva || null,
+        staff: item.staff || '',
+        contactId: item.contactId || '',
+        estadoCobro: EST_REVERSION,
+        anulacionDe: _id,
+        fechaAnulacion: ahora,
+        usuarioAnulacion: usuarioTxt,
+        motivoAnulacion: motivoTxt
+      };
+
+      let reversion;
+      try {
+        reversion = await wixData.insert(COLLECTION, filaReversion, { suppressAuth: true });
+      } catch (insErr) {
+        console.error(`${TAG} ❌ No se pudo insertar la reversión de ${_id}:`, insErr);
+        return { success: false, error: `No se pudo registrar la reversión: ${insErr.message}` };
+      }
+
+      // ── 2. Marcar el original como ANULADO ─────────────────────
+      // READ-MERGE-UPDATE sobre el registro completo ya leído.
+      try {
+        item.estadoCobro = EST_ANULADO;
+        item.fechaAnulacion = ahora;
+        item.usuarioAnulacion = usuarioTxt;
+        item.motivoAnulacion = motivoTxt;
+        await wixData.update(COLLECTION, item, { suppressAuth: true });
+      } catch (updErr) {
+        // ROLLBACK: quitar la reversión recién creada para no dejar un
+        // negativo suelto sin su original marcado.
+        console.error(`${TAG} ❌ Error marcando ANULADO ${_id}, rollback de la reversión:`, updErr);
+        try {
+          await wixData.remove(COLLECTION, reversion._id, { suppressAuth: true });
+        } catch (rbErr) {
+          console.error(`${TAG} ❌❌ ROLLBACK FALLIDO. Fila de reversión huérfana: ${reversion._id}`, rbErr);
+        }
+        return { success: false, error: `No se pudo marcar el cobro como anulado: ${updErr.message}` };
+      }
+
+      // ── 3. Revertir status de KamisuiteReservations ────────────
+      // Bloque literal de v1.3.1. Prefijo 'KRI_' = 4 chars → slice(4).
+      // Fallback seguro: si falla, la anulación del cobro YA está
+      // hecha y no se deshace. Se registra warning.
+      let reservaRevertida = null;
+      let reservaId = null;
+      try {
+        const bookingId = String(item.bookingId || '');
+        if (bookingId.startsWith('KRI_')) {
+          reservaId = bookingId.slice(4) || null;
+          if (reservaId) {
+            const reserva = await wixData.get(COLECCION_RESERVAS, reservaId, { suppressAuth: true });
+            if (reserva && reserva.status === 'PAGADO') {
+              reserva.status = 'CONFIRMADA';
+              await wixData.update(COLECCION_RESERVAS, reserva, { suppressAuth: true });
+              reservaRevertida = reservaId;
+              console.log(`${TAG} ↩️ KamisuiteReservations ${reservaId} → CONFIRMADA (status revertido)`);
+            } else if (reserva) {
+              console.log(`${TAG} ℹ️ KamisuiteReservations ${reservaId} no está en PAGADO (status='${reserva.status || ''}'), no se revierte`);
+            } else {
+              console.warn(`${TAG} ⚠️ KamisuiteReservations ${reservaId} no encontrada, no se revierte status`);
+            }
+          }
+        }
+      } catch (revErr) {
+        console.warn(`${TAG} ⚠️ Error revirtiendo status KamisuiteReservations: ${revErr.message}`);
+      }
+
+      // ── 4. Avisos (factura emitida / canje) — informativos ─────
+      let avisos = { factura: null, hayCanje: false };
+      try {
+        if (reservaId) {
+          const a = await _avisosDeReserva(reservaId);
+          avisos = { factura: a.factura, hayCanje: a.hayCanje };
+        } else if (String(item.tipoPago || '').toLowerCase() === 'canje') {
+          avisos.hayCanje = true;
+        }
+      } catch (avErr) {
+        console.warn(`${TAG} ⚠️ No se pudieron leer los avisos: ${avErr.message}`);
+      }
+
+      console.log(`${TAG} 🚫 ANULADO ${_id} | "${nombreLog}" | ${importeOriginal}€ → reversión ${reversion._id} (${-importeOriginal}€) | motivo: ${motivoTxt} | por: ${usuarioTxt}${reservaRevertida ? ` | reserva ${reservaRevertida} → CONFIRMADA` : ''}${avisos.factura ? ` | ⚠️ factura ${avisos.factura} emitida` : ''}`);
+
+      return {
+        success: true,
+        anuladoId: _id,
+        reversionId: reversion._id,
+        importeRevertido: -importeOriginal,
+        reservaRevertida,
+        avisos
+      };
+    } catch (err) {
+      console.error(`${TAG} ❌ Error anular:`, err);
+      return { success: false, error: err.message };
+    }
+  }
+);
+
 // ═══════════════════════════════════════════════════════════════
 // v1.3.3 — BORRADO TOTAL de una reserva (HARD DELETE), aunque esté
 // pagada. Salida de emergencia para citas mal planteadas del todo,
@@ -351,12 +623,19 @@ async function _avisosDeReserva(reservaId) {
   const detalleCanje = [];
   let nCobros = 0;
   let totalCobros = 0;
+  let nAnulados = 0; // v1.4.0 — filas ANULADO + REVERSION de esta reserva
   try {
     const pagos = await wixData.query(COLLECTION)
       .eq('bookingId', bookingIdKey)
       .find({ suppressAuth: true });
-    nCobros = pagos.items.length;
+    // v1.4.0 — nCobros/totalCobros cuentan SOLO cobros vivos. Las filas
+    // ANULADO y REVERSION se excluyen (si no, un cobro anulado el mismo
+    // día se mostraría como "2 cobros · 0€" y despista al operador).
+    // El canje se detecta sobre los vivos por el mismo motivo: un canje
+    // ya anulado no debe seguir avisando.
     for (const p of pagos.items) {
+      if (!_esActivo(p)) { nAnulados++; continue; }
+      nCobros++;
       totalCobros += Number(p.importeTotal || 0);
       if (String(p.tipoPago || '').toLowerCase() === 'canje') {
         hayCanje = true;
@@ -377,7 +656,7 @@ async function _avisosDeReserva(reservaId) {
   } catch (e) {
     console.warn(`${TAG} ⚠️ _avisosDeReserva invoices: ${e.message}`);
   }
-  return { hayCanje, detalleCanje, factura, nCobros, totalCobros };
+  return { hayCanje, detalleCanje, factura, nCobros, totalCobros, nAnulados };
 }
 
 // getAvisosBorradoReserva({ reservaId })
