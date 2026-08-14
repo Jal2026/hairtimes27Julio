@@ -1,10 +1,49 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.5
-// TAG: facturacion-salon-v1.0.5
+// VERSION: 1.0.6
+// TAG: facturacion-salon-v1.0.6
 // =============================================================
 // CHANGELOG:
+// v1.0.6 (2026-08-14) — COMPATIBILIDAD CON LA ANULACIÓN DE COBROS
+//   (paymentReservationsLogic v1.4.0). CAMBIO OBLIGATORIO: desplegar
+//   ESTA versión ANTES o A LA VEZ que la v1.4.0 del backend de cobros.
+//
+//   PROBLEMA: `_leerPagoDeReserva` y `_leerPagoPorBookingId` hacían
+//     .eq('bookingId', clave).limit(1) SIN orden y SIN filtro de
+//     estado, quedándose con la primera fila que devolviera Wix.
+//     Era inofensivo mientras un bookingId tenía como mucho una fila.
+//     Con la anulación, un mismo bookingId puede tener TRES:
+//       KRI_abc  +50 €  ANULADO
+//       KRI_abc  −50 €  REVERSION
+//       KRI_abc  +50 €  (el cobro bueno)
+//     Sin orden garantizado, la query podía devolver:
+//       · la REVERSION → totalAmount negativo → salta el guard
+//         'El importe cobrado es cero' y el salón no entiende nada;
+//       · la ANULADA   → se emite un documento fiscal por un importe
+//         que fue revertido. Este es el grave.
+//
+//   FIX: ambas funciones leen TODAS las filas del bookingId, descartan
+//     las que no están activas (estadoCobro ANULADO / REVERSION) y se
+//     quedan con la ACTIVA más reciente por fechaPago. Helper nuevo
+//     `_pagoVigente`.
+//
+//   RETROCOMPATIBILIDAD: las filas anteriores a v1.4.0 tienen
+//     estadoCobro VACÍO. Vacío === ACTIVO, mismo criterio que
+//     `_esActivo` de paymentReservationsLogic v1.4.0 y que `estadoDe`
+//     del widget. Si ese criterio cambia en un sitio, cambia en los tres.
+//     Con una sola fila activa el comportamiento es idéntico a v1.0.5.
+//
+//   NO SE TOCA: numeración, series, desglose de IVA, generación y
+//     subida del PDF, resolución de URL HTTPS, campos Verifactu,
+//     idempotencia ni la firma de los seis webMethods públicos.
+//
+//   PENDIENTE CONSCIENTE (decisión de negocio, no bug): si se emitió
+//     ticket, luego se anuló el cobro y se recobró, la idempotencia
+//     sigue encontrando el ticket viejo y bloquea por 'duplicado'.
+//     Es lo correcto fiscalmente (ese ticket existe y solo se corrige
+//     con rectificativa), pero el operador ve 'duplicado' sin contexto.
+//
 // v1.0.5 (2026-08-04) — La RAZÓN SOCIAL va al campo nativo del contacto
 //   - Se escribía en el extended field 'invoices.company', que no existe:
 //     Wix guarda la empresa en la propiedad NATIVA `info.company` del
@@ -183,7 +222,7 @@ import { jsPDF } from 'jspdf';
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.5';
+const VERSION = '1.0.6';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -266,38 +305,66 @@ async function _leerReserva(reservaId) {
   }
 }
 
-// Lee PaymentReservations por bookingId = KRI_${reservaId}.
-// Devuelve null si no se encuentra fila de pago (la reserva no fue
-// cobrada todavía → no se puede emitir documento).
-async function _leerPagoDeReserva(reservaId) {
-  const bookingIdKey = `${PREFIJO_PAGO}${reservaId}`;
+// v1.0.6 — ¿Es un cobro vivo? Las filas anteriores a v1.4.0 tienen
+// estadoCobro VACÍO: vacío === ACTIVO. Criterio idéntico a `_esActivo`
+// de paymentReservationsLogic v1.4.0 y a `estadoDe` del widget del
+// Editor de Cobros. Si cambia en un sitio, cambia en los tres.
+function _cobroActivo(item) {
+  const e = String((item && item.estadoCobro) || '').trim().toUpperCase();
+  return e === '' || e === 'ACTIVO';
+}
+
+// v1.0.6 — Devuelve el cobro VIGENTE de un bookingId.
+// Un mismo bookingId puede tener varias filas tras una anulación
+// (original ANULADO + su REVERSION + el cobro nuevo). Se descartan las
+// no activas y se devuelve la más reciente por fechaPago: si el salón
+// anuló y volvió a cobrar, el documento debe emitirse sobre el cobro
+// bueno, no sobre el revertido.
+// NO se usa .limit(1): sin orden garantizado, Wix puede devolver
+// cualquiera de las tres. Ese era exactamente el bug de v1.0.5.
+async function _pagoVigente(bookingIdKey) {
+  if (!bookingIdKey) return null;
   try {
     const r = await wixData.query(COL_PAGOS)
       .eq('bookingId', bookingIdKey)
-      .limit(1)
       .find(CMS_OPTS);
-    return (r.items && r.items[0]) ? r.items[0] : null;
+    const items = (r && r.items) ? r.items : [];
+    if (items.length === 0) return null;
+
+    const activos = items.filter(_cobroActivo);
+    if (activos.length === 0) {
+      console.log(`${TAG} ℹ️ ${bookingIdKey}: ${items.length} fila(s) de cobro, ninguna activa (anuladas)`);
+      return null;
+    }
+    if (activos.length === 1) return activos[0];
+
+    // Varias activas: la más reciente por fechaPago. Las filas sin
+    // fecha van al final (no pueden ganar a una fechada).
+    activos.sort((a, b) => {
+      const ta = a.fechaPago ? new Date(a.fechaPago).getTime() : -Infinity;
+      const tb = b.fechaPago ? new Date(b.fechaPago).getTime() : -Infinity;
+      return tb - ta;
+    });
+    console.log(`${TAG} ℹ️ ${bookingIdKey}: ${activos.length} cobros activos, se toma el más reciente`);
+    return activos[0];
   } catch (e) {
     console.warn(`${TAG} Error leyendo PaymentReservations: ${e.message}`);
     return null;
   }
 }
 
+// Lee PaymentReservations por bookingId = KRI_${reservaId}.
+// Devuelve null si no hay cobro vigente (la reserva no fue cobrada
+// todavía, o su cobro está anulado → no se puede emitir documento).
+async function _leerPagoDeReserva(reservaId) {
+  return await _pagoVigente(`${PREFIJO_PAGO}${reservaId}`);
+}
+
 // v1.0.4 — Lee PaymentReservations por bookingId literal. Lo usan las
 // ventas sin cita, cuya clave de cobro es el orderId de Wix Stores
 // (lo escribe tiendaProductos.venderProductosDesdeAgenda).
 async function _leerPagoPorBookingId(bookingId) {
-  if (!bookingId) return null;
-  try {
-    const r = await wixData.query(COL_PAGOS)
-      .eq('bookingId', bookingId)
-      .limit(1)
-      .find(CMS_OPTS);
-    return (r.items && r.items[0]) ? r.items[0] : null;
-  } catch (e) {
-    console.warn(`${TAG} Error leyendo PaymentReservations por bookingId: ${e.message}`);
-    return null;
-  }
+  return await _pagoVigente(bookingId);
 }
 
 // Lee contacto CRM v2 elevado. Devuelve null si falla.
