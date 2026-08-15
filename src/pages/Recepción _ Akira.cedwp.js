@@ -1,8 +1,18 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA · Page Code
  * Página:   AKIRA (Consultor)
- * VERSION:  1.6.0
- * FECHA:    18 Julio 2026
+ * VERSION:  1.7.0
+ * FECHA:    15 Agosto 2026
+ *
+ * CAMBIOS v1.6.0 → v1.7.0 — PLANO DE ARRANQUE Y TEXTOS POR PLANO.
+ *   El plano ya no lo fija este archivo ni el alignment publicado: lo elige
+ *   el usuario con los chips de la topbar (akiraConsole v1.1.0) y viaja en
+ *   `modo` hasta akiraLogic v1.7.0, que decide alignment, corpus y si hay
+ *   herramientas de datos. Aquí solo se manda el plano DE ARRANQUE ('asesor')
+ *   y los textos que dependen del salón.
+ *   Se añade `brandPlanes`: los textos de bienvenida, subtítulo, placeholder
+ *   y "pensando" de cada plano. El custom element trae sus valores por
+ *   defecto; esto solo mete el nombre del salón donde toca.
  *
  * CAMBIOS v1.5.0 → v1.6.0: se oculta la bola flotante del chat IA de Wix en
  * la página de AKIRA (ocultarBolaChatIA). ⚠️ El ID es por página: verificar
@@ -76,16 +86,17 @@ import {
 
 const EL_ID = '#akiraConsole';   // ← ajustar si el Element ID del editor difiere
 
-// Modo del asistente. UN SOLO AKIRA: hoy 'consultor', mañana 'recepcion' o
-// 'asistente' sin tocar el custom element ni el backend.
-const MODO = 'consultor';
+// Plano DE ARRANQUE. UN SOLO AKIRA con varios planos de utilidad: el usuario
+// cambia entre ellos con los chips de la topbar, así que esto solo decide con
+// cuál se abre la pantalla. Valores válidos: 'asesor' | 'ayuda'.
+const MODO = 'asesor';
 
 // Voz. Requiere backend/akiraTTS.web.js + secret GOOGLE_SA_JSON.
 // La VOZ CONCRETA no se elige aquí: sale de SalonConfig.voiceId (cero
 // hardcoding). Este flag solo enciende o apaga la funcionalidad.
 const TTS_ENABLED = true;
 
-const V = 'AKIRA Page v1.6.0';
+const V = 'AKIRA Page v1.7.0';
 
 // Bola flotante del chat IA nativo de Wix. Se oculta en la página de AKIRA:
 // no queremos dos asistentes compitiendo en pantalla.
@@ -240,11 +251,21 @@ $w.onReady(async function () {
   // dependen de este page code. Aquí solo se envía lo que SÍ varía por salón:
   // el nombre del salón, que sale de SalonConfig.
   const brand = {
-    sub: abrir.brandName ? `${abrir.brandName} · Consultor` : 'Consultor',
-    welcomeTitle: abrir.brandName ? `AKIRA · ${abrir.brandName}` : 'AKIRA Consultor',
-    welcome: 'Pregúntame por el rendimiento de tu salón: facturación, ocupación, profesionales, clientes, conversión. Analizo tus datos reales y te doy conclusiones.',
-    placeholder: 'Pregunta por tus datos…',
-    thinking: 'Analizando tus datos…'
+    sub: abrir.brandName || ''
+  };
+
+  // Textos por plano. Solo se envía lo que depende del salón; el resto
+  // (bienvenida, placeholder, "pensando") vive en BRAND_PLANOS del custom
+  // element, que es la marca del producto y es igual en todos los salones.
+  const brandPlanes = {
+    asesor: {
+      sub: abrir.brandName ? `${abrir.brandName} · Asesor` : 'Asesor',
+      welcomeTitle: abrir.brandName ? `AKIRA · ${abrir.brandName}` : 'AKIRA · Asesor'
+    },
+    ayuda: {
+      sub: abrir.brandName ? `${abrir.brandName} · Ayuda` : 'Ayuda',
+      welcomeTitle: abrir.brandName ? `AKIRA · ${abrir.brandName}` : 'AKIRA · Ayuda'
+    }
   };
 
   const configPayload = JSON.stringify({
@@ -254,7 +275,8 @@ $w.onReady(async function () {
     sessionId: null,          // cada visita arranca en welcome (CATHOVIA v1.5.3)
     skin: abrir.widgetSkin || 'niebla',
     ttsEnabled: TTS_ENABLED,
-    brand
+    brand,
+    brandPlanes
   });
 
   // Carga inicial FORZADA del historial.
