@@ -1,8 +1,26 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.7.0
+ * VERSION:  1.8.0
  * FECHA:    15 Agosto 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.7.0 → v1.8.0 — EL SALUDO SALE DEL CMS, NO DEL CÓDIGO
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   Los textos de bienvenida de cada plano vivían escritos a mano en el custom
+ *   element (BRAND_PLANOS). Cambiar el saludo obligaba a tocar código, que es
+ *   justo lo que el patrón EGAEL evita.
+ *
+ *   `akiraAbrir` devuelve ahora `planos`: por cada plano con alignment
+ *   publicado, su welcomeTitle y welcomeText. El page code los pasa al widget
+ *   como `brandPlanes` y el custom element los superpone a sus valores por
+ *   defecto. Lo que esté vacío en el CMS conserva el texto de fábrica: no se
+ *   puede dejar la pantalla sin saludo por descuido.
+ *
+ *   Campos nuevos en AkiraAlignment: welcomeTitle, welcomeText (ambos Texto).
+ *   Si no existen, `akiraAbrir` devuelve los planos vacíos y el widget usa sus
+ *   textos por defecto — degrada sin romper.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.6.0 → v1.7.0 — ENRUTADOR DE PLANO: LO ELIGE EL USUARIO
@@ -417,7 +435,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -2466,6 +2484,20 @@ export const akiraAbrir = webMethod(
     try {
       const [alignments, salon] = await Promise.all([_getAlignments(), _getSalonConfig()]);
       const config = _alignmentDelPlano(alignments, PLANO_DEFECTO) || (alignments[0] || null);
+
+      // Textos de bienvenida por plano (v1.8.0). Solo se devuelve lo que el
+      // salón haya escrito: los vacíos NO se mandan, para que el widget
+      // conserve su texto por defecto en lugar de quedarse en blanco.
+      const planos = {};
+      for (const p of PLANOS_VALIDOS) {
+        const a = _alignmentDelPlano(alignments, p);
+        if (!a) continue;
+        const bloque = {};
+        if (a.welcomeTitle && String(a.welcomeTitle).trim()) bloque.welcomeTitle = String(a.welcomeTitle).trim();
+        if (a.welcomeText  && String(a.welcomeText).trim())  bloque.welcome      = String(a.welcomeText).trim();
+        if (Object.keys(bloque).length > 0) planos[p] = bloque;
+      }
+
       // Cada visita arranca en welcome (lección CATHOVIA v1.5.3).
       return {
         ok: true,
@@ -2473,6 +2505,7 @@ export const akiraAbrir = webMethod(
         brandName: (salon && salon.brandName) || '',
         widgetSkin: (salon && salon.widgetSkin) || 'niebla',
         logoUrl: (salon && salon.logoUrl) || '',
+        planos: planos,
         alignment: config ? { version: config.version || '1.0', tone: config.tone || 'directo' } : null
       };
     } catch (e) {
