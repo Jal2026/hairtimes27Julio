@@ -1,8 +1,49 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.5.0
- * FECHA:    12 Agosto 2026
+ * VERSION:  1.6.0
+ * FECHA:    15 Agosto 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.5.0 → v1.6.0 — EL MANUAL DE USUARIO ENTRA COMPLETO EN AYUDA
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   CONTEXTO. El corpus del plano AYUDA es el Manual de Usuario V2.1 completo:
+ *   150 páginas, 22 capítulos (uno por app), ~121.000 caracteres. Se importa a
+ *   AkiraDocuments con tipo='manual', modo='ayuda', orden 1..22.
+ *
+ *   1) PRESUPUESTO DE CORPUS POR PLANO. `MAX_DOC_CHARS` (12.000) era común a
+ *      todos los planos: con el manual cargado solo habrían entrado los dos
+ *      primeros capítulos y el resto se descartaba EN SILENCIO (el bucle corta
+ *      y hace break, sin log). Ahora el tope se resuelve por plano vía
+ *      DOC_CHARS_POR_PLANO: ASESOR y ASISTENTE siguen en 12.000; AYUDA sube a
+ *      150.000 para que el manual entre entero en el bloque cacheado.
+ *      El PREP loguea corpus=<chars>/<tope> y avisa si se va a truncar.
+ *
+ *      Por qué entero y no recuperación por capítulo: las preguntas de ayuda
+ *      cruzan apps ("cobré mal una reserva, ¿dónde lo arreglo?" → Recepción PRO
+ *      + Edición de Cobros). Con el corpus completo delante el modelo cose
+ *      capítulos sin un segundo viaje a la API, que en esta plataforma es
+ *      exposición extra al 504 ya documentado. El coste se amortiza con el
+ *      prompt caching (bloque stable, cache_control ephemeral).
+ *
+ *   2) INSTRUCCIÓN DE CORPUS DEPENDIENTE DEL PLANO. El encabezado del bloque
+ *      de conocimiento estaba redactado para ASESOR ("criterio experto…
+ *      no lo cites textualmente") y se enviaba en TODOS los planos. Aplicado
+ *      al manual pide justo lo contrario de lo correcto: parafrasear una
+ *      interfaz produce nombres de botón inventados. AYUDA recibe ahora la
+ *      instrucción inversa — reproducir nombres de pantalla y pasos literales,
+ *      y decir que no está cubierto antes que deducirlo.
+ *
+ *   3) `_getDocumentos` limit 50 → 200. Esa query es ANTERIOR al filtro por
+ *      plano (el alignment se lee en paralelo), así que el tope se reparte
+ *      entre todos los planos. Con las 22 filas del manual más el corpus de
+ *      ASESOR, 50 se queda corto y los últimos documentos se perdían antes
+ *      de llegar al filtro. Se sube el límite en vez de filtrar en la query
+ *      para no serializar el PREP.
+ *
+ *   Sin cambios de CMS. Sin cambios en el motor de consulta, en las tools, en
+ *   el historial ni en el TTS.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.4.5 → v1.5.0 — FILTRO DE CORPUS POR PLANO (asesor/ayuda/asistente)
@@ -335,7 +376,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -348,7 +389,25 @@ const FALLBACK_TIMEOUT_MS = 25000;
 // ── Generación ──
 const MAX_TOKENS    = 1200;
 const HISTORY_LIMIT = 10;
-const MAX_DOC_CHARS = 12000;
+const MAX_DOC_CHARS = 12000;   // presupuesto por defecto (ASESOR / ASISTENTE)
+
+// ── Presupuesto de corpus POR PLANO (v1.6.0) ──
+// El corpus de AYUDA es el Manual de Usuario completo (~121.000 caracteres,
+// 22 capítulos, uno por app). Con el tope común de 12.000 solo entrarían los
+// dos primeros capítulos y el resto se descartaba en silencio.
+// El manual entra ENTERO en el bloque cacheado: las preguntas de ayuda cruzan
+// apps constantemente ("cobré mal una reserva, ¿dónde lo arreglo?" toca
+// Recepción PRO y Edición de Cobros) y con el corpus completo delante el
+// modelo cose capítulos sin necesidad de un segundo viaje a la API.
+const DOC_CHARS_POR_PLANO = {
+  asesor:     MAX_DOC_CHARS,
+  ayuda:      150000,
+  asistente:  MAX_DOC_CHARS
+};
+
+function _docCharsDelPlano(plano) {
+  return DOC_CHARS_POR_PLANO[plano] || MAX_DOC_CHARS;
+}
 
 // ── Colecciones ──
 const C_RESERVAS  = 'KamisuiteReservations';
@@ -1698,12 +1757,19 @@ async function _getAlignment() {
   }
 }
 
+// v1.6.0 — el límite sube de 50 a 200. Esta query es ANTERIOR al filtro por
+// plano (el alignment se lee en paralelo, aún no está disponible aquí), así
+// que el tope se reparte entre TODOS los planos: con el manual de AYUDA
+// cargado (22 filas) más el corpus de ASESOR, 50 se queda corto y los últimos
+// documentos se perdían antes incluso de llegar al filtro, sin error visible.
+// Se sube el tope en vez de filtrar en la query para no serializar el PREP
+// (habría que esperar al alignment antes de pedir los documentos).
 async function _getDocumentos() {
   try {
     const res = await wixData.query(C_DOCUMENTS)
       .eq('activo', true)
       .ascending('orden')
-      .limit(50)
+      .limit(200)
       .find(AUTH);
     return res.items || [];
   } catch (e) {
@@ -1729,6 +1795,22 @@ function _normPlano(v) {
 function _filtrarDocsPorPlano(docs, config) {
   const planoActivo = _normPlano(config && config.modo);
   return (docs || []).filter(d => _normPlano(d && d.modo) === planoActivo);
+}
+
+// Instrucción que encabeza el bloque de conocimiento. Depende del plano
+// porque la naturaleza del corpus es distinta en cada uno:
+//   · ASESOR    → normativa y metodología. Criterio experto, no se cita.
+//   · AYUDA     → Manual de Usuario. Se reproduce literal: nombres de pantalla
+//                 y pasos exactos. Parafrasear aquí es inventar la interfaz.
+//   · ASISTENTE → hereda la redacción de ASESOR mientras no tenga corpus propio.
+const INSTRUCCION_CORPUS = {
+  asesor: 'Este material es tu criterio experto: interpretación de ratios, metodología de gestión y normativa aplicable. Intégralo con naturalidad; no lo cites textualmente.',
+  ayuda: 'Este material es el Manual de Usuario oficial de KAMISUITE, un capítulo por aplicación. Es tu ÚNICA fuente sobre cómo se usa el software. Reproduce los nombres de pantalla, botones, pestañas y campos EXACTAMENTE como aparecen en el manual, sin reformularlos ni traducirlos, y respeta el orden de los pasos. Si el manual no cubre lo que se pregunta, dilo en lugar de deducirlo: nunca describas una pantalla, un botón o un paso que no esté en el manual.',
+  asistente: 'Este material es tu criterio experto: interpretación de ratios, metodología de gestión y normativa aplicable. Intégralo con naturalidad; no lo cites textualmente.'
+};
+
+function _instruccionCorpus(plano) {
+  return INSTRUCCION_CORPUS[plano] || INSTRUCCION_CORPUS[PLANO_DEFECTO];
 }
 
 /** Familias reales presentes en el CMS. Cero hardcoding: se leen del dato. */
@@ -1788,6 +1870,11 @@ async function _getGroups() {
 function _buildSystemBlocks(ctx) {
   const { config, documentos, salon, staff, familias, groups, fechas, modo } = ctx;
   const stable = [];
+
+  // Plano de utilidad publicado (asesor | ayuda | asistente). Vacío = asesor.
+  // NO confundir con `modo` de este ctx, que es el modo de UI del widget, ni
+  // con el modo transaccional (reservas|cobros|conversion) de la herramienta.
+  const planoActivo = _normPlano(config && config.modo);
 
   // ── IDENTIDAD ──
   const brand = (salon && salon.brandName) || 'el salón';
@@ -1931,15 +2018,21 @@ function _buildSystemBlocks(ctx) {
     }
   }
 
-  // ── CONOCIMIENTO (AkiraDocuments: normativa + metodología) ──
+  // ── CONOCIMIENTO (AkiraDocuments, filtrado por plano) ──
+  // v1.6.0 — la instrucción de uso del corpus DEPENDE DEL PLANO. La redacción
+  // anterior era la única posible cuando AKIRA solo era Consultor, y pedía
+  // explícitamente NO citar textualmente. En AYUDA eso es contraproducente:
+  // el corpus es el Manual de Usuario y parafrasearlo produce nombres de
+  // botón inventados ("Cierre de Caja" donde la pantalla pone "Cierre Diario").
   if (documentos && documentos.length > 0) {
     const bloques = ['--- CONOCIMIENTO DE REFERENCIA ---'];
-    bloques.push('Este material es tu criterio experto: interpretación de ratios, metodología de gestión y normativa aplicable. Intégralo con naturalidad; no lo cites textualmente.');
+    bloques.push(_instruccionCorpus(planoActivo));
+    const topeDocs = _docCharsDelPlano(planoActivo);
     let chars = 0;
     for (const d of documentos) {
       const contenido = d.contenido || '';
-      if (chars + contenido.length > MAX_DOC_CHARS) {
-        const queda = MAX_DOC_CHARS - chars;
+      if (chars + contenido.length > topeDocs) {
+        const queda = topeDocs - chars;
         if (queda > 200) bloques.push(`[${d.tipo || 'documento'}] ${d.titulo || 'Documento'}\n${contenido.substring(0, queda)}…`);
         break;
       }
@@ -2134,7 +2227,12 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
 
     const fechas = resolverFechas();
     const prepMs = Date.now() - tIn;
-    console.log(`${TAG} PREP ${prepMs}ms: align=${config ? 'OK' : 'null'} plano=${_normPlano(config && config.modo)} docs=${documentos.length}→${documentosDelPlano.length} staff=${staff.length} fams=${familias.length} groups=${groups.length}`);
+    const planoLog = _normPlano(config && config.modo);
+    const charsCorpus = documentosDelPlano.reduce((n, d) => n + ((d && d.contenido) ? d.contenido.length : 0), 0);
+    console.log(`${TAG} PREP ${prepMs}ms: align=${config ? 'OK' : 'null'} plano=${planoLog} docs=${documentos.length}→${documentosDelPlano.length} corpus=${charsCorpus}/${_docCharsDelPlano(planoLog)} chars staff=${staff.length} fams=${familias.length} groups=${groups.length}`);
+    if (charsCorpus > _docCharsDelPlano(planoLog)) {
+      console.warn(`${TAG} ⚠️ corpus del plano '${planoLog}' excede el presupuesto: se truncará en ${_docCharsDelPlano(planoLog)} chars`);
+    }
 
     const apiKey = await apiKeyPromise;
     if (!apiKey) {
