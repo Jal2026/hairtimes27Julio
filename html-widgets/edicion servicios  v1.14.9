@@ -9,10 +9,69 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.14.9
+       KAMISUITE — Edición Servicios Widget v1.14.10
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.14.10: 🏷️ TRES CAMBIOS DE USABILIDAD. Ninguno toca CMS,
+         backends ni otras pantallas.
+
+         (A) LEYENDAS DE "Uso (plataforma)". Las tres <option> del
+         select #fUso cambian SOLO de texto visible:
+           kamisuite  → "Recepción (reserva desde el salón)"
+           wixnativo  → "Widget público (reserva online)"
+           ambos      → "Ambos"
+         Los atributos value NO se tocan ('kamisuite', 'wixnativo',
+         'ambos'): están persistidos en ServiceCatalog.uso y los leen
+         serviceCatalogLogic (USOS_VALIDOS), recepcionProLogic
+         (USOS_VALIDOS), catalogoConsultaLogic, servicesPublicSync y
+         widgetPublicoLogic (USOS_PUBLICOS). Renombrar los value
+         rompería los cinco. Motivo del cambio: "Wix nativo" era
+         reminiscencia de la V1 y confundía al operador. Se actualiza
+         también el texto del info-block de ayuda del modal.
+         NOTA DOCUMENTADA (no corregida aquí, fuera de alcance):
+         widgetPublicoLogic filtra uso con USOS_PUBLICOS =
+         ['publico','ambos'], valor 'publico' que este editor nunca
+         escribe; y recepcionProLogic/serviceCatalogLogic filtran con
+         ['kamisuite','ambos']. Consecuencia: hoy un servicio con
+         uso='wixnativo' no se sirve ni en Recepción ni en el widget
+         público. La etiqueta nueva describe la INTENCIÓN del valor,
+         no su comportamiento actual. Decisión pendiente de Jal.
+
+         (B) FIX: el filtro de categoría ya no se pierde al duplicar,
+         guardar ni crear. Causa: onCatalogDuplicated / catalogCreated
+         terminan en sendToParent({type:'ready'}); el page code
+         reenvía el dataset y render() reconstruye
+         el.filterCat.innerHTML desde cero, lo que resetea su .value
+         a "" (Todas las categorías). Los otros tres filtros
+         sobrevivían porque sus <option> son estáticas — por eso el
+         síntoma era exclusivo de la categoría. Solución: render()
+         captura el.filterCat.value ANTES de repoblar y lo restaura
+         después si esa categoría sigue existiendo en el dataset. Si
+         la categoría desapareció, cae a "" (comportamiento anterior).
+         Tres líneas, sin cambios de ID ni de flujo postMessage.
+
+         (C) SEÑALIZACIÓN AZUL CELESTE de "COMPLEMENTOS DE FASES".
+         Categoría de propósito único: sus servicios son los que
+         alimentan el editor de fases de otros servicios. Se marca en
+         tres capas, todas visuales y locales a este widget:
+           1. la <option> de esa categoría en #filterCategory,
+           2. el texto y la línea del separador de categoría,
+           3. el borde de las tarjetas de sus servicios.
+         Identificación por NOMBRE DE CATEGORÍA normalizado (sin
+         acentos, sin dobles espacios, minúsculas) buscando
+         'complementos de fase' — cubre singular y plural. Se copia
+         literalmente el patrón normGrupo() ya en producción en
+         recepcionProCMS_widget v1.1.82 (GRUPO_OCULTO_PANEL). Nuevas
+         variables CSS --sky / --sky-dim. La regla .card.is-fase se
+         coloca ANTES de .card:hover y de .card.is-hidden: a igual
+         especificidad gana la última, así que hover (dorado) y
+         OCULTO (dorado) siguen teniendo prioridad visual sobre el
+         celeste. Ninguna regla existente se modifica.
+
+         Se corrige además el badge visible de cabecera, congelado en
+         "v1.14.7" desde esa versión: ni v1.14.8 ni v1.14.9 lo
+         actualizaron pese a subir la cabecera del fichero.
        v1.14.9: 🎟️ BONOS · AVISO DE FORMATO EN % DESCUENTO. Se añade
          un <p class="form-hint"> bajo el input #fBonoDescuento con el
          texto "Decimal con punto: p.ej. 33.33 (no usar coma)." Motivo:
@@ -296,6 +355,10 @@
   --blue-dim: rgba(74, 158, 201, .12);
   --purple: #9b59b6;
   --purple-dim: rgba(155, 89, 182, .12);
+  /* v1.14.10 — azul celeste reservado a la categoría COMPLEMENTOS DE FASES. */
+  --sky: #7ec8e3;
+  --sky-dim: rgba(126, 200, 227, .12);
+  --sky-border: rgba(126, 200, 227, .45);
   --radius: 10px;
   --radius-sm: 6px;
 }
@@ -367,6 +430,10 @@ body {
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: border-color .2s, box-shadow .2s; cursor: pointer; position: relative; display: flex; flex-direction: column; }
+/* v1.14.10 — Tarjeta de la categoría COMPLEMENTOS DE FASES. Va ANTES de
+   .card:hover y de .card.is-hidden a propósito: misma especificidad, gana
+   la regla posterior, así que hover y OCULTO conservan su dorado. */
+.card.is-fase { border-color: var(--sky-border); }
 .card:hover { border-color: var(--accent); box-shadow: 0 2px 12px rgba(0, 0, 0, .25); }
 .card-img-wrap { width: 100%; height: 150px; background: var(--surface2); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .card-img { width: 100%; height: 100%; object-fit: cover; }
@@ -514,6 +581,13 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 .category-separator-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--accent); white-space: nowrap; }
 .category-separator-line { flex: 1; height: 1px; background: var(--border); }
 .category-separator-count { font-size: 10px; color: var(--muted); white-space: nowrap; }
+/* v1.14.10 — Separador, opción del desplegable y select cerrado cuando la
+   categoría es COMPLEMENTOS DE FASES. */
+.category-separator-label.is-fase { color: var(--sky); }
+.category-separator-line.is-fase { background: var(--sky-border); }
+.category-separator-count.is-fase { color: var(--sky); }
+.filter-select.is-fase { color: var(--sky); border-color: var(--sky-border); background: var(--sky-dim); }
+option.opt-fase { color: var(--sky); }
 
 .btn-delete { flex: 0 0 auto; padding: 10px 14px; border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; border: 1px solid rgba(232, 84, 84, .35); background: var(--red-dim); color: var(--red); }
 .btn-delete:hover { background: var(--red); color: var(--bg); border-color: var(--red); }
@@ -590,7 +664,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.14.7</span>
+    <span class="header-version"> v1.14.10</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -752,10 +826,15 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 
             <div class="form-group">
               <label class="form-label">Uso (plataforma)</label>
+              <!-- v1.14.10 — Solo cambia el TEXTO visible. Los value se
+                   quedan como están: ServiceCatalog.uso los tiene
+                   persistidos y los filtran serviceCatalogLogic,
+                   recepcionProLogic, catalogoConsultaLogic,
+                   servicesPublicSync y widgetPublicoLogic. -->
               <select class="form-select" id="fUso">
                 <option value="">— Sin definir —</option>
-                <option value="kamisuite">KAMISUITE (solo apps internas)</option>
-                <option value="wixnativo">Wix nativo (solo widget público)</option>
+                <option value="kamisuite">Recepción (reserva desde el salón)</option>
+                <option value="wixnativo">Widget público (reserva online)</option>
                 <option value="ambos">Ambos</option>
               </select>
             </div>
@@ -863,7 +942,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 
             <div class="info-box" style="margin-bottom:0;">
               <div class="info-block"><strong>TIPO DE SERVICIO</strong> define la estructura: simple, con variantes, complejo (con fases) o complemento.</div>
-              <div class="info-block"><strong>ROL</strong>: principal (el cliente lo reserva) o ambos (también sirve de complemento). <strong>USO</strong>: en qué plataforma se ofrece. Son independientes.</div>
+              <div class="info-block"><strong>ROL</strong>: principal (el cliente lo reserva) o ambos (también sirve de complemento). <strong>USO</strong>: dónde se puede reservar — en Recepción, en el widget público o en ambos. Son independientes.</div>
             </div>
 
           </div>
@@ -1030,15 +1109,42 @@ const el = {
   fBonoIntervaloDias: document.getElementById('fBonoIntervaloDias')
 };
 
+// v1.14.10 — Normalizador de nombre de categoría. Copia literal del patrón
+// normGrupo() en producción en recepcionProCMS_widget v1.1.82: quita
+// acentos, unifica guiones/underscores y espacios, y baja a minúsculas.
+// Así da igual cómo esté escrita la categoría en ServiceCatalog.
+function normCat(c) {
+  return String(c || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-_]+/g, ' ').replace(/\s+/g, ' ')
+    .trim().toLowerCase();
+}
+
+// v1.14.10 — Categoría de propósito único: sus servicios son los que
+// alimentan el editor de fases de otros servicios. Se acepta singular y
+// plural ('complementos de fase' / '...fases').
+const CATEGORIA_FASES = 'complementos de fase';
+function esCategoriaFase(c) {
+  return normCat(c).includes(CATEGORIA_FASES);
+}
+
 function render(data) {
   allServicios = data.servicios || [];
   allStaff = data.staff || [];
+  // v1.14.10 — El repoblado del select borra su .value. Se guarda antes y
+  // se restaura después si la categoría sigue existiendo. Sin esto, cada
+  // duplicado / guardado / creación devolvía al operador a "Todas las
+  // categorías" (los otros tres filtros no lo sufrían porque sus <option>
+  // son estáticas y no se reconstruyen).
+  const catPrevia = el.filterCat.value;
   const catSet = new Set();
   allServicios.forEach(s => { if (s.category) catSet.add(s.category); });
   el.filterCat.innerHTML = '<option value="">Todas las categorías</option>';
   [...catSet].sort().forEach(c => {
-    el.filterCat.innerHTML += `<option value="${esc(c)}">${esc(c)}</option>`;
+    const clsFase = esCategoriaFase(c) ? ' class="opt-fase"' : '';
+    el.filterCat.innerHTML += `<option value="${esc(c)}"${clsFase}>${esc(c)}</option>`;
   });
+  if (catPrevia && catSet.has(catPrevia)) el.filterCat.value = catPrevia;
   recomputeTaxonomias(); // v1.14.6 — extraído a helper reutilizable
   el.toolbar.style.display = 'flex';
   applyFilters();
@@ -1071,6 +1177,9 @@ function applyFilters() {
   el.btnHistorial.classList.remove('active');
   const q = (el.search.value || '').toLowerCase().trim();
   const catF = el.filterCat.value, visF = el.filterVis.value, tipoF = el.filterTipo.value;
+  // v1.14.10 — El propio select se tiñe de celeste mientras esa categoría
+  // esté activa, para que el operador sepa dónde está sin abrir el menú.
+  el.filterCat.classList.toggle('is-fase', esCategoriaFase(catF));
   const filtered = allServicios.filter(s => {
     if (q && !s.name.toLowerCase().includes(q) && !(s.setupUid || '').toLowerCase().includes(q)) return false;
     if (catF && s.category !== catF) return false;
@@ -1101,7 +1210,9 @@ function applyFilters() {
   filtered.forEach(s => {
     const cat = s.category || 'Sin categoría';
     if (cat !== lastCat) {
-      html += `<div class="category-separator"><span class="category-separator-label">${esc(cat)}</span><span class="category-separator-line"></span><span class="category-separator-count">${catCounts[cat]}</span></div>`;
+      // v1.14.10 — Separador en celeste si la categoría es la de fases.
+      const f = esCategoriaFase(cat) ? ' is-fase' : '';
+      html += `<div class="category-separator"><span class="category-separator-label${f}">${esc(cat)}</span><span class="category-separator-line${f}"></span><span class="category-separator-count${f}">${catCounts[cat]}</span></div>`;
       lastCat = cat;
     }
     html += buildCard(s);
@@ -1131,6 +1242,9 @@ function applyFilters() {
 
 function buildCard(s) {
   const hiddenCls = s.hidden ? ' is-hidden' : '';
+  // v1.14.10 — Borde celeste permanente en los servicios de la categoría
+  // COMPLEMENTOS DE FASES, se esté filtrando por ella o no.
+  const faseCls = esCategoriaFase(s.category) ? ' is-fase' : '';
   const imgHTML = s.imageUrl ? `<img class="card-img" src="${esc(s.imageUrl)}" alt="${esc(s.name)}" loading="lazy">` : '<span class="card-img-placeholder">✂️</span>';
   let badges = '';
   if (s.tipo) badges += `<span class="badge badge-cat">${esc(s.tipo)}</span>`;
@@ -1143,7 +1257,7 @@ function buildCard(s) {
   const staffCount = (Array.isArray(s.idStaff) ? s.idStaff.length : 0);
   const isOn = (s.active !== false);
   return `
-      <div class="card${hiddenCls}" data-id="${s.id}">
+      <div class="card${faseCls}${hiddenCls}" data-id="${s.id}">
         <div class="card-img-wrap">${imgHTML}</div>
         <div class="card-body">
           <div class="card-name">${esc(s.name)}</div>
