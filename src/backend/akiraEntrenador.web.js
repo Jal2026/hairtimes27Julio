@@ -2,8 +2,31 @@
 // KAMISUITE — Backend: akiraEntrenador.web.js
 // Módulo: Entrenador AKIRA (patrón EGAEL)
 // =====================================================
-// VERSION: 1.1.0
-// FECHA: 12 Agosto 2026
+// VERSION: 1.2.0
+// FECHA: 15 Agosto 2026
+//
+// CAMBIOS v1.1.0 → v1.2.0 — UN ALIGNMENT POR PLANO, EDITABLE SIN TOCAR CMS
+//   El backend de AKIRA (akiraLogic v1.7.0) ya elige el alignment publicado
+//   cuyo 'modo' coincide con el plano activo (asesor|ayuda), pero el
+//   Entrenador seguía trabajando sobre UNA sola fila: no había forma de crear
+//   ni publicar la de AYUDA sin editar el CMS a mano.
+//
+//   1. cargarConfigEntrenador({ modo }) — devuelve el borrador y la publicada
+//      DE ESE PLANO. Vacío = asesor (misma regla que akiraLogic).
+//   2. guardarAlignment({ config }) — el borrador es por plano: busca el
+//      borrador de config.modo, no "el borrador". Persiste 'modo'.
+//   3. publicarAlignment — ⚠️ EL FIX CRÍTICO. Antes archivaba TODAS las
+//      publicadas; con dos planos, publicar AYUDA dejaba a ASESOR archivado
+//      y sin identidad. Ahora archiva solo las publicadas DEL MISMO PLANO.
+//   4. Campos de bienvenida: welcomeTitle y welcomeText viajan en el
+//      alignment de cada plano. Es el saludo que ve el usuario al abrir
+//      AKIRA, hasta ahora escrito a mano en el custom element.
+//   5. cargarConfigEntrenador: límite de documentos 50 → 200 (el manual de
+//      usuario son 22 filas y desbordaba la lista de la UI).
+//
+//   REQUIERE EN CMS (AkiraAlignment): welcomeTitle Texto, welcomeText Texto.
+//   'modo' ya existe. Sin ellos, el resto sigue funcionando: los campos se
+//   escriben a la nada y el widget usa sus textos por defecto.
 //
 // CAMBIOS v1.0.0 → v1.1.0:
 //   - crearDocumento: se ELIMINA el campo 'title' del insert. NO existe en
@@ -45,9 +68,25 @@ import { fetch } from 'wix-fetch';
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const TAG = `[AkiraEntrenador][${VERSION}]`;
 const AUTH = { suppressAuth: true };
+
+// ── PLANO DE UTILIDAD (asesor | ayuda | asistente) ──
+// Misma regla que akiraLogic v1.7.0: vacío = asesor, para no dejar huérfana
+// la configuración anterior a los planos.
+const PLANO_DEFECTO = 'asesor';
+const PLANOS_VALIDOS = ['asesor', 'ayuda', 'asistente'];
+
+function _normPlano(v) {
+  const s = (v === null || v === undefined) ? '' : String(v).trim().toLowerCase();
+  return s || PLANO_DEFECTO;
+}
+
+function _planoPedido(v) {
+  const p = _normPlano(v);
+  return PLANOS_VALIDOS.indexOf(p) >= 0 ? p : PLANO_DEFECTO;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUNCIONES COMPARTIDAS — usadas por consoleIA.web.js
@@ -223,23 +262,26 @@ async function callClaude(systemPrompt, userMessage, maxTokens = 600) {
 
 export const cargarConfigEntrenador = webMethod(
   Permissions.SiteMember,
-  async () => {
+  async ({ modo } = {}) => {
     try {
-      console.log(`${TAG} cargarConfigEntrenador`);
+      const plano = _planoPedido(modo);
+      console.log(`${TAG} cargarConfigEntrenador plano=${plano}`);
 
-      // Borrador actual
-      const borradorResult = await wixData.query('AkiraAlignment')
-        .eq('status', 'borrador')
-        .limit(1)
-        .find(AUTH);
+      // Borrador y publicada DEL PLANO. El filtro por 'modo' se hace en
+      // memoria y no en la query porque vacío = asesor: un .eq('modo','asesor')
+      // dejaría fuera las filas antiguas, que son precisamente las de ASESOR.
+      const [borradorResult, publicadasResult] = await Promise.all([
+        wixData.query('AkiraAlignment').eq('status', 'borrador').limit(10).find(AUTH),
+        wixData.query('AkiraAlignment').eq('status', 'publicado').descending('publicationDate').limit(10).find(AUTH)
+      ]);
 
-      // Publicada actual
-      const publicada = await getPublishedAlignment();
+      const borrador  = (borradorResult.items || []).find(a => _normPlano(a.modo) === plano) || null;
+      const publicada = (publicadasResult.items || []).find(a => _normPlano(a.modo) === plano) || null;
 
       // Todos los documentos (activos e inactivos)
       const docsResult = await wixData.query('AkiraDocuments')
         .ascending('orden')
-        .limit(50)
+        .limit(200)
         .find(AUTH);
 
       const documentos = (docsResult.items || []).map(d => ({
@@ -256,7 +298,8 @@ export const cargarConfigEntrenador = webMethod(
 
       return {
         ok: true,
-        borrador: borradorResult.items.length > 0 ? borradorResult.items[0] : null,
+        plano: plano,
+        borrador: borrador,
         publicada: publicada,
         documentos: documentos,
         documentosActivos: activosCount
@@ -277,15 +320,21 @@ export const guardarAlignment = webMethod(
   async ({ config }) => {
     try {
       if (!config) return { ok: false, error: 'config requerido' };
-      console.log(`${TAG} guardarAlignment`);
+      const plano = _planoPedido(config.modo);
+      console.log(`${TAG} guardarAlignment plano=${plano}`);
 
-      // Buscar borrador existente
-      const existing = await wixData.query('AkiraAlignment')
+      // Borrador DE ESTE PLANO. Cada plano tiene el suyo: guardar el de AYUDA
+      // no debe pisar el de ASESOR.
+      const existingRes = await wixData.query('AkiraAlignment')
         .eq('status', 'borrador')
-        .limit(1)
+        .limit(10)
         .find(AUTH);
+      const existente = (existingRes.items || []).find(a => _normPlano(a.modo) === plano) || null;
 
       const registro = {
+        modo: plano,
+        welcomeTitle: config.welcomeTitle || '',
+        welcomeText: config.welcomeText || '',
         promptBase: config.promptBase || '',
         tone: config.tone || 'directo',
         detailLevel: config.detailLevel || 'medio',
@@ -299,17 +348,17 @@ export const guardarAlignment = webMethod(
       };
 
       let saved;
-      if (existing.items && existing.items.length > 0) {
-        registro._id = existing.items[0]._id;
-        registro.title = existing.items[0].title || ('Config v' + registro.version);
+      if (existente) {
+        registro._id = existente._id;
+        registro.title = existente.title || (`Config ${plano} v` + registro.version);
         saved = await wixData.update('AkiraAlignment', registro, AUTH);
       } else {
-        registro.title = 'Config v' + registro.version;
+        registro.title = `Config ${plano} v` + registro.version;
         saved = await wixData.insert('AkiraAlignment', registro, AUTH);
       }
 
       invalidateCache();
-      return { ok: true, alignmentId: saved._id, version: registro.version };
+      return { ok: true, alignmentId: saved._id, version: registro.version, plano: plano };
     } catch (e) {
       console.error(`${TAG} guardarAlignment error:`, e.message);
       return { ok: false, error: e.message };
@@ -331,11 +380,18 @@ export const publicarAlignment = webMethod(
       const item = await wixData.get('AkiraAlignment', alignmentId, AUTH);
       if (!item) return { ok: false, error: 'Configuración no encontrada' };
 
-      // Archivar versiones publicadas anteriores
+      const plano = _planoPedido(item.modo);
+
+      // Archivar publicadas anteriores DEL MISMO PLANO.
+      // ⚠️ v1.2.0 — antes se archivaban TODAS. Con un alignment por plano eso
+      // significaba que publicar AYUDA dejaba a ASESOR archivado, y AKIRA se
+      // quedaba sin identidad publicada en el plano que no se tocó.
       const anteriores = await wixData.query('AkiraAlignment')
         .eq('status', 'publicado')
+        .limit(50)
         .find(AUTH);
       for (const ant of (anteriores.items || [])) {
+        if (_normPlano(ant.modo) !== plano) continue;
         ant.status = 'archivado';
         await wixData.update('AkiraAlignment', ant, AUTH);
       }
@@ -351,15 +407,16 @@ export const publicarAlignment = webMethod(
       }
 
       item.status = 'publicado';
+      item.modo = plano;
       item.publicationDate = new Date();
       item.version = (Math.round((maxVersion + 0.1) * 10) / 10).toFixed(1);
-      item.title = 'Config v' + item.version;
+      item.title = `Config ${plano} v` + item.version;
 
       await wixData.update('AkiraAlignment', item, AUTH);
       invalidateCache();
 
-      console.log(`${TAG} Publicado v${item.version}`);
-      return { ok: true, version: item.version, fechaPublicacion: item.publicationDate };
+      console.log(`${TAG} Publicado plano=${plano} v${item.version}`);
+      return { ok: true, version: item.version, plano: plano, fechaPublicacion: item.publicationDate };
     } catch (e) {
       console.error(`${TAG} publicarAlignment error:`, e.message);
       return { ok: false, error: e.message };
