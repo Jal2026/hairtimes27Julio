@@ -9,10 +9,23 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.14.10
+       KAMISUITE — Edición Servicios Widget v1.14.11
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.14.11: 🎨 FIX ESTÉTICO de la señalización celeste introducida
+         en v1.14.10. Al aplicar .is-fase al #filterCategory, el
+         `color: var(--sky)` del <select> se heredaba a TODAS las
+         <option> del desplegable (ninguna declaraba color propio), de
+         modo que al abrir la lista aparecía entera en celeste y la
+         opción COMPLEMENTOS DE FASES dejaba de distinguirse — justo lo
+         contrario del objetivo. Se añaden dos reglas:
+           #filterCategory option          { color: var(--text-secondary); }
+           #filterCategory option.opt-fase { color: var(--sky); }
+         El selector con #id gana a la herencia del <select> sin afectar
+         a #filterVisibility ni #filterTipo. El select cerrado sigue
+         tiñéndose de celeste (comportamiento deseado de v1.14.10).
+         SIN cambios en JS, HTML ni en el resto de la hoja de estilos.
        v1.14.10: 🏷️ TRES CAMBIOS DE USABILIDAD. Ninguno toca CMS,
          backends ni otras pantallas.
 
@@ -587,7 +600,13 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 .category-separator-line.is-fase { background: var(--sky-border); }
 .category-separator-count.is-fase { color: var(--sky); }
 .filter-select.is-fase { color: var(--sky); border-color: var(--sky-border); background: var(--sky-dim); }
-option.opt-fase { color: var(--sky); }
+/* v1.14.11 — Las <option> sin color propio heredan el del <select>. Con
+   .is-fase activo eso teñía de celeste TODA la lista desplegada y anulaba
+   la distinción. Se fija el color normal en las opciones y solo la de
+   COMPLEMENTOS DE FASES lo sobrescribe. Selector con #id para ganar a la
+   herencia sin tocar los otros desplegables. */
+#filterCategory option { color: var(--text-secondary); }
+#filterCategory option.opt-fase { color: var(--sky); }
 
 .btn-delete { flex: 0 0 auto; padding: 10px 14px; border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; border: 1px solid rgba(232, 84, 84, .35); background: var(--red-dim); color: var(--red); }
 .btn-delete:hover { background: var(--red); color: var(--bg); border-color: var(--red); }
@@ -664,7 +683,7 @@ option.opt-fase { color: var(--sky); }
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.14.10</span>
+    <span class="header-version"> v1.14.11</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
