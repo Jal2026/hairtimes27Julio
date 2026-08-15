@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>KAMISUITE · Entrenador AKIRA</title>
+<!-- v1.0.0 — Patrón EGAEL adaptado a KAMISUITE -->
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<style>
+:root{--bg:#f0f1f5;--panel:#fff;--panel2:#f6f7fa;--panel3:#ecedf2;--line:#dfe1e8;--line2:#d0d3dc;--line3:#c1c5d0;--fg:#1a1f2e;--fg2:#3d4355;--muted:#6b7280;--muted2:#9ca3af;--accent:#243665;--accent-dim:rgba(36,54,101,.06);--accent-light:rgba(36,54,101,.14);--accent2:#1b2a52;--orange:#f26522;--orange-dim:rgba(242,101,34,.08);--orange-light:rgba(242,101,34,.16);--green:#27ae60;--red:#e05a5a;--amber:#d4a01a;--font:'Bai Jamjuree',sans-serif;--shadow:0 1px 4px rgba(0,0,0,.06);--r:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:13px;line-height:1.5}
+.shell{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.hd{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);border-top:3px solid var(--accent)}
+.hd-title{font-size:15px;font-weight:700;color:var(--accent)}.hd-sep{color:var(--muted2)}.hd-sub{font-size:12px;color:var(--fg2)}
+.status-bar{display:flex;gap:14px;padding:7px 16px;background:var(--accent-dim);border-bottom:1px solid var(--accent-light);font-size:11px;color:var(--accent);flex-wrap:wrap}
+.sb-item{display:flex;align-items:center;gap:5px}.sb-dot{width:5px;height:5px;border-radius:50%;background:var(--orange);opacity:.9}
+.body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px;scrollbar-width:thin}
+.sec{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px;box-shadow:var(--shadow)}
+.sec h3{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.8px;margin:0 0 10px}
+textarea,select,input[type="text"]{width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line2);border-radius:var(--r);padding:9px 11px;font-family:var(--font);font-size:13px;outline:none;resize:vertical;transition:border-color .2s}
+textarea:focus,select:focus,input:focus{border-color:var(--orange)}
+textarea::placeholder,input::placeholder{color:var(--muted2)}
+.ta-sm{min-height:70px}.ta-lg{min-height:140px}
+.opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.opt{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:10px}
+.opt label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px}.opt select{font-size:12px}
+.rails{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px}
+.rail{display:flex;gap:10px;align-items:flex-start;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:10px}
+.rail .txt{font-size:12px;color:var(--fg2)}.rail .txt b{color:var(--fg)}.rail .txt small{display:block;color:var(--muted);margin-top:2px;font-size:11px}
+.sw{position:relative;width:36px;height:20px;background:var(--line2);border-radius:99px;cursor:pointer;flex-shrink:0}
+.sw input{display:none}.sw .knob{position:absolute;top:2px;left:2px;width:16px;height:16px;background:#fff;border-radius:99px;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.sw input:checked+.knob{left:18px;background:var(--orange)}
+.res-list{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto}
+.res-item{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;font-size:12px}
+.res-item .res-title{flex:1;color:var(--fg2)}.res-item .res-type{font-size:10px;color:var(--muted);background:var(--panel3);padding:2px 6px;border-radius:4px}
+.res-toggle{font-size:10px;cursor:pointer;padding:2px 6px;border-radius:4px;border:1px solid var(--line)}
+.res-toggle.on{color:var(--green);border-color:rgba(39,174,96,.3)}.res-toggle.off{color:var(--muted);border-color:var(--line)}
+.res-del{font-size:10px;color:var(--red);cursor:pointer;opacity:.5;transition:opacity .15s}.res-del:hover{opacity:1}
+.res-empty{font-size:12px;color:var(--muted);font-style:italic;padding:8px 0}
+.btn{border:none;border-radius:var(--r);padding:8px 16px;font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn-accent{background:var(--accent);color:#fff}.btn-accent:hover:not(:disabled){opacity:.88}
+.btn-green{background:var(--green);color:#fff}.btn-green:hover:not(:disabled){filter:brightness(1.1)}
+.btn-red{background:var(--red);color:#fff}
+.btn-ghost{background:transparent;color:var(--fg2);border:1px solid var(--line2)}.btn-ghost:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.btn-amber{background:var(--orange);color:#fff}.btn-amber:hover:not(:disabled){filter:brightness(1.1)}
+.btn-sm{padding:5px 10px;font-size:11px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--line)}
+.badge.published{color:var(--green);border-color:rgba(39,174,96,.3);background:rgba(39,174,96,.06)}.badge.draft{color:var(--orange);border-color:rgba(242,101,34,.3);background:rgba(242,101,34,.06)}
+.test-resp{display:none;margin-top:12px;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:14px;animation:fadein .25s ease}
+@keyframes fadein{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.resp-text{color:var(--fg2);line-height:1.6;font-size:13px;font-weight:300;white-space:pre-wrap}
+.resp-meta{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:4px}
+.pg-box{background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:12px}
+.pg-toggle{font-size:12px;color:var(--orange);cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin-bottom:10px}.pg-toggle:hover{color:var(--accent)}
+.pg-arrow{font-size:10px;transition:transform .2s;display:inline-block}.pg-arrow.open{transform:rotate(90deg)}
+.pg-body{display:none}.pg-body.open{display:block;animation:fadein .2s ease}
+.pg-hint{font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5}
+.nr-form{display:none;background:var(--panel2);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:10px;animation:fadein .2s ease}
+.nr-form label{display:block;font-size:11px;color:var(--muted);margin-bottom:3px}
+.nr-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.nr-full{grid-column:1/-1}
+.dropzone{border:2px dashed var(--line2);border-radius:var(--r);padding:28px 16px;text-align:center;cursor:pointer;transition:all .2s;background:var(--panel3)}
+.dropzone:hover{border-color:var(--orange);background:var(--orange-dim)}
+.dropzone.dragging{border-color:var(--orange);background:var(--orange-light)}
+.dropzone .dz-icon{font-size:28px;margin-bottom:6px;display:block}.dropzone .dz-text{font-size:13px;color:var(--fg2)}.dropzone .dz-hint{font-size:11px;color:var(--muted);margin-top:4px}
+.file-info{display:none;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:10px;margin-top:10px;font-size:12px}
+.file-info .fi-name{color:var(--fg);font-weight:600}.file-info .fi-size{color:var(--muted);margin-left:8px}
+.file-info .fi-status{color:var(--green);margin-top:4px;font-size:11px}.file-info .fi-error{color:var(--red);margin-top:4px;font-size:11px}
+.nr-extracted{display:none;margin-top:10px}
+.nr-extracted .preview{max-height:120px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:8px;font-size:11px;color:var(--fg2);white-space:pre-wrap}
+.ft{display:flex;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.ft-info{font-size:11px;color:var(--muted);flex:1}.ft-info b{color:var(--fg2)}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:#fff;padding:8px 14px;border-radius:var(--r);font-size:12px;display:none;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.2)}
+.btn-icon{background:transparent;border:1px solid var(--line2);color:var(--orange);width:24px;height:24px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center}
+.btn-icon:hover{background:var(--orange-dim);border-color:var(--orange)}
+.sec-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.sec-head h3{margin-bottom:0}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="hd">
+    <span class="hd-title">KAMISUITE</span><span class="hd-sep">›</span>
+    <span class="hd-sub">Entrenador AKIRA</span>
+  </div>
+  <div class="status-bar" id="statusBar">
+    <div class="sb-item"><span class="sb-dot"></span> <span id="sbDocs">0 documentos activos</span></div>
+    <div class="sb-item"><span class="sb-dot"></span> <span id="sbVersion">Versión: —</span></div>
+    <div class="sb-item"><span class="sb-dot"></span> <span id="sbEstado">Sin configurar</span></div>
+  </div>
+  <div class="body">
+    <!-- PROMPT BASE -->
+    <div class="sec">
+      <h3>Prompt base de AKIRA</h3>
+      <div class="pg-toggle" id="pgToggle"><span class="pg-arrow" id="pgArrow">▶</span> Necesito ayuda de la IA para crear el prompt</div>
+      <div class="pg-body" id="pgBody">
+        <div class="pg-box">
+          <div class="pg-hint">Describe tu salón: nombre, servicios, equipo, horarios, tipo de clientes. La IA generará un prompt estructurado para AKIRA.</div>
+          <textarea id="pgInput" class="ta-sm" placeholder="Ej: Soy dueño de Hair-Times, un salón en Las Rozas con 3 empleados (Angela, Raquel, Ricardo). Hacemos color, corte, tratamientos capilares, mechas..."></textarea>
+          <div class="actions" style="margin-top:8px"><button class="btn btn-accent" id="btnGenPrompt">Generar prompt con IA</button><span id="pgStatus" style="font-size:11px;color:var(--muted)"></span></div>
+        </div>
+      </div>
+      <textarea id="promptBase" class="ta-lg" placeholder="Aquí aparecerá el prompt generado, o escríbelo tú directamente. Este texto define la personalidad y conocimiento base de AKIRA."></textarea>
+    </div>
+
+    <!-- DOCUMENTOS -->
+    <div class="sec">
+      <div class="sec-head"><h3>Documentos de conocimiento (<span id="docsCount">0</span> activos)</h3><button class="btn-icon" id="btnAddDoc" title="Añadir documento">+</button></div>
+      <div class="nr-form" id="newDocForm">
+        <div class="dropzone" id="dropzone">
+          <span class="dz-icon">⬆</span>
+          <span class="dz-text">Arrastra tu documento aquí</span>
+          <span class="dz-hint">.txt, .md, .docx (máx. 5 MB)</span>
+          <input type="file" id="fileInput" accept=".txt,.docx,.md" style="display:none"/>
+          <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" id="btnPickFile">Seleccionar archivo</button></div>
+        </div>
+        <div class="file-info" id="fileInfo"><span class="fi-name" id="fiName"></span><span class="fi-size" id="fiSize"></span><div class="fi-status" id="fiStatus"></div><div class="fi-error" id="fiError"></div></div>
+        <div class="nr-extracted" id="nrExtracted"><label>Contenido extraído</label><div class="preview" id="nrPreview"></div></div>
+        <div style="text-align:center;padding:8px 0;font-size:11px;color:var(--muted)">— o escribe directamente —</div>
+        <div class="nr-full"><label>Contenido del documento</label><textarea id="nrContenido" class="ta-lg" placeholder="Pega o escribe aquí el contenido del documento..."></textarea></div>
+        <div class="nr-grid" style="margin-top:10px">
+          <div class="nr-full"><label>Título del documento *</label><input type="text" id="nrTitle" placeholder="Se rellena con el nombre del archivo"/></div>
+          <div><label>Tipo</label><select id="nrTipo"><option value="identidad">Identidad del salón</option><option value="servicios">Servicios y precios</option><option value="staff">Staff y equipo</option><option value="facturacion">Reglas de facturación</option><option value="comportamiento">Comportamiento y estilo</option><option value="otro">Otro</option></select></div>
+          <div><label>Resumen (opcional)</label><input type="text" id="nrResumen" placeholder="Breve descripción"/></div>
+          <div class="nr-full actions" style="margin-top:6px">
+            <button class="btn btn-accent btn-sm" id="btnSaveDoc">Guardar documento</button>
+            <button class="btn btn-ghost btn-sm" id="btnCancelDoc">Cancelar</button>
+          </div>
+        </div>
+      </div>
+      <div class="res-list" id="docsList"><div class="res-empty">Sin documentos. Pulsa + para añadir conocimiento al salón.</div></div>
+    </div>
+
+    <!-- OPCIONES -->
+    <div class="sec">
+      <h3>Opciones de configuración</h3>
+      <div class="opts">
+        <div class="opt"><label>Tono</label><select id="tone"><option value="directo" selected>Directo</option><option value="formal">Formal</option><option value="cercano">Cercano</option></select></div>
+        <div class="opt"><label>Nivel de detalle</label><select id="detailLevel"><option value="breve">Breve (4 líneas)</option><option value="medio" selected>Medio (8 líneas)</option><option value="extenso">Extenso (12 líneas)</option></select></div>
+      </div>
+    </div>
+
+    <!-- GUARDRAILS -->
+    <div class="sec">
+      <h3>Guardrails</h3>
+      <div class="rails">
+        <div class="rail"><label class="sw"><input type="checkbox" id="grOnlyQuery" checked><span class="knob"></span></label><div class="txt"><b>Solo consulta</b><small>AKIRA no puede reservar, cancelar ni modificar nada.</small></div></div>
+        <div class="rail"><label class="sw"><input type="checkbox" id="grNoInvent" checked><span class="knob"></span></label><div class="txt"><b>No inventar datos</b><small>Solo usa datos del JSON. Nunca inventa festivos, nombres ni cifras.</small></div></div>
+        <div class="rail"><label class="sw"><input type="checkbox" id="grNoMarkdown" checked><span class="knob"></span></label><div class="txt"><b>Sin markdown</b><small>Respuestas en texto plano, sin **, ##, ni listas con viñetas.</small></div></div>
+        <div class="rail"><label class="sw"><input type="checkbox" id="grConcision" checked><span class="knob"></span></label><div class="txt"><b>Anti-verborrea</b><small>Nunca describe su proceso de cálculo. Da el resultado directo.</small></div></div>
+      </div>
+    </div>
+
+    <!-- INSTRUCCIONES EXTRA -->
+    <div class="sec">
+      <h3>Instrucciones adicionales</h3>
+      <textarea id="extraInstructions" class="ta-sm" placeholder="Reglas libres que se añaden al prompt de AKIRA. Ej: 'Cuando pregunten por tratamientos M/L/XL, presenta los 3 precios...'"></textarea>
+    </div>
+
+    <!-- GUARDAR -->
+    <div class="actions">
+      <button class="btn btn-accent" id="btnSave">Guardar borrador</button>
+      <span class="badge draft" id="badgeEstado">Sin configurar</span>
+    </div>
+
+    <div style="border-top:1px solid var(--line);margin:4px 0"></div>
+
+    <!-- TEST -->
+    <div class="sec">
+      <h3>Test de AKIRA</h3>
+      <textarea id="testPrompt" class="ta-sm" placeholder="Escribe una pregunta de prueba para verificar cómo responde AKIRA con esta configuración..."></textarea>
+      <div class="actions" style="margin-top:10px">
+        <button class="btn btn-green" id="btnTest">Probar respuesta</button>
+      </div>
+      <div class="test-resp" id="testResponse">
+        <div class="resp-text" id="respText"></div>
+        <div class="resp-meta">
+          <div id="respConfig"></div>
+          <div id="respGuardrails"></div>
+          <div id="respTime"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ft">
+    <div class="ft-info">Última publicación: <b id="ftPublicado">—</b> | Versión: <b id="ftVersion">—</b></div>
+    <button class="btn btn-amber" id="btnPublish">Publicar versión</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var currentAlignmentId='';
+var documentos=[];
+var extractedContent='';
+var $=function(id){return document.getElementById(id);};
+function toast(msg,ms){var t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(function(){t.style.display='none';},ms||2000);}
+function send(type,data){parent.postMessage(Object.assign({type:type},data||{}),'*');}
+function collectConfig(){return{promptBase:$('promptBase').value,tone:$('tone').value,detailLevel:$('detailLevel').value,grOnlyQuery:$('grOnlyQuery').checked,grNoInvent:$('grNoInvent').checked,grNoMarkdown:$('grNoMarkdown').checked,grConcision:$('grConcision').checked,extraInstructions:$('extraInstructions').value};}
+function populateForm(cfg){if(!cfg)return;$('promptBase').value=cfg.promptBase||'';$('tone').value=cfg.tone||'directo';$('detailLevel').value=cfg.detailLevel||'medio';$('grOnlyQuery').checked=cfg.grOnlyQuery!==false;$('grNoInvent').checked=cfg.grNoInvent!==false;$('grNoMarkdown').checked=cfg.grNoMarkdown!==false;$('grConcision').checked=cfg.grConcision||false;$('extraInstructions').value=cfg.extraInstructions||'';}
+function fileSizeStr(b){if(b<1024)return b+' B';if(b<1048576)return Math.ceil(b/1024)+' KB';return(b/1048576).toFixed(1)+' MB';}
+function processFile(file){extractedContent='';$('fileInfo').style.display='block';$('fiName').textContent=file.name;$('fiSize').textContent=fileSizeStr(file.size);$('fiStatus').textContent='Procesando...';$('fiError').textContent='';$('nrExtracted').style.display='none';if(!$('nrTitle').value.trim())$('nrTitle').value=file.name.replace(/\.[^.]+$/,'');var ext=file.name.split('.').pop().toLowerCase();if(file.size>5*1048576){$('fiStatus').textContent='';$('fiError').textContent='Archivo demasiado grande (máx. 5 MB)';return;}if(ext==='txt'||ext==='md'){var r=new FileReader();r.onload=function(e){extractedContent=e.target.result;showExtracted(extractedContent);$('fiStatus').textContent='Extraído ('+extractedContent.length+' chars)';};r.onerror=function(){$('fiError').textContent='Error leyendo';$('fiStatus').textContent='';};r.readAsText(file);return;}if(ext==='docx'){var r2=new FileReader();r2.onload=function(e){mammoth.extractRawText({arrayBuffer:e.target.result}).then(function(result){extractedContent=result.value;showExtracted(extractedContent);$('fiStatus').textContent='DOCX extraído ('+extractedContent.length+' chars)';}).catch(function(err){$('fiError').textContent='Error DOCX: '+err.message;$('fiStatus').textContent='';});};r2.onerror=function(){$('fiError').textContent='Error leyendo';$('fiStatus').textContent='';};r2.readAsArrayBuffer(file);return;}$('fiStatus').textContent='';$('fiError').textContent='Formato no soportado. Usa .txt, .md o .docx';}
+function showExtracted(text){$('nrExtracted').style.display='block';$('nrPreview').textContent=text.length>2000?text.substring(0,2000)+'...\n['+text.length+' chars total]':text;$('nrContenido').value=text;}
+function clearDocForm(){$('nrTitle').value='';$('nrTipo').value='identidad';$('nrResumen').value='';$('nrContenido').value='';$('fileInput').value='';extractedContent='';$('fileInfo').style.display='none';$('nrExtracted').style.display='none';$('newDocForm').style.display='none';}
+function renderDocs(){var list=$('docsList');var activos=0;if(!documentos||documentos.length===0){list.innerHTML='<div class="res-empty">Sin documentos. Pulsa + para añadir conocimiento al salón.</div>';$('docsCount').textContent='0';$('sbDocs').textContent='0 documentos activos';return;}var html='';for(var i=0;i<documentos.length;i++){var d=documentos[i];if(d.activo)activos++;html+='<div class="res-item" data-id="'+d.id+'"><span class="res-type">'+(d.tipo||'doc')+'</span><span class="res-title">'+(d.titulo||'Sin título')+'</span><span class="res-toggle '+(d.activo?'on':'off')+'" data-id="'+d.id+'" data-activo="'+(d.activo?'true':'false')+'">'+(d.activo?'● activo':'○ inactivo')+'</span><span class="res-del" data-id="'+d.id+'" title="Eliminar">✕</span></div>';}list.innerHTML=html;$('docsCount').textContent=String(activos);$('sbDocs').textContent=activos+' documentos activos';list.querySelectorAll('.res-toggle').forEach(function(el){el.addEventListener('click',function(){send('toggleDocument',{documentoId:this.dataset.id,activo:this.dataset.activo!=='true'});});});list.querySelectorAll('.res-del').forEach(function(el){el.addEventListener('click',function(){if(confirm('¿Eliminar este documento?'))send('deleteDocument',{documentoId:this.dataset.id});});});}
+function updateStatus(pub){if(pub){$('sbVersion').textContent='Versión: v'+(pub.version||'?');$('ftVersion').textContent='v'+(pub.version||'?');$('ftPublicado').textContent=pub.publicationDate?new Date(pub.publicationDate).toLocaleString('es-ES'):'—';}else{$('sbVersion').textContent='Versión: —';$('ftVersion').textContent='—';$('ftPublicado').textContent='—';}}
+
+// ── MENSAJES ──
+window.addEventListener('message',function(event){
+  var msg=event.data;if(!msg||typeof msg!=='object')return;
+  if(msg.type==='configLoaded'){var p=msg.payload;if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}var cfg=p.borrador||p.publicada;if(cfg){populateForm(cfg);currentAlignmentId=cfg._id||'';$('sbEstado').textContent=cfg.status==='publicado'?'Config publicada':'Borrador';var b=$('badgeEstado');b.textContent=cfg.status==='publicado'?'Publicado':'Borrador';b.className='badge '+(cfg.status==='publicado'?'published':'draft');}else{$('sbEstado').textContent='Sin configurar';}updateStatus(p.publicada);documentos=p.documentos||[];renderDocs();return;}
+  if(msg.type==='configSaved'){var p=msg.payload;if(p&&p.ok){currentAlignmentId=p.alignmentId;$('badgeEstado').textContent='Borrador';$('badgeEstado').className='badge draft';$('sbEstado').textContent='Borrador guardado';toast('Borrador guardado (v'+p.version+')');}else{toast('Error: '+(p?p.error:'?'));}$('btnSave').disabled=false;return;}
+  if(msg.type==='configPublished'){var p=msg.payload;if(p&&p.ok){$('badgeEstado').textContent='Publicado';$('badgeEstado').className='badge published';$('sbEstado').textContent='Publicado v'+p.version;$('sbVersion').textContent='Versión: v'+p.version;$('ftVersion').textContent='v'+p.version;$('ftPublicado').textContent=new Date().toLocaleString('es-ES');toast('Publicado v'+p.version+'. AKIRA ya usa esta versión.');}else{toast('Error: '+(p?p.error:'?'));}$('btnPublish').disabled=false;return;}
+  if(msg.type==='testResult'){var p=msg.payload;$('btnTest').disabled=false;$('btnTest').textContent='Probar respuesta';if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}$('testResponse').style.display='block';$('respText').textContent=p.response;var cfg=p.config||{};$('respConfig').textContent='Tono: '+(cfg.tone||'?')+' | Detalle: '+(cfg.detailLevel||'?');$('respGuardrails').textContent='Guardrails: '+((cfg.guardrails||[]).join(', ')||'ninguno');$('respTime').textContent='Tiempo: '+(p.timeMs||'?')+'ms | Docs: '+(p.documentsCount||0)+' | Prompt: '+(p.systemPromptLength||'?')+' chars';return;}
+  if(msg.type==='promptGenerated'){var p=msg.payload;$('btnGenPrompt').disabled=false;$('btnGenPrompt').textContent='Generar prompt con IA';if(!p||!p.ok){$('pgStatus').textContent='Error: '+(p?p.error:'?');$('pgStatus').style.color='var(--red)';return;}$('promptBase').value=p.prompt;$('pgStatus').textContent='Prompt generado — revísalo y ajústalo';$('pgStatus').style.color='var(--green)';toast('Prompt generado.');return;}
+  if(msg.type==='documentCreated'){var p=msg.payload;if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}documentos.push(p.documento);renderDocs();clearDocForm();toast('Documento "'+p.documento.titulo+'" creado');return;}
+  if(msg.type==='documentToggled'){var p=msg.payload;if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}for(var i=0;i<documentos.length;i++){if(documentos[i].id===p.documentoId){documentos[i].activo=p.activo;break;}}renderDocs();toast(p.activo?'Documento activado':'Documento desactivado');return;}
+  if(msg.type==='documentDeleted'){var p=msg.payload;if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}documentos=documentos.filter(function(d){return d.id!==msg.documentoId;});renderDocs();toast('Documento eliminado');return;}
+  if(msg.type==='error'){toast('Error: '+(msg.payload?msg.payload.error:'desconocido'));$('btnTest').disabled=false;$('btnTest').textContent='Probar respuesta';$('btnSave').disabled=false;$('btnPublish').disabled=false;$('btnGenPrompt').disabled=false;$('btnGenPrompt').textContent='Generar prompt con IA';}
+});
+
+// ── EVENTOS ──
+$('btnSave').addEventListener('click',function(){this.disabled=true;send('saveConfig',{config:collectConfig()});});
+$('btnPublish').addEventListener('click',function(){if(!currentAlignmentId){toast('Guarda un borrador primero');return;}this.disabled=true;send('publishConfig',{alignmentId:currentAlignmentId});});
+$('btnTest').addEventListener('click',function(){var prompt=$('testPrompt').value.trim();if(!prompt){toast('Escribe una pregunta de prueba');return;}this.disabled=true;this.textContent='Probando...';$('testResponse').style.display='none';send('testPrompt',{message:prompt,configOverride:collectConfig()});});
+$('pgToggle').addEventListener('click',function(){$('pgBody').classList.toggle('open');$('pgArrow').classList.toggle('open');});
+$('btnGenPrompt').addEventListener('click',function(){var desc=$('pgInput').value.trim();if(!desc||desc.length<20){toast('Describe tu salón con al menos unas frases');return;}this.disabled=true;this.textContent='Generando...';$('pgStatus').textContent='';send('generatePrompt',{descripcion:desc});});
+$('btnAddDoc').addEventListener('click',function(){$('newDocForm').style.display='block';});
+$('btnCancelDoc').addEventListener('click',function(){clearDocForm();});
+$('btnPickFile').addEventListener('click',function(e){e.stopPropagation();$('fileInput').click();});
+$('fileInput').addEventListener('change',function(){if(this.files[0])processFile(this.files[0]);});
+var dz=$('dropzone');dz.addEventListener('click',function(){$('fileInput').click();});dz.addEventListener('dragenter',function(e){e.preventDefault();this.classList.add('dragging');});dz.addEventListener('dragover',function(e){e.preventDefault();});dz.addEventListener('dragleave',function(){this.classList.remove('dragging');});dz.addEventListener('drop',function(e){e.preventDefault();this.classList.remove('dragging');if(e.dataTransfer&&e.dataTransfer.files[0])processFile(e.dataTransfer.files[0]);});
+$('btnSaveDoc').addEventListener('click',function(){var titulo=$('nrTitle').value.trim();if(!titulo){toast('Título obligatorio');return;}var contenido=extractedContent||$('nrContenido').value.trim();if(!contenido){toast('Escribe o sube contenido');return;}send('createDocument',{titulo:titulo,tipo:$('nrTipo').value,contenido:contenido,resumen:$('nrResumen').value.trim()||titulo});});
+// Auto-resize
+var lastH=0;function notifyHeight(){var h=document.documentElement.scrollHeight;if(h!==lastH){lastH=h;send('resize',{height:h});}}
+var ro=new ResizeObserver(notifyHeight);ro.observe(document.body);
+send('ready');
+</script>
+</body>
+</html>
