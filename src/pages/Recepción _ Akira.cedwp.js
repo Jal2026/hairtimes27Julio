@@ -1,8 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA · Page Code
  * Página:   AKIRA (Consultor)
- * VERSION:  1.7.0
+ * VERSION:  1.8.0
  * FECHA:    15 Agosto 2026
+ *
+ * CAMBIOS v1.7.0 → v1.8.0 — SALUDO DESDE EL CMS.
+ *   Los textos de bienvenida de cada plano llegan ahora en `abrir.planos`
+ *   (akiraLogic v1.8.0, campos welcomeTitle/welcomeText de AkiraAlignment,
+ *   editables desde el Entrenador). Este page code los superpone a los
+ *   valores que ya calculaba con el nombre del salón. Lo que el salón no
+ *   haya escrito no se envía, y el custom element conserva su texto de
+ *   fábrica: nunca se queda la pantalla sin saludo.
  *
  * CAMBIOS v1.6.0 → v1.7.0 — PLANO DE ARRANQUE Y TEXTOS POR PLANO.
  *   El plano ya no lo fija este archivo ni el alignment publicado: lo elige
@@ -96,7 +104,7 @@ const MODO = 'asesor';
 // hardcoding). Este flag solo enciende o apaga la funcionalidad.
 const TTS_ENABLED = true;
 
-const V = 'AKIRA Page v1.7.0';
+const V = 'AKIRA Page v1.8.0';
 
 // Bola flotante del chat IA nativo de Wix. Se oculta en la página de AKIRA:
 // no queremos dos asistentes compitiendo en pantalla.
@@ -267,6 +275,14 @@ $w.onReady(async function () {
       welcomeTitle: abrir.brandName ? `AKIRA · ${abrir.brandName}` : 'AKIRA · Ayuda'
     }
   };
+
+  // Lo escrito por el salón en el Entrenador manda sobre lo calculado aquí.
+  // Solo llegan las claves con contenido (el backend filtra los vacíos), así
+  // que un campo sin rellenar deja intacto el texto por defecto.
+  const planosCms = abrir.planos || {};
+  Object.keys(planosCms).forEach((p) => {
+    brandPlanes[p] = Object.assign({}, brandPlanes[p] || {}, planosCms[p] || {});
+  });
 
   const configPayload = JSON.stringify({
     userId,
