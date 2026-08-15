@@ -2,8 +2,26 @@
  * KAMISUITE — AKIRA Console (Wix Custom Element)
  * Archivo:  public/custom-elements/akiraConsole.js
  * Tag name: akira-console
- * VERSION:  1.0.4
- * FECHA:    17 Julio 2026
+ * VERSION:  1.1.0
+ * FECHA:    15 Agosto 2026
+ *
+ * CAMBIOS v1.0.4 → v1.1.0 — SELECTOR DE PLANO (chips ASESOR / AYUDA).
+ *   El plano de utilidad deja de ser una decisión global del salón fijada al
+ *   publicar el alignment: lo elige quien pregunta, con dos chips en la
+ *   topbar. El valor viaja en `modo` dentro del POST a /_functions/akiraAsk
+ *   — el mismo campo que ya se enviaba desde v1.0.0, ahora con contenido
+ *   útil ('asesor' | 'ayuda' en vez del fijo 'consultor').
+ *   El backend (akiraLogic v1.7.0) usa ese plano para elegir alignment,
+ *   corpus y si hay herramientas de datos.
+ *
+ *   CAMBIAR DE CHIP ABRE CHAT NUEVO. Deliberado: el historial se manda entero
+ *   a Anthropic en cada pregunta, así que arrastrar respuestas de ASESOR a una
+ *   conversación de AYUDA (y al revés) mezcla dos contextos que el backend
+ *   acaba de separar. La conversación anterior no se pierde: sigue en la
+ *   sidebar de historial.
+ *
+ *   Los textos de bienvenida, el subtítulo y el placeholder cambian con el
+ *   plano (BRAND_PLANOS, sobrescribible desde el page code con brandPlanes).
  *
  * CAMBIOS v1.0.3 → v1.0.4 — TTS CLONADO LITERAL DE CATHOVIA.
  *   El botón quedaba inerte porque yo había inventado una ruta propia:
@@ -384,11 +402,36 @@
     // /v1/fill/w_,h_,al_c,q_85,enc_auto/ — ese pipeline aplana el alfa contra
     // blanco y produce el marco blanco. (CATHOVIA v1.6.5)
     logo:         'https://static.wixstatic.com/media/420ca1_4b928a4bd47a425882e67e0205301e20~mv2.png',
-    welcomeTitle: 'AKIRA Consultor',
-    welcome:      'Pregúntame por el rendimiento de tu salón: facturación, ocupación, profesionales, clientes, conversión. Analizo tus datos reales y te doy conclusiones.',
-    placeholder:  'Pregunta por tus datos…',
-    thinking:     'Analizando tus datos…'
+    welcomeTitle: 'AKIRA',
+    welcome:      'Elige arriba cómo quieres trabajar: ASESOR analiza los datos reales de tu salón; AYUDA te explica cómo se usa KAMISUITE.',
+    placeholder:  'Escribe tu pregunta…',
+    thinking:     'Pensando…'
   };
+
+  /* Textos por plano. El page code puede sobrescribirlos con `brandPlanes`
+     dentro de la config; lo que no venga, se coge de aquí. Se aplican sobre
+     _brand cada vez que cambia el chip. */
+  const BRAND_PLANOS = {
+    asesor: {
+      sub:          'Asesor',
+      welcomeTitle: 'AKIRA · Asesor',
+      welcome:      'Pregúntame por el rendimiento de tu salón: facturación, ocupación, profesionales, clientes, conversión. Analizo tus datos reales y te doy conclusiones.',
+      placeholder:  'Pregunta por tus datos…',
+      thinking:     'Analizando tus datos…'
+    },
+    ayuda: {
+      sub:          'Ayuda',
+      welcomeTitle: 'AKIRA · Ayuda',
+      welcome:      'Pregúntame cómo se hace cualquier cosa en KAMISUITE: cobrar una cita, cerrar el día, dar de alta un servicio, vender un bono. Te explico los pasos.',
+      placeholder:  '¿Cómo se hace…?',
+      thinking:     'Buscando en el manual…'
+    }
+  };
+
+  const PLANOS = [
+    { id: 'asesor', label: 'Asesor', title: 'Analiza los datos reales del salón' },
+    { id: 'ayuda',  label: 'Ayuda',  title: 'Explica cómo se usa KAMISUITE' }
+  ];
 
   function isMobileViewport() {
     try { return window.matchMedia('(max-width: 900px)').matches; }
@@ -418,14 +461,18 @@
       this.attachShadow({ mode: 'open' });
       this._userId    = '';
       this._userName  = '';
-      this._modo      = 'consultor';
+      this._modo      = 'asesor';        // plano activo: 'asesor' | 'ayuda'
+      this._brandBase   = { ...DEFAULT_BRAND };   // marca sin overrides de plano
+      this._brandPlanos = JSON.parse(JSON.stringify(BRAND_PLANOS));
       this._sessionId = null;
       this._chats     = [];
       this._pending   = false;
       this._pendingId = null;
       this._msgCounter = 0;
       this._hasMessages = false;
-      this._brand  = { ...DEFAULT_BRAND };
+      // Marca efectiva del plano de arranque (ASESOR). _brandBase y
+      // _brandPlanos ya están fijados arriba.
+      this._brand  = { ...DEFAULT_BRAND, ...(BRAND_PLANOS[this._modo] || {}) };
       this._skin   = SKIN_FALLBACK;
       this._theme  = resolverSkin(SKIN_FALLBACK);
       this._ttsEnabled = false;   // el backend TTS de KAMISUITE no existe aún
@@ -505,7 +552,13 @@
       else if (cfg.skin) console.warn(`${TAG} skin "${cfg.skin}" desconocida → ${SKIN_FALLBACK}`);
       this._theme = resolverSkin(this._skin);
 
-      if (cfg.brand) this._brand = { ...DEFAULT_BRAND, ...cfg.brand };
+      if (cfg.brand) this._brandBase = { ...DEFAULT_BRAND, ...cfg.brand };
+      if (cfg.brandPlanes && typeof cfg.brandPlanes === 'object') {
+        Object.keys(cfg.brandPlanes).forEach(k => {
+          this._brandPlanos[k] = { ...(this._brandPlanos[k] || {}), ...(cfg.brandPlanes[k] || {}) };
+        });
+      }
+      this._aplicarBrandDelPlano();
 
       this._render();
       this._bindEvents();
@@ -515,6 +568,27 @@
         this._renderWelcome();
       }
       this._emit('akira-load-chats', {});
+    }
+
+    /* Marca efectiva = base del page code + overrides del plano activo. */
+    _aplicarBrandDelPlano() {
+      const overrides = this._brandPlanos[this._modo] || {};
+      this._brand = { ...this._brandBase, ...overrides };
+    }
+
+    /* Cambio de plano desde los chips. Abre chat nuevo a propósito: el
+       historial viaja entero a Anthropic y mezclar planos en una misma
+       conversación deshace la separación que hace el backend. */
+    _setPlano(plano) {
+      if (!plano || plano === this._modo) return;
+      if (!PLANOS.some(p => p.id === plano)) return;
+      console.log(`${TAG} plano → ${plano}`);
+      this._modo = plano;
+      this._aplicarBrandDelPlano();
+      this._render();
+      this._bindEvents();
+      this._resetToNewChat();
+      this._renderChats();
     }
 
     _applyChats(payload) {
@@ -773,6 +847,13 @@
 
       const micBtn = root.getElementById('micBtn');
       if (micBtn) micBtn.addEventListener('click', () => this._toggleMic());
+
+      const planos = root.getElementById('tbPlanos');
+      if (planos) {
+        planos.querySelectorAll('.tb-chip').forEach(chip => {
+          chip.addEventListener('click', () => this._setPlano(chip.dataset.plano));
+        });
+      }
     }
 
     _closeAllPanels() {
@@ -1482,6 +1563,28 @@
     max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
 
+  /* CHIPS DE PLANO (v1.1.0). Mismo lenguaje visual que .tb-btn: borde
+     hairline, radio 8px, superficie de la topbar. El activo usa el acento
+     de la skin, así que hereda la paleta de cada salón sin excepciones. */
+  .tb-planos { display: flex; gap: 6px; flex-shrink: 0; }
+  .tb-chip {
+    border: 1px solid var(--hairline);
+    background: var(--surface);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 7px 13px;
+    font-family: inherit;
+    font-size: 11.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1.2px;
+    cursor: pointer; white-space: nowrap;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .tb-chip:hover { color: var(--ink); border-color: var(--ink-soft); }
+  .tb-chip.active {
+    background: var(--accent); color: var(--accent-ink);
+    border-color: var(--accent);
+  }
+
   /* ERROR BANNER */
   .error-banner {
     display: none; align-items: center; gap: 10px;
@@ -1707,6 +1810,8 @@
     .backdrop { display: block; }
     .topbar { padding: 8px 12px; gap: 8px; min-height: 52px; position: sticky; top: 0; z-index: 12; }
     .tb-btn { width: 34px; height: 34px; font-size: 15px; }
+    .tb-planos { gap: 4px; }
+    .tb-chip { padding: 6px 9px; font-size: 10px; letter-spacing: .8px; }
     .tb-logo { height: 26px; }
     .tb-title { font-size: 18px; }
     .tb-sub { font-size: 9.5px; letter-spacing: 1.5px; }
@@ -1772,6 +1877,9 @@
           ? `<img class="tb-logo" src="${this._escape(b.logo)}" alt="${this._escape(b.name)}" />`
           : `<div class="tb-title">${this._escape(b.name)}</div>`}
         ${b.sub ? `<div class="tb-sub">${this._escape(b.sub)}</div>` : ''}
+      </div>
+      <div class="tb-planos" id="tbPlanos">
+        ${PLANOS.map(p => `<button class="tb-chip${p.id === this._modo ? ' active' : ''}" data-plano="${p.id}" title="${this._escape(p.title)}">${this._escape(p.label)}</button>`).join('')}
       </div>
       ${this._ttsEnabled ? `<button class="tb-btn" id="btnToggleTts" title="Voz automática">${this._ttsAutoPlay ? '🔊' : '🔇'}</button>` : ''}
     </div>
