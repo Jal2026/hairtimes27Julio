@@ -1,8 +1,49 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.6.0
+ * VERSION:  1.7.0
  * FECHA:    15 Agosto 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.6.0 → v1.7.0 — ENRUTADOR DE PLANO: LO ELIGE EL USUARIO
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   Hasta v1.6.0 el plano lo fijaba el alignment publicado: uno solo, global
+ *   al salón. Ahora lo elige quien pregunta, con dos chips en la topbar del
+ *   widget (ASESOR / AYUDA).
+ *
+ *   SIN FONTANERÍA NUEVA. El parámetro `modo` ya viajaba de punta a punta
+ *   (custom element → POST /_functions/akiraAsk → askAkiraCore) desde v1.5.0
+ *   y solo se usaba para escribir una línea en el prompt. Ahora ES el plano.
+ *   El endpoint es PÚBLICO: el valor se valida contra PLANOS_VALIDOS y
+ *   cualquier otra cosa cae a ASESOR (_planoPedido).
+ *
+ *   EL PLANO DECIDE TRES COSAS:
+ *
+ *   1) QUÉ ALIGNMENT APLICA. `_getAlignments` lee hasta 10 publicados (antes
+ *      solo el último) y `_alignmentDelPlano` elige el del plano pedido. Si el
+ *      salón no ha publicado uno para ese plano, NO se hereda el de otro: se
+ *      usa `_identidadPorDefecto(plano)`. Heredar la identidad de ASESOR en
+ *      AYUDA le diría al modelo que es consultor de negocio mientras responde
+ *      dudas del manual — peor que no tener alignment.
+ *
+ *   2) QUÉ CORPUS SE INYECTA. `_filtrarDocsPorPlano` filtra por el plano
+ *      PEDIDO, no por el del alignment. Vacío = asesor (regla v1.5.0).
+ *
+ *   3) SI HAY HERRAMIENTAS DE DATOS. En AYUDA no las hay: la pregunta es
+ *      "cómo se usa esto", no "cuánto facturé". Se omite `tools` del body (no
+ *      se manda vacío: un array vacío es error de la API) y caen con ellas las
+ *      descripciones de las dos herramientas, las reglas del motor, el bloque
+ *      de cómo funcionan las colecciones, las familias, las categorías
+ *      canónicas, la plantilla y la tabla completa de fechas. Eso compensa en
+ *      buena parte los ~32.000 tokens del manual. En su lugar entran las
+ *      reglas propias de AYUDA, que incluyen decirle al usuario que cambie al
+ *      chip ASESOR si lo que quiere es un dato del negocio.
+ *
+ *   Sin cambios de CMS: 'modo' ya existe en AkiraAlignment y AkiraDocuments.
+ *   Para que AYUDA tenga identidad propia editable, publicar una fila de
+ *   AkiraAlignment con modo='ayuda'. Mientras no exista, funciona con la
+ *   identidad por defecto del plano.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.5.0 → v1.6.0 — EL MANUAL DE USUARIO ENTRA COMPLETO EN AYUDA
@@ -376,7 +417,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -1638,20 +1679,25 @@ async function _postAnthropic(apiKey, body, timeoutMs, label) {
  * Bucle de tool use. Sonnet pide datos → JS ejecuta el motor → Sonnet narra.
  * Máx. 4 vueltas: permite comparativas (dos periodos) sin bucle infinito.
  */
-async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages, timeoutMs) {
+async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages, timeoutMs, conTools) {
   const startMs = Date.now();
   const convo = messages.slice();
   let cacheStats = { hit: 0, create: 0, input: 0, output: 0 };
   let consultas = 0;
+  const usaTools = conTools !== false;
 
   for (let vuelta = 0; vuelta < 4; vuelta++) {
-    const data = await _postAnthropic(apiKey, {
+    const payload = {
       model,
       max_tokens: MAX_TOKENS,
       system: systemBlocks,
-      tools: [TOOL_CONSULTAR, _buildToolConfig()],
       messages: convo
-    }, timeoutMs, model);
+    };
+    // v1.7.0 — sin herramientas en el plano AYUDA. `tools` se omite del body
+    // en lugar de mandarse vacío: un array vacío es un error de la API.
+    if (usaTools) payload.tools = [TOOL_CONSULTAR, _buildToolConfig()];
+
+    const data = await _postAnthropic(apiKey, payload, timeoutMs, model);
 
     const u = data.usage || {};
     cacheStats = {
@@ -1704,14 +1750,15 @@ async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages,
   return { respuesta, timeMs: Date.now() - startMs, cacheStats, consultas };
 }
 
-async function _callClaudeConFallback(apiKey, systemBlocks, messages) {
+async function _callClaudeConFallback(apiKey, systemBlocks, messages, usarHerramientas) {
+  const conTools = usarHerramientas !== false;   // por defecto, como hasta v1.6.0
   try {
-    const r = await _callClaudeConHerramientas(MODEL_PRIMARY, apiKey, systemBlocks, messages, PRIMARY_TIMEOUT_MS);
+    const r = await _callClaudeConHerramientas(MODEL_PRIMARY, apiKey, systemBlocks, messages, PRIMARY_TIMEOUT_MS, conTools);
     return { ...r, modeloUsado: MODEL_PRIMARY };
   } catch (err1) {
     console.warn(`${TAG} Sonnet falló, cayendo a Haiku: ${err1.message}`);
     try {
-      const r = await _callClaudeConHerramientas(MODEL_FALLBACK, apiKey, systemBlocks, messages, FALLBACK_TIMEOUT_MS);
+      const r = await _callClaudeConHerramientas(MODEL_FALLBACK, apiKey, systemBlocks, messages, FALLBACK_TIMEOUT_MS, conTools);
       return { ...r, modeloUsado: MODEL_FALLBACK };
     } catch (err2) {
       throw new Error(`Sonnet:[${err1.message}] Haiku:[${err2.message}]`);
@@ -1743,18 +1790,32 @@ async function _getStaff() {
   }
 }
 
-async function _getAlignment() {
+// v1.7.0 — se leen TODOS los alignments publicados (hasta 10), no solo el
+// último. Con el enrutador de planos puede haber uno publicado por plano
+// (ASESOR y AYUDA con identidad, tono y guardrails distintos). La selección
+// del que aplica se hace después, con el plano que pide el widget.
+async function _getAlignments() {
   try {
     const res = await wixData.query(C_ALIGNMENT)
       .eq('status', 'publicado')
       .descending('publicationDate')
-      .limit(1)
+      .limit(10)
       .find(AUTH);
-    return res.items.length > 0 ? res.items[0] : null;
+    return res.items || [];
   } catch (e) {
-    console.warn(`${TAG} _getAlignment fallo:`, e.message);
-    return null;
+    console.warn(`${TAG} _getAlignments fallo:`, e.message);
+    return [];
   }
+}
+
+// Alignment que aplica al plano pedido. Si el salón no ha publicado uno para
+// ese plano, devuelve null: el prompt usa entonces la identidad por defecto
+// del plano (definida en código) en lugar de la de otro plano, que diría al
+// modelo que es consultor de negocio mientras responde dudas del manual.
+function _alignmentDelPlano(alignments, plano) {
+  const lista = alignments || [];
+  const match = lista.find(a => _normPlano(a && a.modo) === plano);
+  return match || null;
 }
 
 // v1.6.0 — el límite sube de 50 a 200. Esta query es ANTERIOR al filtro por
@@ -1792,8 +1853,10 @@ function _normPlano(v) {
 // Filtra los documentos de conocimiento por el plano del alignment publicado.
 // Regla acordada: modo vacío se trata como 'asesor', para no dejar sin corpus
 // a los documentos ya existentes que aún no tienen 'modo' relleno.
-function _filtrarDocsPorPlano(docs, config) {
-  const planoActivo = _normPlano(config && config.modo);
+// v1.7.0 — filtra por el plano PEDIDO (antes se deducía del alignment
+// publicado). Vacío = asesor, como en v1.5.0.
+function _filtrarDocsPorPlano(docs, plano) {
+  const planoActivo = _normPlano(plano);
   return (docs || []).filter(d => _normPlano(d && d.modo) === planoActivo);
 }
 
@@ -1811,6 +1874,46 @@ const INSTRUCCION_CORPUS = {
 
 function _instruccionCorpus(plano) {
   return INSTRUCCION_CORPUS[plano] || INSTRUCCION_CORPUS[PLANO_DEFECTO];
+}
+
+// ── ENRUTADOR DE PLANO (v1.7.0) ──
+// El plano lo pide el widget con los chips y llega por el parámetro `modo` de
+// askAkiraCore, que ya viajaba de punta a punta (custom element → akiraAsk →
+// backend) desde v1.5.0 sin usarse para nada más que una línea del prompt.
+// El endpoint es PÚBLICO: se valida contra lista cerrada, nunca se confía.
+const PLANOS_VALIDOS = ['asesor', 'ayuda', 'asistente'];
+
+function _planoPedido(modo) {
+  const p = _normPlano(modo);
+  return PLANOS_VALIDOS.indexOf(p) >= 0 ? p : PLANO_DEFECTO;
+}
+
+// Herramientas de datos: solo donde la pregunta es sobre el negocio. En AYUDA
+// la pregunta es sobre la interfaz y el manual es toda la respuesta.
+function _planoUsaHerramientas(plano) {
+  return plano !== 'ayuda';
+}
+
+// Identidad por defecto de cada plano. Solo se usa cuando el salón NO ha
+// publicado un AkiraAlignment para ese plano. Nunca se hereda la identidad de
+// otro plano: decirle al modelo que es consultor de negocio mientras responde
+// dudas del manual es peor que no tener alignment.
+function _identidadPorDefecto(plano, brand) {
+  if (plano === 'ayuda') {
+    return `Eres AKIRA, la inteligencia artificial de ${brand}, integrada en KAMISUITE. ` +
+      `Trabajas en modo AYUDA: enseñas a usar KAMISUITE. Respondes dudas sobre pantallas, ` +
+      `botones y procedimientos del software apoyándote en el Manual de Usuario. Explicas los ` +
+      `pasos en orden, con los nombres exactos que aparecen en pantalla. Hablas en español, ` +
+      `con claridad y sin tecnicismos: quien pregunta está trabajando en el salón.`;
+  }
+  if (plano === 'asistente') {
+    return `Eres AKIRA, la inteligencia artificial de ${brand}, integrada en KAMISUITE. ` +
+      `Trabajas en modo ASISTENTE. Hablas en español, con criterio profesional y sin rodeos.`;
+  }
+  return `Eres AKIRA, la inteligencia artificial de gestión de ${brand}, integrada en KAMISUITE. ` +
+    `Trabajas en modo ASESOR: eres un consultor de negocio permanente para la propiedad del salón. ` +
+    `Analizas el rendimiento real del negocio, detectas tendencias y anomalías, y das conclusiones ` +
+    `accionables. Hablas en español, con criterio profesional y sin rodeos.`;
 }
 
 /** Familias reales presentes en el CMS. Cero hardcoding: se leen del dato. */
@@ -1868,28 +1971,24 @@ async function _getGroups() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function _buildSystemBlocks(ctx) {
-  const { config, documentos, salon, staff, familias, groups, fechas, modo } = ctx;
+  const { config, documentos, salon, staff, familias, groups, fechas, plano } = ctx;
   const stable = [];
 
-  // Plano de utilidad publicado (asesor | ayuda | asistente). Vacío = asesor.
-  // NO confundir con `modo` de este ctx, que es el modo de UI del widget, ni
-  // con el modo transaccional (reservas|cobros|conversion) de la herramienta.
-  const planoActivo = _normPlano(config && config.modo);
+  // Plano ACTIVO en esta pregunta (v1.7.0). Ya no se deduce del alignment
+  // publicado: lo pide el usuario con los chips del widget y llega resuelto
+  // y validado desde askAkiraCore. `config` es el alignment de ESTE plano.
+  const planoActivo = _planoPedido(plano);
+  const conHerramientas = _planoUsaHerramientas(planoActivo);
 
   // ── IDENTIDAD ──
   const brand = (salon && salon.brandName) || 'el salón';
   if (config && config.promptBase) {
     stable.push(config.promptBase);
   } else {
-    stable.push(
-      `Eres AKIRA, la inteligencia artificial de gestión de ${brand}, integrada en KAMISUITE. ` +
-      `Trabajas en modo CONSULTOR: eres un consultor de negocio permanente para la propiedad del salón. ` +
-      `Analizas el rendimiento real del negocio, detectas tendencias y anomalías, y das conclusiones ` +
-      `accionables. Hablas en español, con criterio profesional y sin rodeos.`
-    );
+    stable.push(_identidadPorDefecto(planoActivo, brand));
   }
 
-  if (modo) stable.push(`MODO ACTIVO: ${String(modo).toUpperCase()}.`);
+  stable.push(`MODO ACTIVO: ${planoActivo.toUpperCase()}.`);
 
   // ── TONO Y DETALLE (AkiraAlignment) ──
   if (config) {
@@ -1909,6 +2008,9 @@ function _buildSystemBlocks(ctx) {
   }
 
   // ── CONTEXTO DEL SALÓN (real, leído del CMS) ──
+  // v1.7.0 — en AYUDA solo entra la identificación del salón. Las familias,
+  // las categorías canónicas y la plantilla son insumos del motor de consulta,
+  // que en este plano no existe: cargarlos solo gastaría contexto.
   const ctxSalon = ['--- CONTEXTO DEL SALÓN ---'];
   if (salon) {
     if (salon.brandName) ctxSalon.push(`Nombre comercial: ${salon.brandName}`);
@@ -1916,23 +2018,27 @@ function _buildSystemBlocks(ctx) {
     if (salon.addressUSER || salon.address) ctxSalon.push(`Dirección: ${salon.addressUSER || salon.address}`);
     if (salon.vatRate != null) ctxSalon.push(`IVA aplicable: ${salon.vatRate}%`);
   }
-  if (staff && staff.length > 0) {
-    ctxSalon.push('Profesionales activos: ' +
-      staff.map(s => s.displayName || s.canonicalName).filter(Boolean).join(', '));
-  }
-  if (familias && familias.length > 0) {
-    ctxSalon.push('Familias de servicio disponibles: ' + familias.join(', '));
-  }
-  if (groups && groups.length > 0) {
-    ctxSalon.push(
-      'CATEGORÍAS DISPONIBLES (valores canónicos de `group` — úsalos EXACTOS al filtrar): ' +
-      groups.join(', ')
-    );
+  if (conHerramientas) {
+    if (staff && staff.length > 0) {
+      ctxSalon.push('Profesionales activos: ' +
+        staff.map(s => s.displayName || s.canonicalName).filter(Boolean).join(', '));
+    }
+    if (familias && familias.length > 0) {
+      ctxSalon.push('Familias de servicio disponibles: ' + familias.join(', '));
+    }
+    if (groups && groups.length > 0) {
+      ctxSalon.push(
+        'CATEGORÍAS DISPONIBLES (valores canónicos de `group` — úsalos EXACTOS al filtrar): ' +
+        groups.join(', ')
+      );
+    }
   }
   if (ctxSalon.length > 1) stable.push(ctxSalon.join('\n'));
 
   // ── CÓMO FUNCIONA EL NEGOCIO (Conceptos Fundacionales, no negociable) ──
-  stable.push([
+  // Solo con herramientas: describe cómo leer las colecciones. Sin motor de
+  // consulta detrás, es texto muerto que compite con el manual por atención.
+  if (conHerramientas) stable.push([
     '--- CÓMO FUNCIONAN LOS DATOS DE KAMISUITE ---',
     'Hay dos fuentes de verdad y un cruce entre ambas:',
     '',
@@ -1960,7 +2066,7 @@ function _buildSystemBlocks(ctx) {
   ].join('\n'));
 
   // ── REGLAS DE USO DE LA HERRAMIENTA ──
-  stable.push([
+  if (conHerramientas) stable.push([
     '--- REGLAS DE TRABAJO (INQUEBRANTABLES) ---',
     '1. NUNCA des una cifra que no venga de una herramienta. No calcules sumas,',
     '   medias ni porcentajes de cabeza: pídelos y nárralos. Los cálculos ya',
@@ -2005,6 +2111,28 @@ function _buildSystemBlocks(ctx) {
     '   reserva de otra categoría). Elige el modo según lo que se pregunta.'
   ].join('\n'));
 
+  // ── REGLAS DEL PLANO AYUDA ──
+  // Sustituyen a las reglas del motor de consulta, que aquí no aplican.
+  if (!conHerramientas) stable.push([
+    '--- REGLAS DE TRABAJO (INQUEBRANTABLES) ---',
+    '1. Tu única fuente es el Manual de Usuario que viene más abajo. No tienes',
+    '   acceso a los datos del salón en este modo: no puedes ver la agenda, ni',
+    '   la caja, ni la facturación. Si te piden una cifra o un dato concreto del',
+    '   negocio, di que para eso hay que cambiar al modo ASESOR con el selector',
+    '   de la parte superior, y explica mientras tanto en qué pantalla se ve.',
+    '2. Enseñas a USAR el software. Explica dónde está la pantalla, qué botón se',
+    '   pulsa y en qué orden, con los nombres exactos del manual.',
+    '3. Si el manual no cubre lo que se pregunta, dilo. No deduzcas pantallas,',
+    '   botones ni pasos que no estén escritos: inventar una interfaz que no',
+    '   existe hace perder más tiempo que decir que no lo sabes.',
+    '4. Respuestas cortas y en orden. Si el procedimiento tiene pasos,',
+    '   enuméralos en el orden en que se ejecutan.',
+    '5. Eres SOLO LECTURA. No reservas, no cobras y no modificas nada: explicas',
+    '   cómo hacerlo desde la pantalla que corresponda.',
+    '6. Quien pregunta está trabajando en el salón, muchas veces con una clienta',
+    '   delante. Ve al grano.'
+  ].join('\n'));
+
   // ── GUARDRAILS DEL DUEÑO (AkiraAlignment) ──
   if (config) {
     const gr = [];
@@ -2043,6 +2171,15 @@ function _buildSystemBlocks(ctx) {
   }
 
   // ── VOLÁTIL: fechas (cambian cada día → fuera de la caché) ──
+  // En AYUDA no hay filtros de fecha que resolver: basta con saber qué día es
+  // hoy. La tabla completa es insumo del motor de consulta.
+  if (!conHerramientas) {
+    return [
+      { type: 'text', text: stable.join('\n\n'), cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: `--- FECHA ---\nHOY: ${fechas.hoyNombre} ${fechas.hoyISO}` }
+    ];
+  }
+
   const volatile = [
     '--- FECHAS (COPIA DE AQUÍ, NO CALCULES) ---',
     `HOY: ${fechas.hoyNombre} ${fechas.hoyISO}`,
@@ -2212,8 +2349,8 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
       return null;
     });
 
-    const [config, documentos, salon, staff, familias, groups] = await Promise.all([
-      _getAlignment(),
+    const [alignments, documentos, salon, staff, familias, groups] = await Promise.all([
+      _getAlignments(),
       _getDocumentos(),
       _getSalonConfig(),
       _getStaff(),
@@ -2221,17 +2358,27 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
       _getGroups()
     ]);
 
-    // Filtrado del corpus por el plano publicado (asesor/ayuda/asistente).
-    // Vacío = asesor (regla acordada): los docs sin 'modo' siguen visibles.
-    const documentosDelPlano = _filtrarDocsPorPlano(documentos, config);
+    // ── PLANO SOLICITADO (v1.7.0) ──
+    // Lo pide el widget con los chips (asesor | ayuda). El endpoint akiraAsk
+    // es público, así que el valor se valida contra la lista cerrada: cualquier
+    // otra cosa cae a ASESOR. El plano decide TRES cosas: qué alignment aplica,
+    // qué corpus se inyecta y si hay herramientas de datos.
+    const plano  = _planoPedido(modo);
+    const config = _alignmentDelPlano(alignments, plano);
+
+    // Corpus del plano. Vacío = asesor (regla v1.5.0): los documentos que aún
+    // no tienen 'modo' relleno siguen siendo visibles para el Consultor.
+    const documentosDelPlano = _filtrarDocsPorPlano(documentos, plano);
 
     const fechas = resolverFechas();
     const prepMs = Date.now() - tIn;
-    const planoLog = _normPlano(config && config.modo);
     const charsCorpus = documentosDelPlano.reduce((n, d) => n + ((d && d.contenido) ? d.contenido.length : 0), 0);
-    console.log(`${TAG} PREP ${prepMs}ms: align=${config ? 'OK' : 'null'} plano=${planoLog} docs=${documentos.length}→${documentosDelPlano.length} corpus=${charsCorpus}/${_docCharsDelPlano(planoLog)} chars staff=${staff.length} fams=${familias.length} groups=${groups.length}`);
-    if (charsCorpus > _docCharsDelPlano(planoLog)) {
-      console.warn(`${TAG} ⚠️ corpus del plano '${planoLog}' excede el presupuesto: se truncará en ${_docCharsDelPlano(planoLog)} chars`);
+    console.log(`${TAG} PREP ${prepMs}ms: plano=${plano} align=${config ? 'v' + (config.version || '?') : 'por defecto'} docs=${documentos.length}→${documentosDelPlano.length} corpus=${charsCorpus}/${_docCharsDelPlano(plano)} chars staff=${staff.length} fams=${familias.length} groups=${groups.length}`);
+    if (charsCorpus > _docCharsDelPlano(plano)) {
+      console.warn(`${TAG} ⚠️ corpus del plano '${plano}' excede el presupuesto: se truncará en ${_docCharsDelPlano(plano)} chars`);
+    }
+    if (!config) {
+      console.warn(`${TAG} sin AkiraAlignment publicado para el plano '${plano}' — se usa la identidad por defecto del plano.`);
     }
 
     const apiKey = await apiKeyPromise;
@@ -2240,8 +2387,14 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
     }
 
     const systemBlocks = _buildSystemBlocks({
-      config, documentos: documentosDelPlano, salon, staff, familias, groups, fechas, modo: modo || 'consultor'
+      config, documentos: documentosDelPlano, salon, staff, familias, groups, fechas, plano
     });
+
+    // En AYUDA no hay herramientas de datos: la pregunta es "cómo se usa esto",
+    // no "cuánto facturé". Sin tools, el prompt se queda sin las descripciones
+    // de las dos herramientas ni las reglas del motor — lo que compensa en
+    // buena medida el tamaño del manual.
+    const usarHerramientas = _planoUsaHerramientas(plano);
 
     // ── SESIÓN E HISTORIAL ──
     // Sesión nueva: se crea EN PARALELO con Anthropic (su _id solo hace
@@ -2259,7 +2412,7 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
     // ── ANTHROPIC con tool use + failover ──
     let r;
     try {
-      r = await _callClaudeConFallback(apiKey, systemBlocks, messages);
+      r = await _callClaudeConFallback(apiKey, systemBlocks, messages, usarHerramientas);
     } catch (err) {
       console.error(`${TAG} ambos modelos fallaron:`, err.message);
       try { await sessionPromise; } catch (_) {}
@@ -2311,7 +2464,8 @@ export const akiraAbrir = webMethod(
   Permissions.Anyone,
   async () => {
     try {
-      const [config, salon] = await Promise.all([_getAlignment(), _getSalonConfig()]);
+      const [alignments, salon] = await Promise.all([_getAlignments(), _getSalonConfig()]);
+      const config = _alignmentDelPlano(alignments, PLANO_DEFECTO) || (alignments[0] || null);
       // Cada visita arranca en welcome (lección CATHOVIA v1.5.3).
       return {
         ok: true,
