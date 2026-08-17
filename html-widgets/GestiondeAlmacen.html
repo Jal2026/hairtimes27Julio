@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>KAMISUITE · Gestión de Almacén</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════
+   KAMISUITE · Widget Gestión de Almacén v1.3.1
+   Dark theme — Bai Jamjuree — accent dorado #c9a44a
+   ───────────────────────────────────────────────────────────
+   Almacén de uso en salón, CMS-first sobre KamisuiteStock.
+   Dos contadores por producto: cerrados (stockStored) y
+   abiertos (stockInUse). El stock solo se mueve por
+   movimientos firmados: no hay ningún input que escriba
+   directamente sobre los contadores.
+   Backend: stockLogic.web.js v1.0.0
+   Page code: pagecode_almacen.js v2.0.0 (#widgetAlmacen)
+   CHANGELOG
+   v1.3.1 · 2 Ago 2026 · Se RETIRA "Stock inicial" de los motivos de
+     ENTRADA manuales. Era una trampa: ofrecido sobre un producto que
+     ya tiene existencias, sumaba unidades en vez de fijar el recuento,
+     que es lo que espera quien lo elige. STOCK_INICIAL sigue siendo un
+     motivo válido en el backend, pero solo lo escriben quienes deben:
+     el alta de producto con cantidad inicial y generarStockInicial()
+     de la migración. Para cuadrar existencias, AJUSTE · Recuento.
+   v1.3.0 · 2 Ago 2026 · CORREGIR STOCK a un clic.
+     · La pestaña DATOS deja de mostrar un texto pasivo con el stock y
+       pasa a tener un bloque con los dos contadores y tres accesos
+       directos: Corregir stock (AJUSTE·RECUENTO), Registrar rotura
+       (SALIDA·ROTURA) y Añadir unidades (ENTRADA·COMPRA). Los tres
+       saltan a MOVIMIENTO ya configurados. La capacidad existía desde
+       la v1.0.0; lo que no existía era encontrarla.
+     · La pestaña MOVIMIENTO muestra arriba el stock actual, y en un
+       AJUSTE calcula en vivo la diferencia que se va a registrar
+       ("el sistema dice 5, vas a fijar 3 → se registrará −2").
+     · Botón ➕ de entrada rápida en cada fila del listado.
+     · FIX: tras registrar un movimiento con la ficha abierta, los
+       contadores de la ficha se quedaban con el valor viejo hasta
+       cerrarla y volverla a abrir. Ahora se repintan solos al llegar
+       los datos nuevos (regla de UX: reflejar el cambio sin recargar).
+     · Sin cambios en backend ni page code.
+   v1.2.0 · 2 Ago 2026 · La exportación pasa a ser un .xlsx REAL.
+     · Se retira la tabla HTML con extensión .xls de la v1.1.0. El
+       proyecto ya tiene resuelto el Excel en backend con el paquete
+       npm xlsx (testCheckout.generarExcel · http-functions
+       .get_descargarExcel): el fichero se genera allí y llega aquí en
+       base64. Cuatro hojas: Informe · Categorías · Marcas · Listado.
+     · El widget solo decodifica el base64 a Blob y lo descarga. Si el
+       iframe bloquea la descarga, sigue el plan B de copiar el
+       listado en TSV al portapapeles.
+     · Requiere stockLogic v1.0.2 y pagecode v2.1.0.
+   v1.1.0 · 2 Ago 2026 · Panel de MÉTRICAS + exportación a Excel.
+     · KPI "Valor almacén" pasa a "VALOR COMERCIAL" (PVP × unidades).
+       El valor a coste se muestra como subtítulo. En un almacén recién
+       migrado el coste está vacío y el PVP no: mostrar 0,00 € arriba
+       no informaba de nada.
+     · El resumen del panel se calcula SIEMPRE en local desde
+       allProductos (calcResumen), tanto en la carga como tras cada
+       papelera. Antes convivían dos cálculos —backend y local— que
+       podían divergir. Ahora hay uno solo. El backend sigue
+       devolviendo su resumen; el widget lo ignora.
+     · Modal MÉTRICAS: valoración, cobertura del dato, estado del
+       stock (en uso · agotados · DEFCON 2 · bajo mínimo), reparto
+       por categoría y por marca con barras, top 10 por valor y
+       calidad del dato.
+     · Exportación: descarga un .xls con el informe completo y las
+       349 filas del listado. Si el navegador bloquea la descarga
+       dentro del iframe, copia el listado al portapapeles en TSV
+       (se pega directo en Excel). Patrón de copia con fallback
+       execCommand tomado del widget de Recepción PRO v1.1.63.
+   v1.0.0 · 2 Ago 2026 · versión inicial
+   ═══════════════════════════════════════════════════════════ */
+:root{
+  --bg:#0f1117; --surface:#181b23; --surface2:#1e222c; --surface3:#252a36;
+  --border:rgba(255,255,255,.08); --border-hover:rgba(255,255,255,.18);
+  --text:#e8e9ed; --text-sec:rgba(255,255,255,.65); --muted:rgba(255,255,255,.40);
+  --gold:#c9a44a; --gold-dim:rgba(201,164,74,.12); --gold-glow:rgba(201,164,74,.25);
+  --cyan:#4a9ec9; --cyan-dim:rgba(74,158,201,.12);
+  --green:#36c06a; --green-dim:rgba(54,192,106,.12);
+  --purple:#9b7ede; --purple-dim:rgba(155,126,222,.12);
+  --amber:#e0a63c; --amber-dim:rgba(224,166,60,.14);
+  --red:#e85454; --red-dim:rgba(232,84,84,.12);
+  --radius:10px; --radius-sm:6px; --font:"Bai Jamjuree",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+.wrap{width:94%;max-width:1180px;margin:0 auto;padding:20px 0 60px}
+button{font-family:var(--font);cursor:pointer}
+input,select,textarea{font-family:var(--font)}
+
+/* ─── HEADER ─── */
+.page-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+.hl{display:flex;align-items:center;gap:10px}
+.page-title{font-size:18px;font-weight:800;letter-spacing:.5px}
+.page-subtitle{font-size:11px;color:var(--text-sec);margin-top:1px}
+.badge-version{font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted);background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px}
+.hr{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.staff-chip{display:flex;align-items:center;gap:7px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:4px 12px 4px 4px;font-size:12px;font-weight:600}
+.staff-chip img{width:24px;height:24px;border-radius:50%;object-fit:cover}
+.staff-chip .ini{width:24px;height:24px;border-radius:50%;background:var(--gold-dim);color:var(--gold);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
+.btn{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);padding:8px 14px;font-size:12px;font-weight:600;transition:.15s}
+.btn:hover{border-color:var(--border-hover);background:var(--surface3)}
+.btn.gold{background:var(--gold);border-color:var(--gold);color:#151515;font-weight:800}
+.btn.gold:hover{filter:brightness(1.08)}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--red);border-color:rgba(232,84,84,.35)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* ─── KPI ─── */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}
+.kpi .k-lab{font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700}
+.kpi .k-val{font-size:22px;font-weight:800;margin-top:3px}
+.kpi .k-sub{font-size:10px;color:var(--text-sec);margin-top:1px}
+.kpi.warn .k-val{color:var(--amber)}
+.kpi.out .k-val{color:var(--red)}
+.kpi.val .k-val{color:var(--gold)}
+
+/* ─── TOOLBAR ─── */
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.search{flex:1;min-width:200px;position:relative}
+.search input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:9px 12px 9px 32px;font-size:13px;outline:none}
+.search input:focus{border-color:var(--gold)}
+.search .ic{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:13px;opacity:.5}
+select.f{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:9px 10px;font-size:12px;outline:none;max-width:190px}
+select.f:focus{border-color:var(--gold)}
+
+/* ─── LISTA ─── */
+.list{display:flex;flex-direction:column;gap:8px}
+.row{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;transition:.15s}
+.row:hover{border-color:var(--border-hover)}
+.row.low{border-left:3px solid var(--amber)}
+.row.zero{border-left:3px solid var(--red)}
+.row.off{opacity:.5}
+.thumb{width:44px;height:44px;border-radius:8px;background:var(--surface3);flex-shrink:0;object-fit:cover;display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--muted);border:1px solid var(--border)}
+.rmain{flex:1;min-width:0}
+.rname{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rmeta{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px;align-items:center}
+.chip{font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:4px;background:var(--surface3);color:var(--text-sec);border:1px solid var(--border)}
+.chip.brand{color:var(--cyan);background:var(--cyan-dim);border-color:transparent}
+.chip.cat{color:var(--purple);background:var(--purple-dim);border-color:transparent}
+.chip.warn{color:var(--amber);background:var(--amber-dim);border-color:transparent}
+.chip.out{color:var(--red);background:var(--red-dim);border-color:transparent}
+.chip.cost{color:var(--gold);background:var(--gold-dim);border-color:transparent}
+.counters{display:flex;gap:8px;flex-shrink:0}
+.cnt{text-align:center;min-width:56px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 6px}
+.cnt .c-val{font-size:17px;font-weight:800;line-height:1.1}
+.cnt .c-lab{font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);font-weight:700}
+.cnt.use .c-val{color:var(--green)}
+.ractions{display:flex;gap:6px;flex-shrink:0}
+.icb{width:34px;height:34px;border-radius:var(--radius-sm);background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:15px;display:flex;align-items:center;justify-content:center;transition:.15s}
+.icb:hover{border-color:var(--border-hover);background:var(--surface3)}
+.icb.trash:hover{border-color:var(--gold);color:var(--gold)}
+.icb:disabled{opacity:.3;cursor:not-allowed}
+.empty{text-align:center;padding:50px 20px;color:var(--muted);font-size:13px}
+
+/* ─── MODAL ─── */
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:flex-start;justify-content:center;z-index:900;padding:24px 12px;overflow-y:auto}
+.ov.on{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;width:100%;max-width:640px;box-shadow:0 20px 60px rgba(0,0,0,.55)}
+.modal.sm{max-width:440px}
+.mhead{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border)}
+.mtitle{font-size:15px;font-weight:800}
+.mclose{background:none;border:none;color:var(--muted);font-size:22px;line-height:1;padding:0 4px}
+.mclose:hover{color:var(--text)}
+.mbody{padding:16px 18px}
+.mfoot{display:flex;gap:8px;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--border);flex-wrap:wrap}
+.tabs{display:flex;gap:4px;padding:0 18px;border-bottom:1px solid var(--border)}
+.tab{background:none;border:none;color:var(--muted);font-size:12px;font-weight:700;padding:10px 12px;border-bottom:2px solid transparent;letter-spacing:.4px}
+.tab.on{color:var(--gold);border-bottom-color:var(--gold)}
+.pane{display:none}
+.pane.on{display:block}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fg{margin-bottom:12px}
+.fg label{display:block;font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:5px}
+.fg input,.fg select,.fg textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);padding:9px 11px;font-size:13px;outline:none}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--gold)}
+.fg textarea{resize:vertical;min-height:64px}
+.hint{font-size:10px;color:var(--muted);margin-top:4px;line-height:1.4}
+.sw{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;font-weight:600;user-select:none}
+.sw input{width:auto}
+
+.imgrow{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+.imgprev{width:70px;height:70px;border-radius:10px;background:var(--surface3);border:1px solid var(--border);object-fit:cover;display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--muted)}
+
+/* ─── HISTÓRICO ─── */
+.mv{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)}
+.mv:last-child{border-bottom:none}
+.mv-tag{font-size:9px;font-weight:800;letter-spacing:.5px;padding:3px 7px;border-radius:4px;flex-shrink:0;min-width:74px;text-align:center}
+.t-ENTRADA{background:var(--green-dim);color:var(--green)}
+.t-SALIDA{background:var(--gold-dim);color:var(--gold)}
+.t-APERTURA{background:var(--cyan-dim);color:var(--cyan)}
+.t-AJUSTE{background:var(--purple-dim);color:var(--purple)}
+.mv-main{flex:1;min-width:0}
+.mv-r{font-size:12px;font-weight:700}
+.mv-s{font-size:10px;color:var(--muted);margin-top:1px}
+.mv-q{font-size:14px;font-weight:800;flex-shrink:0}
+
+/* ─── TIENDA (traspaso) ─── */
+.strow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer}
+.strow:hover{background:var(--surface2)}
+.strow.sel{background:var(--gold-dim)}
+.strow.no{opacity:.45;cursor:not-allowed}
+.st-main{flex:1;min-width:0}
+.st-n{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-m{font-size:10px;color:var(--muted)}
+.st-q{font-size:13px;font-weight:800;flex-shrink:0}
+
+/* ─── LOGIN ─── */
+.login{position:fixed;inset:0;background:var(--bg);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px}
+.login.on{display:flex}
+.lbox{width:100%;max-width:420px;text-align:center}
+.ltitle{font-size:16px;font-weight:800;margin-bottom:4px}
+.lsub{font-size:12px;color:var(--text-sec);margin-bottom:22px}
+.lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px}
+.lcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 8px;transition:.15s}
+.lcard:hover{border-color:var(--gold)}
+.lav{width:44px;height:44px;border-radius:50%;margin:0 auto 8px;object-fit:cover;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;background:var(--surface3);color:var(--gold);border:2px solid var(--border)}
+.lname{font-size:12px;font-weight:700}
+.lnopin{font-size:9px;color:var(--muted);margin-top:2px}
+.pinwrap{margin-top:18px}
+.pindots{display:flex;gap:10px;justify-content:center;margin:16px 0 18px}
+.pd{width:13px;height:13px;border-radius:50%;border:2px solid var(--border)}
+.pd.on{background:var(--gold);border-color:var(--gold)}
+.keys{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;max-width:250px;margin:0 auto}
+.key{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:15px 0;font-size:18px;font-weight:700}
+.key:hover{border-color:var(--gold)}
+.lerr{color:var(--red);font-size:12px;font-weight:600;margin-top:12px;min-height:18px}
+
+/* ─── BLOQUE DE STOCK EN LA FICHA ─── */
+.stockbox{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:13px 14px;margin-top:14px}
+.sb-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:11px}
+.sb-c{text-align:center;min-width:64px;background:var(--surface3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px}
+.sb-c .v{font-size:19px;font-weight:800;line-height:1.1}
+.sb-c .l{font-size:9px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);font-weight:700}
+.sb-c.use .v{color:var(--green)}
+.sb-note{font-size:10px;color:var(--muted);flex:1;min-width:150px;line-height:1.4}
+.sb-btns{display:flex;gap:7px;flex-wrap:wrap}
+.sb-btns .btn{padding:7px 11px;font-size:11px}
+.movnow{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 12px;margin-bottom:14px;font-size:12px;color:var(--text-sec)}
+.movnow b{color:var(--text)}
+.adjprev{font-size:12px;font-weight:700;margin-top:8px;padding:9px 12px;border-radius:var(--radius-sm);background:var(--gold-dim);color:var(--gold)}
+.adjprev.none{background:var(--surface3);color:var(--muted)}
+
+/* ─── MÉTRICAS ─── */
+.modal.xl{max-width:900px}
+.msec{margin-bottom:22px}
+.msec-t{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--gold);font-weight:800;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.mcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+.mc{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:13px 14px}
+.mc .m-l{font-size:9px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);font-weight:700}
+.mc .m-v{font-size:21px;font-weight:800;margin-top:3px;line-height:1.15}
+.mc .m-s{font-size:10px;color:var(--text-sec);margin-top:2px}
+.mc.gold .m-v{color:var(--gold)} .mc.green .m-v{color:var(--green)}
+.mc.cyan .m-v{color:var(--cyan)} .mc.amber .m-v{color:var(--amber)}
+.mc.red .m-v{color:var(--red)} .mc.purple .m-v{color:var(--purple)}
+.brow{display:flex;align-items:center;gap:10px;padding:6px 0}
+.blab{width:130px;flex-shrink:0;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btrack{flex:1;height:16px;background:var(--surface3);border-radius:8px;overflow:hidden;position:relative}
+.bfill{height:100%;border-radius:8px;transition:width .4s}
+.bnum{width:118px;flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:var(--text-sec)}
+.dq{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px}
+.dq:last-child{border-bottom:none}
+.dq b{font-weight:800}
+.gauge{height:8px;background:var(--surface3);border-radius:4px;overflow:hidden;margin-top:7px}
+.gauge i{display:block;height:100%;background:var(--gold)}
+
+/* ─── TOAST / LOADER ─── */
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--surface3);border:1px solid var(--border);color:var(--text);padding:11px 20px;border-radius:24px;font-size:13px;font-weight:600;opacity:0;pointer-events:none;transition:.25s;z-index:1200;max-width:88%;text-align:center}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.err{border-color:var(--red);color:var(--red)}
+#toast.ok{border-color:var(--green);color:var(--green)}
+#loader{position:fixed;inset:0;background:rgba(15,17,23,.82);display:none;align-items:center;justify-content:center;z-index:1100;flex-direction:column;gap:14px}
+#loader.on{display:flex}
+.spin{width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.lmsg{font-size:12px;color:var(--text-sec)}
+
+@media(max-width:640px){
+  .grid2{grid-template-columns:1fr}
+  .row{flex-wrap:wrap}
+  .counters{order:3}
+  .ractions{order:4;margin-left:auto}
+  .rmain{flex-basis:calc(100% - 56px)}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ LOGIN POR PIN ═══ -->
+<div class="login" id="login">
+  <div class="lbox">
+    <div class="ltitle">Gestión de Almacén</div>
+    <div class="lsub" id="loginSub">Identifícate para registrar movimientos</div>
+    <div class="lgrid" id="loginGrid"></div>
+    <div class="pinwrap" id="pinWrap" style="display:none">
+      <div class="ltitle" id="pinName"></div>
+      <div class="pindots"><span class="pd"></span><span class="pd"></span><span class="pd"></span><span class="pd"></span></div>
+      <div class="keys" id="keys"></div>
+      <div class="lerr" id="pinErr"></div>
+      <button class="btn ghost" style="margin-top:14px" id="pinBack">← Cambiar de empleado</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="page-header">
+    <div class="hl">
+      <div>
+        <div class="page-title">🗄️ Gestión de Almacén</div>
+        <div class="page-subtitle">Productos de uso en salón · stock trazable por movimientos</div>
+      </div>
+      <span class="badge-version">v1.3.1</span>
+    </div>
+    <div class="hr">
+      <div class="staff-chip" id="staffChip" style="display:none"></div>
+      <button class="btn ghost" id="btnReload">🔄 Recargar</button>
+      <button class="btn" id="btnMetrics">📊 Métricas</button>
+      <button class="btn" id="btnExport">⬇️ Exportar</button>
+      <button class="btn" id="btnStore">🏬 Traspasar de tienda</button>
+      <button class="btn gold" id="btnNew">＋ Nuevo producto</button>
+    </div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="toolbar">
+    <div class="search">
+      <span class="ic">🔎</span>
+      <input type="text" id="q" placeholder="Buscar por nombre, marca, categoría, SKU…"/>
+    </div>
+    <select class="f" id="fBrand"><option value="">Todas las marcas</option></select>
+    <select class="f" id="fCat"><option value="">Todas las categorías</option></select>
+    <select class="f" id="fState">
+      <option value="activos">Activos</option>
+      <option value="reponer">Reponer / bajo mínimo</option>
+      <option value="agotados">Agotados</option>
+      <option value="enuso">Con botes abiertos</option>
+      <option value="inactivos">Inactivos</option>
+      <option value="todos">Todos</option>
+    </select>
+    <select class="f" id="fSort">
+      <option value="nombre">Nombre</option>
+      <option value="marca">Marca</option>
+      <option value="stock">Stock (menor primero)</option>
+      <option value="reponer">Reponer primero</option>
+      <option value="coste">Coste</option>
+    </select>
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<!-- ═══ MODAL FICHA ═══ -->
+<div class="ov" id="ovFicha">
+  <div class="modal">
+    <div class="mhead">
+      <div class="mtitle" id="fTitle">Ficha del producto</div>
+      <button class="mclose" data-close="ovFicha">×</button>
+    </div>
+    <div class="tabs">
+      <button class="tab on" data-pane="pDatos">DATOS</button>
+      <button class="tab" data-pane="pMov">MOVIMIENTO</button>
+      <button class="tab" data-pane="pHist">HISTORIAL</button>
+    </div>
+    <div class="mbody">
+
+      <div class="pane on" id="pDatos">
+        <div class="imgrow">
+          <div class="imgprev" id="fImg">📦</div>
+          <div>
+            <input type="file" id="fFile" accept="image/*" style="display:none"/>
+            <button class="btn" id="btnImg">📸 Cambiar imagen</button>
+            <div class="hint">JPG o PNG. Se guarda al seleccionar el archivo.</div>
+          </div>
+        </div>
+        <div class="fg">
+          <label>Nombre del producto *</label>
+          <input type="text" id="fName" placeholder="COLORANCE 4BP"/>
+        </div>
+        <div class="grid2">
+          <div class="fg">
+            <label>Marca</label>
+            <input type="text" id="fBrandIn" list="dlBrand" placeholder="GOLDWELL"/>
+            <datalist id="dlBrand"></datalist>
+            <div class="hint">Escribe y elige de la lista para no duplicar marcas.</div>
+          </div>
+          <div class="fg">
+            <label>Categoría</label>
+            <input type="text" id="fCatIn" list="dlCat" placeholder="COLORACIÓN"/>
+            <datalist id="dlCat"></datalist>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="fg"><label>SKU / referencia</label><input type="text" id="fSku"/></div>
+          <div class="fg">
+            <label>Unidad</label>
+            <input type="text" id="fUnit" list="dlUnit" placeholder="bote, tubo, 250 ml…"/>
+            <datalist id="dlUnit"></datalist>
+          </div>
+        </div>
+        <div class="fg"><label>Descripción</label><textarea id="fDesc"></textarea></div>
+        <div class="grid2">
+          <div class="fg">
+            <label>Stock mínimo</label>
+            <input type="number" id="fMin" min="0" step="1" value="0"/>
+            <div class="hint">A 0 no genera aviso de reposición.</div>
+          </div>
+          <div class="fg"><label>Stock máximo (informativo)</label><input type="number" id="fMax" min="0" step="1" value="0"/></div>
+        </div>
+        <div class="grid2">
+          <div class="fg"><label>Coste unitario (€)</label><input type="number" id="fCost" min="0" step="0.01"/></div>
+          <div class="fg"><label>PVP de referencia (€)</label><input type="number" id="fPvp" min="0" step="0.01"/></div>
+        </div>
+        <div class="fg"><label>Proveedor</label><input type="text" id="fSup" list="dlSup"/><datalist id="dlSup"></datalist></div>
+        <div class="fg"><label>Notas internas</label><textarea id="fNotes"></textarea></div>
+        <div class="fg" id="fInitWrap">
+          <label>Cantidad inicial en almacén</label>
+          <input type="number" id="fInit" min="0" step="1" value="0"/>
+          <div class="hint">Solo en el alta. Genera un movimiento ENTRADA · STOCK_INICIAL.</div>
+        </div>
+        <label class="sw"><input type="checkbox" id="fActive" checked/> Producto activo en el almacén</label>
+        <div class="stockbox" id="fStockBox" style="display:none">
+          <div class="sb-top">
+            <div class="sb-c"><div class="v" id="sbStored">0</div><div class="l">Cerrados</div></div>
+            <div class="sb-c use"><div class="v" id="sbUse">0</div><div class="l">En uso</div></div>
+            <div class="sb-note">Los contadores no se escriben a mano: cada corrección deja movimiento con motivo, fecha y firma.</div>
+          </div>
+          <div class="sb-btns">
+            <button class="btn gold" id="sbFix">✏️ Corregir stock</button>
+            <button class="btn" id="sbBreak">🔨 Rotura / merma</button>
+            <button class="btn" id="sbIn">➕ Añadir unidades</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane" id="pMov">
+        <div class="movnow" id="movNow"></div>
+        <div class="fg">
+          <label>Tipo de movimiento</label>
+          <select id="mType">
+            <option value="ENTRADA">ENTRADA — sumar unidades cerradas</option>
+            <option value="SALIDA">SALIDA — retirar unidades</option>
+            <option value="APERTURA">APERTURA — abrir un bote (cerrado → en uso)</option>
+            <option value="AJUSTE">AJUSTE — fijar el recuento real</option>
+          </select>
+        </div>
+        <div class="fg"><label>Motivo</label><select id="mReason"></select></div>
+        <div id="mQtyWrap">
+          <div class="fg"><label>Cantidad</label><input type="number" id="mQty" min="1" step="1" value="1"/></div>
+          <label class="sw" id="mFromUseWrap" style="margin-bottom:12px;display:none">
+            <input type="checkbox" id="mFromUse"/> Descontar de los botes abiertos
+          </label>
+        </div>
+        <div id="mAdjWrap" style="display:none">
+          <div class="grid2">
+            <div class="fg"><label>Cerrados contados</label><input type="number" id="mStored" min="0" step="1"/></div>
+            <div class="fg"><label>Abiertos contados</label><input type="number" id="mInUse" min="0" step="1"/></div>
+          </div>
+          <div class="hint">Se graba la diferencia contra lo que dice el sistema, con tu firma.</div>
+          <div class="adjprev" id="mAdjPrev"></div>
+        </div>
+        <div class="fg"><label>Observaciones</label><textarea id="mNotes" placeholder="Opcional"></textarea></div>
+        <button class="btn gold" id="btnMov" style="width:100%">Registrar movimiento</button>
+      </div>
+
+      <div class="pane" id="pHist"><div id="histBox" class="empty">Cargando…</div></div>
+
+    </div>
+    <div class="mfoot">
+      <button class="btn danger" id="btnDel">Eliminar</button>
+      <button class="btn ghost" data-close="ovFicha">Cerrar</button>
+      <button class="btn gold" id="btnSave">Guardar ficha</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL TRASPASO ═══ -->
+<div class="ov" id="ovStore">
+  <div class="modal">
+    <div class="mhead">
+      <div class="mtitle">🏬 → 🗄️ Traspasar desde la tienda</div>
+      <button class="mclose" data-close="ovStore">×</button>
+    </div>
+    <div class="mbody">
+      <div class="hint" style="margin-bottom:12px">
+        Las unidades salen del inventario de la tienda y entran en el almacén del salón.
+        Un bote está en una estantería o en la otra, nunca en las dos.
+      </div>
+      <div class="search" style="margin-bottom:12px">
+        <span class="ic">🔎</span>
+        <input type="text" id="qStore" placeholder="Buscar producto de la tienda…"/>
+      </div>
+      <div id="storeList" style="max-height:280px;overflow-y:auto">
+        <div class="empty">Cargando productos de la tienda…</div>
+      </div>
+      <div class="fg" style="margin-top:14px">
+        <label>Unidades a traspasar</label>
+        <input type="number" id="stQty" min="1" step="1" value="1"/>
+      </div>
+    </div>
+    <div class="mfoot">
+      <button class="btn ghost" data-close="ovStore">Cancelar</button>
+      <button class="btn gold" id="btnTransfer" disabled>Traspasar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL MÉTRICAS ═══ -->
+<div class="ov" id="ovMetrics">
+  <div class="modal xl">
+    <div class="mhead">
+      <div class="mtitle">📊 Métricas del almacén</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn" id="btnExport2">⬇️ Exportar a Excel</button>
+        <button class="mclose" data-close="ovMetrics">×</button>
+      </div>
+    </div>
+    <div class="mbody" id="metricsBody"></div>
+  </div>
+</div>
+
+<div id="loader"><div class="spin"></div><div class="lmsg" id="loaderMsg">Cargando…</div></div>
+<div id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   KAMISUITE · Widget Gestión de Almacén v1.3.1
+   ═══════════════════════════════════════════════════════════ */
+const VERSION = '1.3.1';
+const TAG = `[AlmacenWidget][${VERSION}]`;
+
+// ─── ESTADO ───
+let allProductos = [];
+let allBrands = [], allCats = [], allSups = [], allUnits = [];
+let resumen = {};
+let storeProducts = [], storeSel = null;
+let editId = null;          // null = alta
+let usersActivation = false;
+let staffCards = [];
+let empleado = null;        // { _id, staffName, accessLevel, profileImage }
+let pinStaff = null, pinBuf = '';
+let dataRecibida = false;
+
+// ─── PUENTE CON EL PAGE CODE ───
+function send(type, payload) {
+  try { window.parent.postMessage({ type, payload }, '*'); }
+  catch (e) { console.error(TAG, 'postMessage', e); }
+}
+
+// Bucle de reintento: sin él, el widget falla en móvil cuando el
+// page code aún no está montado al terminar de cargar el iframe.
+let readyTimer = setInterval(() => {
+  if (dataRecibida) { clearInterval(readyTimer); return; }
+  send('ready');
+}, 800);
+
+window.addEventListener('message', (e) => {
+  const msg = e.data || {};
+  if (!msg.type) return;
+  switch (msg.type) {
+    case 'login-config':      onLoginConfig(msg.payload); break;
+    case 'pin-result':        onPinResult(msg.payload); break;
+    case 'data':              onData(msg.payload); break;
+    case 'producto-guardado': onGuardado(msg.payload); break;
+    case 'producto-eliminado':onEliminado(msg.payload); break;
+    case 'imagen-ok':         onImagen(msg.payload); break;
+    case 'movimiento-ok':     onMovimiento(msg.payload); break;
+    case 'papelera-ok':       onPapelera(msg.payload); break;
+    case 'historico':         onHistorico(msg.payload); break;
+    case 'tienda':            onTienda(msg.payload); break;
+    case 'traspaso-ok':       onTraspaso(msg.payload); break;
+    case 'excel':             onExcel(msg.payload); break;
+    case 'error':             hideLoader(); toast(msg.message || 'Error', 'err'); break;
+  }
+});
+
+// ─── UI BÁSICA ───
+const $ = id => document.getElementById(id);
+function toast(t, cls) {
+  const el = $('toast');
+  el.textContent = t;
+  el.className = 'on' + (cls ? ' ' + cls : '');
+  setTimeout(() => { el.className = ''; }, 2600);
+}
+function showLoader(m) { $('loaderMsg').textContent = m || 'Cargando…'; $('loader').classList.add('on'); }
+function hideLoader() { $('loader').classList.remove('on'); }
+function openM(id) { $(id).classList.add('on'); }
+function closeM(id) { $(id).classList.remove('on'); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function eur(n) { return (Number(n) || 0).toFixed(2).replace('.', ',') + ' €'; }
+function ini(n) { return String(n || '?').trim().charAt(0).toUpperCase(); }
+
+// Niveles de acceso. Misma tabla que Recepción PRO (_puede):
+// 1 Administrador · 2 Encargado · 3 Recepción · 4 Básico.
+// Sin capa de login activa → acceso total (comportamiento previo).
+// La papelera la puede usar CUALQUIER nivel: es el trabajo diario.
+function puede(accion) {
+  if (!usersActivation || !empleado) return true;
+  const raw = Number(empleado.accessLevel);
+  const nv = (raw === 1 || raw === 2 || raw === 3) ? raw : 4;
+  if (accion === 'papelera') return true;
+  return nv <= 2;
+}
+
+// ═══ LOGIN ═══
+function onLoginConfig(p) {
+  usersActivation = p.usersActivation === true;
+  staffCards = Array.isArray(p.staff) ? p.staff : [];
+  if (!usersActivation) { $('login').classList.remove('on'); return; }
+  renderLogin();
+  $('login').classList.add('on');
+}
+
+function renderLogin() {
+  $('loginGrid').innerHTML = staffCards.map((s, i) => `
+    <button class="lcard" data-i="${i}">
+      ${s.profileImage
+        ? `<img class="lav" src="${esc(s.profileImage)}" alt=""/>`
+        : `<div class="lav">${esc(ini(s.displayName))}</div>`}
+      <div class="lname">${esc(s.displayName)}</div>
+      ${s.hasPin ? '' : '<div class="lnopin">sin PIN</div>'}
+    </button>`).join('') || '<div class="empty">No hay empleados activos</div>';
+
+  $('loginGrid').querySelectorAll('.lcard').forEach(b => {
+    b.onclick = () => {
+      const s = staffCards[Number(b.dataset.i)];
+      if (!s.hasPin) { toast('Ese empleado no tiene PIN configurado', 'err'); return; }
+      pinStaff = s; pinBuf = '';
+      $('pinName').textContent = s.displayName;
+      $('pinErr').textContent = '';
+      $('loginGrid').style.display = 'none';
+      $('loginSub').style.display = 'none';
+      $('pinWrap').style.display = 'block';
+      renderDots();
+    };
+  });
+}
+
+function renderKeys() {
+  const keys = ['1','2','3','4','5','6','7','8','9','','0','⌫'];
+  $('keys').innerHTML = keys.map(k => k === '' ? '<div></div>' : `<button class="key" data-k="${k}">${k}</button>`).join('');
+  $('keys').querySelectorAll('.key').forEach(b => {
+    b.onclick = () => {
+      const k = b.dataset.k;
+      if (k === '⌫') { pinBuf = pinBuf.slice(0, -1); }
+      else if (pinBuf.length < 4) { pinBuf += k; }
+      renderDots();
+      if (pinBuf.length === 4) {
+        showLoader('Validando…');
+        send('validate-pin', { staffId: pinStaff._id, pin: pinBuf });
+      }
+    };
+  });
+}
+function renderDots() {
+  document.querySelectorAll('.pd').forEach((d, i) => d.classList.toggle('on', i < pinBuf.length));
+}
+function onPinResult(p) {
+  hideLoader();
+  if (!p.ok) { pinBuf = ''; renderDots(); $('pinErr').textContent = p.error || 'PIN incorrecto'; return; }
+  empleado = p.staff;
+  $('login').classList.remove('on');
+  renderStaffChip();
+  render();
+  toast('Hola, ' + (empleado.staffName || ''), 'ok');
+}
+function renderStaffChip() {
+  if (!empleado) return;
+  const c = $('staffChip');
+  c.style.display = 'flex';
+  c.innerHTML = (empleado.profileImage
+    ? `<img src="${esc(empleado.profileImage)}" alt=""/>`
+    : `<div class="ini">${esc(ini(empleado.staffName))}</div>`) + esc(empleado.staffName);
+}
+$('pinBack').onclick = () => {
+  pinStaff = null; pinBuf = '';
+  $('pinWrap').style.display = 'none';
+  $('loginGrid').style.display = 'grid';
+  $('loginSub').style.display = 'block';
+};
+
+// ═══ DATOS ═══
+function onData(p) {
+  dataRecibida = true;
+  clearInterval(readyTimer);
+  hideLoader();
+  allProductos = p.productos || [];
+  // El resumen se calcula SIEMPRE en local, también en la carga
+  // inicial: así el panel no puede divergir del cálculo que se hace
+  // tras cada papelera. El backend sigue devolviendo el suyo, pero el
+  // widget no lo usa (una única fuente de verdad para los KPI).
+  calcResumen();
+  recalcularTaxonomias();
+  render();
+  // Si la ficha está abierta, sus contadores se repintan con los datos
+  // recién llegados. Sin esto, tras un movimiento la ficha seguía
+  // enseñando el stock viejo hasta cerrarla y volverla a abrir.
+  if ($('ovFicha').classList.contains('on')) pintarStockFicha();
+}
+
+// REGLA DE UX KAMISUITE: las listas derivadas (marcas, categorías,
+// proveedores, unidades) se recalculan SIEMPRE desde allProductos,
+// nunca se rellenan una sola vez al cargar. Se llama tras cada
+// guardado local para que los filtros y los autocompletados reflejen
+// el cambio sin recargar la página.
+function recalcularTaxonomias() {
+  const uniq = k => Array.from(new Set(allProductos.map(p => (p[k] || '').trim()).filter(v => v)))
+    .sort((a, b) => a.localeCompare(b, 'es'));
+  allBrands = uniq('brand');
+  allCats   = uniq('category');
+  allSups   = uniq('supplier');
+  allUnits  = uniq('unit');
+
+  const fill = (sel, arr, label) => {
+    const prev = $(sel).value;
+    $(sel).innerHTML = `<option value="">${label}</option>` +
+      arr.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    if (arr.includes(prev)) $(sel).value = prev;
+  };
+  fill('fBrand', allBrands, 'Todas las marcas');
+  fill('fCat', allCats, 'Todas las categorías');
+
+  const dl = (id, arr) => { $(id).innerHTML = arr.map(v => `<option value="${esc(v)}"></option>`).join(''); };
+  dl('dlBrand', allBrands);
+  dl('dlCat', allCats);
+  dl('dlSup', allSups);
+  dl('dlUnit', allUnits);
+}
+
+function renderKpis() {
+  const r = resumen;
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="k-lab">Referencias</div><div class="k-val">${r.activas || 0}</div><div class="k-sub">${r.referencias || 0} en total</div></div>
+    <div class="kpi"><div class="k-lab">Unidades</div><div class="k-val">${r.unidadesTotales || 0}</div><div class="k-sub">${r.unidadesEnUso || 0} abiertas</div></div>
+    <div class="kpi warn"><div class="k-lab">Bajo mínimo</div><div class="k-val">${r.bajoMinimo || 0}</div><div class="k-sub">${r.critico || 0} con menos de 3 uds</div></div>
+    <div class="kpi out"><div class="k-lab">Agotados</div><div class="k-val">${r.agotados || 0}</div><div class="k-sub">sin existencias</div></div>
+    <div class="kpi val"><div class="k-lab">Valor comercial</div><div class="k-val">${eur(r.valorComercial)}</div><div class="k-sub">a coste ${eur(r.valorCoste)}${r.sinPvp ? ' · ' + r.sinPvp + ' sin PVP' : ''}</div></div>`;
+}
+
+function filtrados() {
+  const q = $('q').value.trim().toLowerCase();
+  const b = $('fBrand').value, c = $('fCat').value, st = $('fState').value, so = $('fSort').value;
+
+  let out = allProductos.filter(p => {
+    if (b && p.brand !== b) return false;
+    if (c && p.category !== c) return false;
+    if (st === 'activos'   && !p.active) return false;
+    if (st === 'inactivos' &&  p.active) return false;
+    if (st === 'reponer'   && !(p.active && p.needsRestock && !p.outOfStock)) return false;
+    if (st === 'agotados'  && !(p.active && p.outOfStock)) return false;
+    if (st === 'enuso'     && !(p.active && p.stockInUse > 0)) return false;
+    if (q) {
+      const hay = [p.productName, p.brand, p.category, p.sku, p.supplier, p.description]
+        .join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const cmp = {
+    nombre:  (a, z) => a.productName.localeCompare(z.productName, 'es'),
+    marca:   (a, z) => (a.brand || 'zzz').localeCompare(z.brand || 'zzz', 'es') || a.productName.localeCompare(z.productName, 'es'),
+    stock:   (a, z) => a.total - z.total,
+    coste:   (a, z) => (z.unitCost || 0) - (a.unitCost || 0),
+    reponer: (a, z) => (z.outOfStock - a.outOfStock) || (z.needsRestock - a.needsRestock) || a.total - z.total
+  };
+  return out.sort(cmp[so] || cmp.nombre);
+}
+
+function render() {
+  renderKpis();
+  const arr = filtrados();
+  if (!arr.length) {
+    $('list').innerHTML = '<div class="empty">No hay productos que coincidan con el filtro.</div>';
+    return;
+  }
+  $('list').innerHTML = arr.map(p => {
+    const cls = !p.active ? 'off' : (p.outOfStock ? 'zero' : (p.needsRestock ? 'low' : ''));
+    return `<div class="row ${cls}" data-id="${p.id}">
+      ${p.imageUrl ? `<img class="thumb" src="${esc(p.imageUrl)}" alt=""/>` : '<div class="thumb">📦</div>'}
+      <div class="rmain">
+        <div class="rname">${esc(p.productName)}</div>
+        <div class="rmeta">
+          ${p.brand ? `<span class="chip brand">${esc(p.brand)}</span>` : ''}
+          ${p.category ? `<span class="chip cat">${esc(p.category)}</span>` : ''}
+          ${p.unit ? `<span class="chip">${esc(p.unit)}</span>` : ''}
+          ${p.unitCost != null && p.unitCost > 0 ? `<span class="chip cost">${eur(p.unitCost)}</span>` : ''}
+          ${p.outOfStock ? '<span class="chip out">AGOTADO</span>' : (p.needsRestock ? '<span class="chip warn">⚠ REPONER</span>' : '')}
+          ${!p.active ? '<span class="chip">INACTIVO</span>' : ''}
+        </div>
+      </div>
+      <div class="counters">
+        <div class="cnt"><div class="c-val">${p.stockStored}</div><div class="c-lab">Cerrados</div></div>
+        <div class="cnt use"><div class="c-val">${p.stockInUse}</div><div class="c-lab">En uso</div></div>
+      </div>
+      <div class="ractions">
+        <button class="icb trash" data-act="trash" data-id="${p.id}" title="Tirar un bote terminado" ${p.total <= 0 ? 'disabled' : ''}>🗑️</button>
+        <button class="icb" data-act="open" data-id="${p.id}" title="Abrir un bote" ${p.stockStored <= 0 || !puede('editar') ? 'disabled' : ''}>📂</button>
+        <button class="icb" data-act="entrada" data-id="${p.id}" title="Añadir unidades" ${!puede('editar') ? 'disabled' : ''}>➕</button>
+        <button class="icb" data-act="ficha" data-id="${p.id}" title="Ficha">⚙️</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  $('list').querySelectorAll('[data-act]').forEach(b => {
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      const id = b.dataset.id;
+      if (b.dataset.act === 'trash') accionPapelera(id);
+      else if (b.dataset.act === 'open') accionAbrir(id);
+      else if (b.dataset.act === 'entrada') abrirFicha(id, { tab: 'pMov', tipo: 'ENTRADA', motivo: 'COMPRA' });
+      else abrirFicha(id);
+    };
+  });
+}
+
+// ═══ PAPELERA ═══
+// Actualización optimista: el contador se pinta al instante y el
+// backend confirma. Es la acción más repetida del día.
+function accionPapelera(id) {
+  const p = allProductos.find(x => x.id === id);
+  if (!p || p.total <= 0) return;
+  send('papelera', {
+    productId: id,
+    staffId: empleado ? empleado._id : '',
+    staffName: empleado ? empleado.staffName : ''
+  });
+  toast('🗑️ ' + p.productName, 'ok');
+}
+
+function onPapelera(p) {
+  if (!p.ok) { toast(p.error || 'No se pudo descontar', 'err'); send('recargar'); return; }
+  const i = allProductos.findIndex(x => x.id === p.productId);
+  if (i >= 0) {
+    allProductos[i].stockStored = p.stockStored;
+    allProductos[i].stockInUse = p.stockInUse;
+    allProductos[i].total = p.total;
+    allProductos[i].outOfStock = p.outOfStock;
+    allProductos[i].needsRestock = p.needsRestock;
+  }
+  calcResumen();
+  render();
+}
+
+// Cálculo único de los KPI del panel. Se llama en la carga y tras
+// cada papelera. Dos valoraciones distintas:
+//   · valorComercial = PVP × unidades   (lo que vale de cara al cliente)
+//   · valorCoste     = coste × unidades (lo que vale contablemente)
+// En un almacén recién migrado el coste está vacío y el PVP no, así
+// que el KPI de cabecera muestra el comercial y el coste va debajo.
+function calcResumen() {
+  const act = allProductos.filter(p => p.active);
+  let valorCoste = 0, valorComercial = 0, sinCoste = 0, sinPvp = 0;
+  act.forEach(p => {
+    if (p.unitCost != null && p.unitCost > 0) valorCoste += p.total * p.unitCost;
+    else sinCoste++;
+    if (p.retailPrice != null && p.retailPrice > 0) valorComercial += p.total * p.retailPrice;
+    else sinPvp++;
+  });
+  resumen = {
+    referencias: allProductos.length,
+    activas: act.length,
+    inactivas: allProductos.length - act.length,
+    agotados: act.filter(p => p.outOfStock).length,
+    bajoMinimo: act.filter(p => p.needsRestock && !p.outOfStock).length,
+    critico: act.filter(p => p.total > 0 && p.total < 3).length,
+    conAbiertos: act.filter(p => p.stockInUse > 0).length,
+    unidadesTotales: act.reduce((a, p) => a + p.total, 0),
+    unidadesCerradas: act.reduce((a, p) => a + p.stockStored, 0),
+    unidadesEnUso: act.reduce((a, p) => a + p.stockInUse, 0),
+    valorCoste: Math.round(valorCoste * 100) / 100,
+    valorComercial: Math.round(valorComercial * 100) / 100,
+    sinCoste, sinPvp
+  };
+}
+
+function accionAbrir(id) {
+  if (!puede('editar')) { toast('No tienes permiso para esta acción', 'err'); return; }
+  showLoader('Abriendo bote…');
+  send('movimiento', {
+    productId: id, moveType: 'APERTURA', reason: 'APERTURA_MANUAL', quantity: 1,
+    staffId: empleado ? empleado._id : '', staffName: empleado ? empleado.staffName : ''
+  });
+}
+
+// ═══ FICHA ═══
+function abrirFicha(id, preset) {
+  editId = id || null;
+  const p = id ? allProductos.find(x => x.id === id) : null;
+
+  $('fTitle').textContent = p ? p.productName : 'Nuevo producto';
+  $('fName').value = p ? p.productName : '';
+  $('fBrandIn').value = p ? p.brand : '';
+  $('fCatIn').value = p ? p.category : '';
+  $('fSku').value = p ? p.sku : '';
+  $('fUnit').value = p ? p.unit : '';
+  $('fDesc').value = p ? p.description : '';
+  $('fMin').value = p ? p.minStock : 0;
+  $('fMax').value = p ? p.maxStock : 0;
+  $('fCost').value = (p && p.unitCost != null) ? p.unitCost : '';
+  $('fPvp').value = (p && p.retailPrice != null) ? p.retailPrice : '';
+  $('fSup').value = p ? p.supplier : '';
+  $('fNotes').value = p ? p.notes : '';
+  $('fActive').checked = p ? p.active : true;
+  $('fInit').value = 0;
+  $('fImg').outerHTML = (p && p.imageUrl)
+    ? `<img class="imgprev" id="fImg" src="${esc(p.imageUrl)}" alt=""/>`
+    : '<div class="imgprev" id="fImg">📦</div>';
+
+  $('fInitWrap').style.display = p ? 'none' : 'block';
+  $('btnDel').style.display = (p && puede('borrar')) ? 'inline-block' : 'none';
+  $('btnImg').style.display = (p && puede('editar')) ? 'inline-block' : 'none';
+  $('btnSave').disabled = !puede('editar');
+  $('mNotes').value = '';
+  $('mQty').value = 1;
+  $('mFromUse').checked = false;
+
+  pintarStockFicha();
+
+  // Preset opcional: abrir directamente en MOVIMIENTO con el tipo y el
+  // motivo ya elegidos (lo usan los accesos directos de la ficha y el
+  // botón ➕ del listado).
+  const tabIni = (preset && preset.tab) ? preset.tab : 'pDatos';
+  if (preset && preset.tipo) {
+    $('mType').value = preset.tipo;
+    actualizarMotivos();
+    if (preset.motivo) $('mReason').value = preset.motivo;
+  } else {
+    actualizarMotivos();
+  }
+
+  document.querySelectorAll('.tab').forEach(t => {
+    t.style.display = (!p && t.dataset.pane !== 'pDatos') ? 'none' : 'block';
+    t.classList.toggle('on', t.dataset.pane === tabIni);
+  });
+  document.querySelectorAll('.pane').forEach(x => x.classList.toggle('on', x.id === tabIni));
+
+  openM('ovFicha');
+}
+
+// Pinta los contadores de la ficha y la cabecera de la pestaña
+// MOVIMIENTO. Se llama al abrir y cada vez que llegan datos nuevos con
+// la ficha abierta, para que un movimiento se refleje al instante.
+function pintarStockFicha() {
+  const p = editId ? allProductos.find(x => x.id === editId) : null;
+  $('fStockBox').style.display = (p && puede('editar')) ? 'block' : 'none';
+  if (!p) { $('movNow').textContent = ''; return; }
+  $('sbStored').textContent = p.stockStored;
+  $('sbUse').textContent = p.stockInUse;
+  $('movNow').innerHTML = `Ahora mismo: <b>${p.stockStored}</b> cerrados · <b>${p.stockInUse}</b> abiertos · total <b>${p.total}</b>`;
+  if ($('mType').value === 'AJUSTE') {
+    $('mStored').value = p.stockStored;
+    $('mInUse').value = p.stockInUse;
+  }
+  previewAjuste();
+}
+
+// Salta a MOVIMIENTO con el tipo y el motivo ya puestos.
+function irAMovimiento(tipo, motivo) {
+  if (!puede('editar')) { toast('No tienes permiso para esta acción', 'err'); return; }
+  $('mType').value = tipo;
+  actualizarMotivos();
+  if (motivo) $('mReason').value = motivo;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.pane === 'pMov'));
+  document.querySelectorAll('.pane').forEach(x => x.classList.toggle('on', x.id === 'pMov'));
+  pintarStockFicha();
+}
+
+function guardarFicha() {
+  const nombre = $('fName').value.trim();
+  if (!nombre) { toast('El nombre es obligatorio', 'err'); return; }
+  const payload = {
+    id: editId || undefined,
+    productName: nombre,
+    brand: $('fBrandIn').value.trim(),
+    category: $('fCatIn').value.trim(),
+    description: $('fDesc').value.trim(),
+    sku: $('fSku').value.trim(),
+    unit: $('fUnit').value.trim(),
+    minStock: $('fMin').value,
+    maxStock: $('fMax').value,
+    unitCost: $('fCost').value,
+    retailPrice: $('fPvp').value,
+    supplier: $('fSup').value.trim(),
+    notes: $('fNotes').value.trim(),
+    active: $('fActive').checked,
+    staffId: empleado ? empleado._id : '',
+    staffName: empleado ? empleado.staffName : ''
+  };
+  if (!editId) payload.stockStored = $('fInit').value;
+  showLoader('Guardando…');
+  send('guardar-producto', payload);
+}
+
+function onGuardado(p) {
+  hideLoader();
+  closeM('ovFicha');
+  toast(p.action === 'created' ? 'Producto creado' : 'Ficha guardada', 'ok');
+  if (p.warn) setTimeout(() => toast(p.warn, 'err'), 2800);
+}
+function onEliminado() { hideLoader(); closeM('ovFicha'); toast('Producto eliminado', 'ok'); }
+function onImagen(p) {
+  hideLoader();
+  if (p.publicUrl) $('fImg').outerHTML = `<img class="imgprev" id="fImg" src="${esc(p.publicUrl)}" alt=""/>`;
+  toast('Imagen actualizada', 'ok');
+}
+
+// ═══ MOVIMIENTOS ═══
+const MOTIVOS = {
+  // STOCK_INICIAL NO se ofrece aquí: solo lo generan el alta con
+  // cantidad inicial y la migración. Para cuadrar existencias en un
+  // producto que ya tiene stock, lo correcto es AJUSTE · Recuento.
+  ENTRADA:  [['COMPRA','Compra a proveedor'],['DEVOLUCION','Devolución']],
+  SALIDA:   [['ROTURA','Rotura'],['CADUCIDAD','Caducidad'],['USO_INTERNO','Uso interno'],['DEVOLUCION_PROVEEDOR','Devolución a proveedor'],['CONSUMO_SERVICIO','Consumo en servicio']],
+  APERTURA: [['APERTURA_MANUAL','Apertura de bote']],
+  AJUSTE:   [['RECUENTO','Diferencia de recuento'],['CORRECCION','Corrección administrativa']]
+};
+
+function actualizarMotivos() {
+  const t = $('mType').value;
+  $('mReason').innerHTML = (MOTIVOS[t] || []).map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  $('mQtyWrap').style.display = (t === 'AJUSTE') ? 'none' : 'block';
+  $('mAdjWrap').style.display = (t === 'AJUSTE') ? 'block' : 'none';
+  $('mFromUseWrap').style.display = (t === 'SALIDA') ? 'flex' : 'none';
+  if (t === 'AJUSTE' && editId) {
+    const p = allProductos.find(x => x.id === editId);
+    if (p) { $('mStored').value = p.stockStored; $('mInUse').value = p.stockInUse; }
+  }
+  previewAjuste();
+}
+
+// Diferencia que se va a registrar en un AJUSTE, calculada en vivo.
+// Que nadie fije un recuento sin ver antes lo que va a quedar grabado.
+function previewAjuste() {
+  const box = $('mAdjPrev');
+  if (!box) return;
+  if ($('mType').value !== 'AJUSTE' || !editId) { box.textContent = ''; return; }
+  const p = allProductos.find(x => x.id === editId);
+  if (!p) { box.textContent = ''; return; }
+  const ns = parseInt($('mStored').value, 10);
+  const nu = parseInt($('mInUse').value, 10);
+  if (isNaN(ns) || isNaN(nu) || ns < 0 || nu < 0) {
+    box.className = 'adjprev none';
+    box.textContent = 'Indica el recuento real de cerrados y abiertos.';
+    return;
+  }
+  const dif = (ns + nu) - p.total;
+  if (dif === 0 && ns === p.stockStored && nu === p.stockInUse) {
+    box.className = 'adjprev none';
+    box.textContent = 'El recuento coincide con el sistema: no hay nada que ajustar.';
+    return;
+  }
+  box.className = 'adjprev';
+  box.textContent = `El sistema dice ${p.stockStored} cerrados y ${p.stockInUse} abiertos. `
+    + `Vas a fijar ${ns} y ${nu}, y se registrará ${dif > 0 ? '+' : ''}${dif} unidad(es).`;
+}
+
+function registrarMov() {
+  if (!editId) return;
+  if (!puede('editar')) { toast('No tienes permiso para esta acción', 'err'); return; }
+  const t = $('mType').value;
+  const payload = {
+    productId: editId,
+    moveType: t,
+    reason: $('mReason').value,
+    notes: $('mNotes').value.trim(),
+    staffId: empleado ? empleado._id : '',
+    staffName: empleado ? empleado.staffName : ''
+  };
+  if (t === 'AJUSTE') {
+    payload.newStored = $('mStored').value;
+    payload.newInUse = $('mInUse').value;
+  } else {
+    payload.quantity = $('mQty').value;
+    if (t === 'SALIDA') payload.fromInUse = $('mFromUse').checked;
+  }
+  showLoader('Registrando…');
+  send('movimiento', payload);
+}
+
+function onMovimiento(p) {
+  hideLoader();
+  $('mNotes').value = '';
+  $('mQty').value = 1;
+  toast('Movimiento registrado', 'ok');
+  // Los contadores los repinta onData al llegar la recarga.
+  if (editId && $('pHist').classList.contains('on')) send('historico', { productId: editId });
+}
+
+function onHistorico(p) {
+  const m = p.movimientos || [];
+  if (!m.length) { $('histBox').innerHTML = '<div class="empty">Sin movimientos registrados.</div>'; return; }
+  $('histBox').innerHTML = m.map(x => {
+    const f = x.date ? new Date(x.date) : null;
+    const fecha = f ? f.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    const signo = x.quantity > 0 ? '+' : '';
+    return `<div class="mv">
+      <span class="mv-tag t-${esc(x.moveType)}">${esc(x.moveType)}</span>
+      <div class="mv-main">
+        <div class="mv-r">${esc((x.reason || '').replace(/_/g, ' '))}</div>
+        <div class="mv-s">${esc(fecha)}${x.staffName ? ' · ' + esc(x.staffName) : ''} · ${x.storedBefore}/${x.inUseBefore} → ${x.storedAfter}/${x.inUseAfter}${x.notes ? ' · ' + esc(x.notes) : ''}</div>
+      </div>
+      <div class="mv-q">${signo}${x.quantity}</div>
+    </div>`;
+  }).join('');
+}
+
+// ═══ TRASPASO ═══
+function onTienda(p) {
+  storeProducts = p.productos || [];
+  renderStore();
+}
+function renderStore() {
+  const q = $('qStore').value.trim().toLowerCase();
+  const arr = storeProducts.filter(p => !q || (p.name + ' ' + p.brand + ' ' + p.sku).toLowerCase().includes(q));
+  if (!arr.length) { $('storeList').innerHTML = '<div class="empty">Sin resultados en la tienda.</div>'; return; }
+  $('storeList').innerHTML = arr.slice(0, 120).map(p => {
+    const ko = !p.trackInventory;
+    const sel = storeSel && storeSel.storesProductId === p.storesProductId;
+    return `<div class="strow ${ko ? 'no' : ''} ${sel ? 'sel' : ''}" data-id="${esc(p.storesProductId)}">
+      <div class="st-main">
+        <div class="st-n">${esc(p.name)}</div>
+        <div class="st-m">${p.brand ? esc(p.brand) + ' · ' : ''}${ko ? 'sin seguimiento de inventario' : 'en tienda'}</div>
+      </div>
+      <div class="st-q">${ko ? '—' : p.quantityInStock}</div>
+    </div>`;
+  }).join('');
+
+  $('storeList').querySelectorAll('.strow').forEach(r => {
+    r.onclick = () => {
+      const p = storeProducts.find(x => x.storesProductId === r.dataset.id);
+      if (!p) return;
+      if (!p.trackInventory) {
+        toast('Activa el seguimiento de inventario de ese producto en la tienda antes de traspasarlo', 'err');
+        return;
+      }
+      storeSel = p;
+      $('stQty').max = p.quantityInStock;
+      $('btnTransfer').disabled = false;
+      renderStore();
+    };
+  });
+}
+function onTraspaso(p) {
+  hideLoader();
+  closeM('ovStore');
+  storeSel = null;
+  $('btnTransfer').disabled = true;
+  toast(`${p.unidades} × ${p.productName} al almacén`, 'ok');
+}
+
+// ═══ MÉTRICAS ═══
+// Todo se calcula en local sobre allProductos: el widget ya tiene
+// coste, PVP, categoría, marca y contadores de cada referencia. Cero
+// llamadas al backend, cero espera.
+function calcMetricas() {
+  const act = allProductos.filter(p => p.active);
+  const agrupar = (campo) => {
+    const m = {};
+    act.forEach(p => {
+      const k = (p[campo] || '').trim() || '(sin asignar)';
+      if (!m[k]) m[k] = { k, refs: 0, uds: 0, com: 0, coste: 0 };
+      m[k].refs += 1;
+      m[k].uds += p.total;
+      if (p.retailPrice > 0) m[k].com += p.total * p.retailPrice;
+      if (p.unitCost > 0) m[k].coste += p.total * p.unitCost;
+    });
+    return Object.values(m).sort((a, b) => b.uds - a.uds);
+  };
+
+  const conAmbos = act.filter(p => p.unitCost > 0 && p.retailPrice > 0);
+  const margen = conAmbos.reduce((a, p) => a + p.total * (p.retailPrice - p.unitCost), 0);
+
+  const top = act.filter(p => p.retailPrice > 0 && p.total > 0)
+    .map(p => ({ n: p.productName, v: p.total * p.retailPrice, u: p.total }))
+    .sort((a, b) => b.v - a.v).slice(0, 10);
+
+  return {
+    cats: agrupar('category'),
+    brands: agrupar('brand').slice(0, 10),
+    margen: Math.round(margen * 100) / 100,
+    refsMargen: conAmbos.length,
+    top,
+    sinMarca: act.filter(p => !p.brand || p.brand === 'GENÉRICO').length,
+    sinCat: act.filter(p => !p.category || p.category === 'SIN CLASIFICAR').length,
+    sinMin: act.filter(p => !p.minStock).length
+  };
+}
+
+function pct(n, tot) { return tot > 0 ? Math.round((n / tot) * 1000) / 10 : 0; }
+
+function barras(items, total, campo, color, fmt) {
+  if (!items.length) return '<div class="empty">Sin datos.</div>';
+  const max = Math.max(...items.map(i => i[campo])) || 1;
+  return items.map(i => `
+    <div class="brow">
+      <div class="blab" title="${esc(i.k)}">${esc(i.k)}</div>
+      <div class="btrack"><div class="bfill" style="width:${(i[campo] / max) * 100}%;background:${color}"></div></div>
+      <div class="bnum">${fmt(i)} · ${pct(i[campo], total)}%</div>
+    </div>`).join('');
+}
+
+function abrirMetricas() {
+  calcResumen();
+  const r = resumen, m = calcMetricas();
+  const totalUds = r.unidadesTotales || 0;
+  const totalCom = r.valorComercial || 0;
+  const covPvp = pct(r.activas - r.sinPvp, r.activas);
+  const covCoste = pct(r.activas - r.sinCoste, r.activas);
+
+  $('metricsBody').innerHTML = `
+    <div class="msec">
+      <div class="msec-t">Valoración del almacén</div>
+      <div class="mcards">
+        <div class="mc gold"><div class="m-l">Valor comercial</div><div class="m-v">${eur(totalCom)}</div><div class="m-s">PVP × unidades</div></div>
+        <div class="mc cyan"><div class="m-l">Valor contable</div><div class="m-v">${eur(r.valorCoste)}</div><div class="m-s">coste × unidades</div></div>
+        <div class="mc green"><div class="m-l">Margen teórico</div><div class="m-v">${eur(m.margen)}</div><div class="m-s">solo ${m.refsMargen} ref. con coste y PVP</div></div>
+        <div class="mc purple"><div class="m-l">Valor medio / unidad</div><div class="m-v">${eur(totalUds ? totalCom / totalUds : 0)}</div><div class="m-s">sobre ${totalUds} unidades</div></div>
+      </div>
+    </div>
+
+    <div class="msec">
+      <div class="msec-t">Estado del stock</div>
+      <div class="mcards">
+        <div class="mc"><div class="m-l">Referencias activas</div><div class="m-v">${r.activas}</div><div class="m-s">${r.inactivas} inactivas · ${r.referencias} en total</div></div>
+        <div class="mc"><div class="m-l">Unidades</div><div class="m-v">${totalUds}</div><div class="m-s">${r.unidadesCerradas} cerradas · ${r.unidadesEnUso} abiertas</div></div>
+        <div class="mc green"><div class="m-l">Con botes abiertos</div><div class="m-v">${r.conAbiertos}</div><div class="m-s">referencias en uso ahora</div></div>
+        <div class="mc amber"><div class="m-l">⚠ Menos de 3 uds</div><div class="m-v">${r.critico}</div><div class="m-s">quedan 1 o 2 unidades</div></div>
+        <div class="mc amber"><div class="m-l">Bajo mínimo</div><div class="m-v">${r.bajoMinimo}</div><div class="m-s">con mínimo configurado</div></div>
+        <div class="mc red"><div class="m-l">Agotados</div><div class="m-v">${r.agotados}</div><div class="m-s">a cero</div></div>
+      </div>
+    </div>
+
+    <div class="msec">
+      <div class="msec-t">Reparto por categoría · unidades</div>
+      ${barras(m.cats, totalUds, 'uds', 'var(--gold)', i => i.uds + ' uds')}
+    </div>
+
+    <div class="msec">
+      <div class="msec-t">Reparto por categoría · valor comercial</div>
+      ${barras(m.cats.filter(c => c.com > 0).sort((a, b) => b.com - a.com), totalCom, 'com', 'var(--green)', i => eur(i.com))}
+    </div>
+
+    <div class="msec">
+      <div class="msec-t">Top marcas · unidades</div>
+      ${barras(m.brands, totalUds, 'uds', 'var(--cyan)', i => i.uds + ' uds')}
+    </div>
+
+    <div class="msec">
+      <div class="msec-t">Top 10 referencias por valor comercial</div>
+      ${m.top.length ? m.top.map((t, i) => `
+        <div class="dq"><span>${i + 1}. ${esc(t.n)} <span style="color:var(--muted)">· ${t.u} uds</span></span><b style="color:var(--gold)">${eur(t.v)}</b></div>`).join('')
+      : '<div class="empty">Ninguna referencia tiene PVP informado.</div>'}
+    </div>
+
+    <div class="msec">
+      <div class="msec-t">Calidad del dato</div>
+      <div class="dq"><span>Referencias con PVP informado</span><b>${r.activas - r.sinPvp} de ${r.activas} · ${covPvp}%</b></div>
+      <div class="gauge"><i style="width:${covPvp}%"></i></div>
+      <div class="dq" style="margin-top:10px"><span>Referencias con coste informado</span><b>${r.activas - r.sinCoste} de ${r.activas} · ${covCoste}%</b></div>
+      <div class="gauge"><i style="width:${covCoste}%"></i></div>
+      <div class="dq" style="margin-top:12px"><span>Sin marca real (GENÉRICO)</span><b>${m.sinMarca}</b></div>
+      <div class="dq"><span>Sin categoría (SIN CLASIFICAR)</span><b>${m.sinCat}</b></div>
+      <div class="dq"><span>Sin stock mínimo configurado</span><b>${m.sinMin}</b></div>
+    </div>`;
+
+  openM('ovMetrics');
+}
+
+// ═══ EXPORTACIÓN A EXCEL ═══
+// El .xlsx lo genera el backend con el paquete npm xlsx (mismo patrón
+// que testCheckout.generarExcel, ya en producción) y llega aquí en
+// base64. Aquí solo se decodifica y se descarga: ni librerías externas
+// ni URLs de terceros dentro del widget.
+function exportar() {
+  if (!allProductos.length) { toast('No hay nada que exportar', 'err'); return; }
+  showLoader('Generando Excel…');
+  send('exportar-excel');
+}
+
+function onExcel(p) {
+  hideLoader();
+  try {
+    const bin = atob(p.archivo);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: p.mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = p.nombreArchivo || 'almacen.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+    toast(`${p.nombreArchivo} · ${p.totalRegistros} referencias`, 'ok');
+  } catch (e) {
+    // Plan B: si el iframe no deja descargar, el listado al portapapeles
+    // en TSV se pega directo en una hoja de Excel.
+    console.warn(TAG, 'descarga bloqueada, copiando al portapapeles', e);
+    copiarTexto(construirTSV(), 'Descarga no permitida: listado copiado, pégalo en Excel');
+  }
+}
+
+// Listado en TSV, para el plan B.
+function construirTSV() {
+  const cab = ['Producto','Marca','Categoría','Unidad','Cerrados','En uso','Total','Mínimo','Coste','PVP','Proveedor','SKU','ID origen'];
+  const num = n => (Number(n) || 0).toFixed(2).replace('.', ',');
+  const filas = allProductos.map(p => [
+    p.productName, p.brand, p.category, p.unit, p.stockStored, p.stockInUse, p.total, p.minStock,
+    p.unitCost != null ? num(p.unitCost) : '', p.retailPrice != null ? num(p.retailPrice) : '',
+    p.supplier, p.sku, p.legacyId
+  ].join('\t'));
+  return [cab.join('\t')].concat(filas).join('\n');
+}
+
+// Copia con fallback execCommand. Patrón del widget de Recepción PRO
+// v1.1.63 (_copyText / _copyFallback).
+function copiarTexto(texto, msg) {
+  const ok = () => toast(msg || 'Copiado', 'ok');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(texto).then(ok).catch(() => copiarFallback(texto, ok));
+  } else {
+    copiarFallback(texto, ok);
+  }
+}
+function copiarFallback(texto, ok) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = texto;
+    ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    ok();
+  } catch (e) { toast('No se pudo copiar', 'err'); }
+}
+
+// ═══ EVENTOS ═══
+$('btnReload').onclick = () => { showLoader('Recargando…'); send('recargar'); };
+$('btnMetrics').onclick = abrirMetricas;
+$('btnExport').onclick = exportar;
+$('btnExport2').onclick = exportar;
+$('btnNew').onclick = () => {
+  if (!puede('crear')) { toast('No tienes permiso para dar de alta productos', 'err'); return; }
+  abrirFicha(null);
+};
+$('btnStore').onclick = () => {
+  if (!puede('traspaso')) { toast('No tienes permiso para traspasar productos', 'err'); return; }
+  storeSel = null; $('btnTransfer').disabled = true; $('qStore').value = '';
+  $('storeList').innerHTML = '<div class="empty">Cargando productos de la tienda…</div>';
+  openM('ovStore');
+  send('cargar-tienda');
+};
+$('btnSave').onclick = guardarFicha;
+$('btnMov').onclick = registrarMov;
+$('btnDel').onclick = () => {
+  if (!editId) return;
+  const p = allProductos.find(x => x.id === editId);
+  if (!confirm(`¿Eliminar "${p ? p.productName : ''}" del almacén?\n\nEl histórico de movimientos se conserva.`)) return;
+  showLoader('Eliminando…');
+  send('eliminar-producto', { productId: editId });
+};
+$('btnImg').onclick = () => $('fFile').click();
+$('fFile').onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file || !editId) return;
+  const r = new FileReader();
+  r.onload = () => {
+    showLoader('Subiendo imagen…');
+    send('subir-imagen', {
+      productId: editId,
+      base64Data: String(r.result).split(',')[1],
+      fileName: file.name,
+      mimeType: file.type || 'image/jpeg'
+    });
+  };
+  r.readAsDataURL(file);
+  e.target.value = '';
+};
+$('btnTransfer').onclick = () => {
+  if (!storeSel) return;
+  const n = parseInt($('stQty').value, 10);
+  if (!n || n < 1) { toast('Indica una cantidad válida', 'err'); return; }
+  showLoader('Traspasando…');
+  send('traspasar', {
+    storesProductId: storeSel.storesProductId,
+    cantidad: n,
+    staffId: empleado ? empleado._id : '',
+    staffName: empleado ? empleado.staffName : ''
+  });
+};
+$('mType').onchange = actualizarMotivos;
+$('mStored').oninput = previewAjuste;
+$('mInUse').oninput = previewAjuste;
+$('sbFix').onclick   = () => irAMovimiento('AJUSTE', 'RECUENTO');
+$('sbBreak').onclick = () => irAMovimiento('SALIDA', 'ROTURA');
+$('sbIn').onclick    = () => irAMovimiento('ENTRADA', 'COMPRA');
+$('qStore').oninput = renderStore;
+['q', 'fBrand', 'fCat', 'fState', 'fSort'].forEach(id => { $(id).oninput = render; $(id).onchange = render; });
+
+document.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => closeM(b.dataset.close); });
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    $(t.dataset.pane).classList.add('on');
+    if (t.dataset.pane === 'pHist' && editId) {
+      $('histBox').innerHTML = '<div class="empty">Cargando…</div>';
+      send('historico', { productId: editId });
+    }
+  };
+});
+document.querySelectorAll('.ov').forEach(o => {
+  o.onclick = (e) => { if (e.target === o) o.classList.remove('on'); };
+});
+
+// ═══ ARRANQUE ═══
+document.addEventListener('DOMContentLoaded', () => {
+  console.log(`${TAG} 🚀 Widget listo`);
+  renderKeys();
+  showLoader('Cargando almacén…');
+  send('ready');
+});
+</script>
+</body>
+</html>
