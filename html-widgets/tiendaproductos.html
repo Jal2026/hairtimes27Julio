@@ -1,0 +1,1685 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KAMISUITE — Tienda Productos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ═══════════════════════════════════════════════════
+       KAMISUITE — Tienda Productos Widget v1.4.1
+       Dark theme (same as Catálogo / Checkout)
+       v1.3: + toggle tabs, método pago, historial
+       v1.4: + VARIANTES (250ml / 1000ml) y DESCRIPCIÓN
+             · Selector <select> de variante dentro de la tarjeta.
+               El precio grande y el estado de stock pasan a ser los de
+               la variante elegida. VENTA bloqueada hasta elegir.
+               cartless: 1 tarjeta = 1 venta, clave productId+variantId.
+             · Envío al backend con variantId + variantLabel por venta.
+               Requiere tiendaProductos.web.js v1.5.12 y page code v1.5.
+             · Descripción del producto (Wix Stores) limpiada de HTML
+               con el mismo patrón de almacenLogic.web.js:
+               replace(/<[^>]*>/g,''). Truncada a 2 líneas con
+               "▸ más" / "▾ menos" cuando es larga.
+             · Refresco quirúrgico de una sola tarjeta al cambiar la
+               variante o desplegar la descripción (bindCardEvents con
+               ámbito), sin repintar el grid ni duplicar listeners.
+       v1.4.1: ALTA DE CLIENTE — email YA NO es obligatorio.
+             El backend crearContactoTienda solo exige `nombre`
+             (emails y phones se envían como array vacío si faltan);
+             la obligatoriedad era una restricción del widget, no de Wix.
+             Ahora se exige NOMBRE + (EMAIL **o** TELÉFONO), pudiendo
+             informarse los dos. Aviso visible: sin email no se podrá
+             emitir factura para ese cliente (generarFacturaProducto
+             cae al email genérico del salón).
+       ═══════════════════════════════════════════════════ */
+    :root {
+      --bg: #0f1117;
+      --surface: #181b23;
+      --surface2: #1e222c;
+      --surface3: #252a36;
+      --border: rgba(255,255,255,.08);
+      --border-hover: rgba(255,255,255,.18);
+      --text: #e8e9ed;
+      --text-secondary: rgba(255,255,255,.65);
+      --muted: rgba(255,255,255,.40);
+      --accent: #c9a44a;
+      --accent-dim: rgba(201,164,74,.15);
+      --green: #36c06a;
+      --green-dim: rgba(54,192,106,.12);
+      --red: #e85454;
+      --red-dim: rgba(232,84,84,.12);
+      --blue: #4a9ec9;
+      --blue-dim: rgba(74,158,201,.12);
+      --yellow: #e5c44a;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Bai Jamjuree", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 12px 14px;
+    }
+
+    /* ═══ HEADER ═══ */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .header-brand {
+      font-size: 12px; font-weight: 600;
+      letter-spacing: 2px; text-transform: uppercase;
+      color: var(--accent);
+    }
+    .header-version {
+      font-size: 10px; color: var(--muted); letter-spacing: .5px;
+    }
+
+    /* ═══ TAB TOGGLE ═══ */
+    .tab-bar {
+      display: flex; gap: 0; margin-bottom: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .tab-btn {
+      flex: 1;
+      background: var(--surface);
+      border: none;
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .tab-btn:not(:last-child) { border-right: 1px solid var(--border); }
+    .tab-btn:hover { color: var(--text-secondary); }
+    .tab-btn.active {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    /* ═══ TOOLBAR ═══ */
+    .toolbar {
+      display: flex; gap: 8px; align-items: center;
+      flex-wrap: wrap; margin-bottom: 10px;
+    }
+    .search-box {
+      flex: 1; min-width: 180px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text);
+      font-family: inherit; font-size: 12px;
+      padding: 8px 10px 8px 32px; outline: none;
+      transition: border-color .2s;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='rgba(255,255,255,.35)' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cline x1='9.5' y1='9.5' x2='13' y2='13'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: 10px center;
+    }
+    .search-box:focus { border-color: var(--accent); }
+    .search-box::placeholder { color: var(--muted); }
+
+    .filter-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      padding: 7px 28px 7px 10px;
+      font-family: inherit;
+      font-weight: 500;
+      font-size: 11px;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      transition: border-color .2s;
+    }
+    .filter-select:focus { border-color: var(--accent); }
+
+    /* Client bar */
+    .client-bar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .client-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .client-search {
+      flex: 1;
+      min-width: 180px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      padding: 7px 10px;
+      font-family: inherit;
+      font-weight: 500;
+      font-size: 11px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .client-search:focus { border-color: var(--accent); }
+    .client-search::placeholder { color: var(--muted); }
+    .client-select { min-width: 220px; }
+    .client-selected {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--green);
+      padding: 5px 10px;
+      background: rgba(78,204,131,.12);
+      border: 1px solid rgba(78,204,131,.3);
+      border-radius: var(--radius-sm);
+    }
+    .client-clear {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--red);
+      border-radius: var(--radius-sm);
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .client-clear:hover { border-color: var(--red); }
+
+    /* New client */
+    .client-new-btn {
+      background: var(--surface2);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      border-radius: var(--radius-sm);
+      padding: 5px 12px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .client-new-btn:hover { background: var(--accent-dim); }
+    .client-anon-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: var(--radius-sm);
+      padding: 5px 12px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .client-anon-btn:hover { border-color: var(--yellow); color: var(--yellow); }
+    .client-anon-btn.active {
+      border-color: var(--yellow);
+      color: var(--yellow);
+      background: rgba(255,193,7,.12);
+    }
+    .new-client-form {
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      margin-bottom: 10px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .new-client-form input {
+      flex: 1;
+      min-width: 120px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      padding: 7px 10px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      outline: none;
+    }
+    .new-client-form input:focus { border-color: var(--accent); }
+    .new-client-form input::placeholder { color: var(--muted); }
+    .new-client-actions { display: flex; gap: 6px; }
+    .new-client-confirm {
+      background: rgba(78,204,131,.15);
+      border: 1px solid var(--green);
+      color: var(--green);
+      border-radius: var(--radius-sm);
+      padding: 7px 14px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .new-client-confirm:hover { background: rgba(78,204,131,.25); }
+    .new-client-cancel {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: var(--radius-sm);
+      padding: 7px 10px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .new-client-cancel:hover { border-color: var(--red); color: var(--red); }
+    /* v1.4.1 — aviso de campos del alta de cliente */
+    .new-client-hint {
+      width: 100%;
+      font-size: 10px; font-weight: 500; line-height: 1.4;
+      color: var(--muted); letter-spacing: .2px;
+    }
+    .new-client-hint strong { color: var(--accent); font-weight: 700; }
+
+    .toolbar-sep {
+      width: 1px; height: 20px; background: var(--border); flex-shrink: 0;
+    }
+    .counter {
+      font-size: 11px; font-weight: 600;
+      color: var(--muted); letter-spacing: .3px; white-space: nowrap;
+    }
+    .counter strong { color: var(--accent); }
+
+    /* ═══ LOADING ═══ */
+    .loading {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 12px; padding: 60px 20px;
+      color: var(--muted); font-size: 13px;
+    }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 2.5px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-msg {
+      background: var(--red-dim); border: 1px solid rgba(232,84,84,.25);
+      border-radius: var(--radius); padding: 16px 20px;
+      color: var(--red); font-size: 12px; font-weight: 500;
+    }
+
+    /* ═══ PRODUCT GRID ═══ */
+    .products {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 10px;
+    }
+
+    .prod-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color .2s, box-shadow .2s;
+      display: flex;
+      flex-direction: column;
+    }
+    .prod-card:hover {
+      border-color: var(--border-hover);
+      box-shadow: 0 2px 12px rgba(0,0,0,.25);
+    }
+    .prod-card.not-visible { border-color: rgba(201,164,74,.35); }
+    .prod-card.not-visible .prod-name { color: var(--accent); }
+    .prod-card.not-visible .hidden-chip { display: inline-block; }
+
+    /* Image */
+    .prod-img-wrap {
+      width: 100%; height: 140px;
+      background: var(--surface2);
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; position: relative;
+    }
+    .prod-img { width: 100%; height: 100%; object-fit: cover; }
+    .prod-img-placeholder { font-size: 32px; color: var(--muted); opacity: .3; }
+    .hidden-chip {
+      display: none; position: absolute; top: 8px; right: 8px;
+      font-size: 8px; font-weight: 700; letter-spacing: 1px;
+      color: var(--red); background: var(--red-dim);
+      border: 1px solid rgba(232,84,84,.30); padding: 2px 6px; border-radius: 3px;
+    }
+    .ribbon-chip {
+      position: absolute; top: 8px; left: 8px;
+      font-size: 8px; font-weight: 700; letter-spacing: .5px;
+      color: #fff; background: var(--accent);
+      padding: 2px 7px; border-radius: 3px;
+    }
+    /* v1.4 — chip de variantes sobre la foto */
+    .variants-chip {
+      position: absolute; bottom: 8px; left: 8px;
+      font-size: 8px; font-weight: 700; letter-spacing: .5px;
+      color: #8b5cf6; background: rgba(139,92,246,.16);
+      border: 1px solid rgba(139,92,246,.35);
+      padding: 2px 7px; border-radius: 3px;
+    }
+
+    /* Body */
+    .prod-body {
+      padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 6px; flex: 1;
+    }
+    .prod-name { font-size: 13px; font-weight: 700; color: var(--text); line-height: 1.3; }
+    .prod-sku { font-size: 9px; font-family: 'Courier New', monospace; color: var(--muted); letter-spacing: .3px; }
+    .prod-price-row {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: auto; padding-top: 4px;
+    }
+    .prod-price { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -.3px; }
+    .prod-price.is-range { font-size: 14px; }
+    .prod-type {
+      font-size: 9px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+      color: var(--muted); padding: 2px 6px; background: var(--surface3);
+      border-radius: 3px; align-self: flex-start;
+    }
+
+    /* v1.4 — DESCRIPCIÓN */
+    .prod-desc {
+      font-size: 10.5px; line-height: 1.45;
+      color: var(--text-secondary);
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .prod-desc.clamped {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .desc-toggle {
+      align-self: flex-start;
+      background: none; border: none;
+      color: var(--accent); font-family: inherit;
+      font-size: 9.5px; font-weight: 700; letter-spacing: .4px;
+      cursor: pointer; padding: 0;
+    }
+    .desc-toggle:hover { text-decoration: underline; }
+
+    /* v1.4 — SELECTOR DE VARIANTE */
+    .variant-row {
+      padding: 0 14px 10px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .variant-label {
+      font-size: 9px; font-weight: 700; letter-spacing: .6px;
+      text-transform: uppercase; color: var(--accent);
+    }
+    .variant-select {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--radius-sm);
+      padding: 8px 28px 8px 10px;
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 11px;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      transition: border-color .2s;
+    }
+    .variant-select:focus { border-color: var(--accent); }
+    .variant-select.pending { border-color: var(--yellow); color: var(--yellow); }
+
+    /* Quantity + Sell button */
+    .prod-action {
+      padding: 0 14px 12px;
+      display: flex; gap: 6px; align-items: center;
+    }
+    .qty-wrap {
+      display: flex; align-items: center; gap: 0;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); overflow: hidden;
+    }
+    .qty-btn {
+      background: none; border: none; color: var(--text-secondary);
+      font-family: inherit; font-size: 14px; font-weight: 700;
+      cursor: pointer; padding: 6px 10px; transition: background .15s, color .15s;
+    }
+    .qty-btn:hover { background: var(--surface3); color: var(--text); }
+    .qty-val {
+      font-size: 12px; font-weight: 700; color: var(--text);
+      min-width: 24px; text-align: center;
+    }
+
+    .btn-sell {
+      flex: 1; background: var(--green); border: none; color: #fff;
+      font-family: inherit; font-size: 11px; font-weight: 700;
+      letter-spacing: .8px; text-transform: uppercase;
+      padding: 8px 12px; border-radius: var(--radius-sm);
+      cursor: pointer; transition: all .15s;
+    }
+    .btn-sell:hover { filter: brightness(1.15); }
+    .btn-sell:active { transform: translateY(1px); }
+    .btn-sell:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+    .btn-sell.selling { background: var(--accent); }
+    .btn-sell.sold { background: var(--green); }
+
+    /* ═══ PAYMENT SELECTOR (overlay en card) ═══ */
+    .pay-selector {
+      padding: 8px 14px 12px;
+      background: var(--surface2);
+      border-top: 1px solid var(--border);
+      display: flex; gap: 5px; flex-wrap: wrap; align-items: center;
+    }
+    .pay-label {
+      font-size: 10px; font-weight: 700; color: var(--accent);
+      letter-spacing: .5px; width: 100%; margin-bottom: 2px;
+    }
+    .pay-btn {
+      flex: 1; min-width: 70px;
+      background: var(--surface3); border: 1px solid var(--border);
+      color: var(--text-secondary); font-family: inherit;
+      font-size: 10px; font-weight: 700; padding: 7px 6px;
+      border-radius: var(--radius-sm); cursor: pointer;
+      transition: all .15s; text-align: center;
+    }
+    .pay-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .pay-btn.pay-efectivo:hover, .pay-btn.pay-efectivo.active { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+    .pay-btn.pay-tarjeta:hover, .pay-btn.pay-tarjeta.active { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+    .pay-btn.pay-bizum:hover, .pay-btn.pay-bizum.active { border-color: #8b5cf6; color: #8b5cf6; background: rgba(139,92,246,.12); }
+    .pay-cancel {
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); font-family: inherit;
+      font-size: 9px; font-weight: 600; padding: 5px 8px;
+      border-radius: var(--radius-sm); cursor: pointer;
+      margin-top: 4px;
+    }
+    .pay-cancel:hover { border-color: var(--red); color: var(--red); }
+
+    /* ═══ HISTORIAL ═══ */
+    .history-section { display: none; }
+    .history-section.active { display: block; }
+    .tienda-section { display: none; }
+    .tienda-section.active { display: block; }
+
+    .history-filters {
+      display: flex; gap: 8px; align-items: center;
+      flex-wrap: wrap; margin-bottom: 12px;
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .history-filters label {
+      font-size: 10px; font-weight: 700; color: var(--accent);
+      letter-spacing: .5px; text-transform: uppercase;
+    }
+    .history-filters input[type="date"] {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text-secondary); border-radius: var(--radius-sm);
+      padding: 6px 10px; font-family: inherit; font-size: 11px;
+      outline: none;
+    }
+    .history-filters input[type="date"]:focus { border-color: var(--accent); }
+    .history-filters input[type="text"] {
+      flex: 1; min-width: 140px;
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text-secondary); border-radius: var(--radius-sm);
+      padding: 6px 10px; font-family: inherit; font-size: 11px;
+      outline: none;
+    }
+    .history-filters input[type="text"]:focus { border-color: var(--accent); }
+    .btn-filter {
+      background: var(--accent); border: none; color: #000;
+      font-family: inherit; font-size: 11px; font-weight: 700;
+      padding: 7px 16px; border-radius: var(--radius-sm);
+      cursor: pointer; letter-spacing: .5px;
+    }
+    .btn-filter:hover { filter: brightness(1.1); }
+
+    .history-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .history-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 11px;
+    }
+    .history-table th {
+      background: var(--surface2);
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 10px;
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .history-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+      vertical-align: middle;
+    }
+    .history-table tr:hover td { background: rgba(255,255,255,.02); }
+    .history-table .td-price {
+      font-weight: 700; color: var(--accent); white-space: nowrap;
+    }
+    .history-table .td-date {
+      white-space: nowrap; color: var(--muted);
+    }
+    .btn-invoice-sm {
+      background: var(--surface3); border: 1px solid var(--border);
+      color: var(--text-secondary); font-family: inherit;
+      font-size: 9px; font-weight: 700; padding: 4px 8px;
+      border-radius: 4px; cursor: pointer; white-space: nowrap;
+    }
+    .btn-invoice-sm:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-invoice-sm:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-invoice-sm.done { border-color: var(--green); color: var(--green); }
+
+    .history-summary {
+      display: flex; gap: 16px; flex-wrap: wrap;
+      padding: 10px 14px; margin-top: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .summary-item {
+      font-size: 11px; font-weight: 600; color: var(--muted);
+    }
+    .summary-item strong { color: var(--accent); font-size: 14px; }
+
+    /* ═══ TOAST ═══ */
+    .toast {
+      position: fixed; bottom: 20px; left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: var(--surface3);
+      border: 1px solid var(--border-hover);
+      color: var(--text); font-family: inherit;
+      font-size: 12px; font-weight: 600;
+      padding: 8px 18px; border-radius: var(--radius);
+      opacity: 0; transition: all .3s ease;
+      pointer-events: none; z-index: 999;
+      max-width: 90%;
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .toast.toast-error { border-color: rgba(232,84,84,.4); color: var(--red); }
+    .toast .toast-action {
+      display: inline-block; margin-left: 10px;
+      background: var(--accent-dim); border: 1px solid var(--accent);
+      color: var(--accent); font-family: inherit;
+      font-size: 10px; font-weight: 700; padding: 3px 10px;
+      border-radius: 4px; cursor: pointer;
+    }
+    .toast .toast-action:hover { background: var(--accent); color: #000; }
+
+    /* ═══ EMPTY / FOOTER ═══ */
+    .empty-state {
+      text-align: center; padding: 40px 20px;
+      color: var(--muted); font-size: 13px;
+    }
+    .footer {
+      margin-top: 14px; padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    }
+    .footer-item {
+      font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .3px;
+    }
+    .footer-item strong { color: var(--text-secondary); }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <div class="header">
+    <span class="header-brand">KAMISUITE · Tienda Productos</span>
+    <span class="header-version">v1.4.1</span>
+  </div>
+
+  <!-- TAB BAR (v1.3) -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tabTienda" data-tab="tienda">🛒 Tienda</button>
+    <button class="tab-btn" id="tabHistorial" data-tab="historial">📊 Historial</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SECCIÓN: TIENDA (existente)
+       ═══════════════════════════════════════════════════ -->
+  <div class="tienda-section active" id="seccionTienda">
+
+    <!-- TOOLBAR -->
+    <div class="toolbar" id="toolbar" style="display:none;">
+      <input type="text" class="search-box" id="searchBox" placeholder="Buscar producto...">
+      <select class="filter-select" id="filterCollection" style="display:none;">
+        <option value="">Todas las categorías</option>
+      </select>
+      <div class="toolbar-sep"></div>
+      <span class="counter" id="counter"></span>
+    </div>
+
+    <!-- CLIENTE -->
+    <div class="client-bar" id="clientBar" style="display:none;">
+      <span class="client-label">👤 Cliente:</span>
+      <input type="text" class="client-search" id="clientSearch" placeholder="Buscar cliente por nombre, email o teléfono...">
+      <select class="filter-select client-select" id="clientSelect" style="display:none;">
+        <option value="">— Seleccionar —</option>
+      </select>
+      <span class="client-selected" id="clientSelected" style="display:none;"></span>
+      <button class="client-clear" id="clientClear" style="display:none;">✕</button>
+      <button class="client-new-btn" id="clientNewBtn">+ Nuevo</button>
+      <button class="client-anon-btn" id="clientAnonBtn">⚡ Sin cliente</button>
+    </div>
+
+    <!-- FORM CLIENTE NUEVO -->
+    <div class="new-client-form" id="newClientForm" style="display:none;">
+      <input type="text" placeholder="Nombre *" id="newNombre">
+      <input type="text" placeholder="Apellido" id="newApellido">
+      <input type="email" placeholder="Email" id="newEmail">
+      <input type="tel" placeholder="Teléfono" id="newTelefono">
+      <div class="new-client-actions">
+        <button class="new-client-confirm" id="newClientConfirm">✓ Crear y usar</button>
+        <button class="new-client-cancel" id="newClientCancel">✕ Cancelar</button>
+      </div>
+      <!-- v1.4.1 — email opcional: basta email O teléfono -->
+      <div class="new-client-hint">Nombre obligatorio. Además hace falta <strong>email o teléfono</strong> (puedes poner los dos). Sin email no se podrá emitir factura a este cliente.</div>
+    </div>
+
+    <!-- CONTENT (product grid) -->
+    <div id="content">
+      <div class="loading">
+        <div class="spinner"></div>
+        <span>Cargando productos…</span>
+      </div>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="footer" id="footer" style="display:none;"></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════
+       SECCIÓN: HISTORIAL (v1.3 nuevo)
+       ═══════════════════════════════════════════════════ -->
+  <div class="history-section" id="seccionHistorial">
+
+    <!-- Filtros -->
+    <div class="history-filters">
+      <label>Desde</label>
+      <input type="date" id="histFechaDesde">
+      <label>Hasta</label>
+      <input type="date" id="histFechaHasta">
+      <input type="text" id="histSearchCliente" placeholder="Buscar cliente...">
+      <button class="btn-filter" id="btnFiltrarHist">🔍 Buscar</button>
+    </div>
+
+    <!-- Tabla -->
+    <div id="histContent">
+      <div class="empty-state">Pulsa "Buscar" para cargar el historial de ventas</div>
+    </div>
+
+    <!-- Resumen -->
+    <div class="history-summary" id="histSummary" style="display:none;"></div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+<script>
+  // ═══════════════════════════════════════════════════
+  // STATE
+  // ═══════════════════════════════════════════════════
+  let allProductos = [];
+  let allCollections = [];
+  let allClientes = [];
+  let selectedClient = null;
+  let anonMode = false;
+  let quantities = {};
+  let currentTab = 'tienda';
+  // v1.3: datos de última venta para factura
+  let lastSaleData = null;
+  // v1.3: mapa orderId → invoiceUrl (persiste durante la sesión)
+  let invoiceUrlMap = {};
+  // v1.4: variante elegida por producto  { productId: variantId }
+  let variantSel = {};
+  // v1.4: descripciones desplegadas      { productId: true }
+  let descExpand = {};
+
+  const el = {
+    toolbar: document.getElementById('toolbar'),
+    content: document.getElementById('content'),
+    footer: document.getElementById('footer'),
+    search: document.getElementById('searchBox'),
+    filterCol: document.getElementById('filterCollection'),
+    counter: document.getElementById('counter'),
+    toast: document.getElementById('toast'),
+    clientBar: document.getElementById('clientBar'),
+    clientSearch: document.getElementById('clientSearch'),
+    clientSelect: document.getElementById('clientSelect'),
+    clientSelected: document.getElementById('clientSelected'),
+    clientClear: document.getElementById('clientClear'),
+    clientNewBtn: document.getElementById('clientNewBtn'),
+    clientAnonBtn: document.getElementById('clientAnonBtn'),
+    newClientForm: document.getElementById('newClientForm'),
+    newNombre: document.getElementById('newNombre'),
+    newApellido: document.getElementById('newApellido'),
+    newEmail: document.getElementById('newEmail'),
+    newTelefono: document.getElementById('newTelefono'),
+    newClientConfirm: document.getElementById('newClientConfirm'),
+    newClientCancel: document.getElementById('newClientCancel'),
+    // Tabs
+    tabTienda: document.getElementById('tabTienda'),
+    tabHistorial: document.getElementById('tabHistorial'),
+    seccionTienda: document.getElementById('seccionTienda'),
+    seccionHistorial: document.getElementById('seccionHistorial'),
+    // Historial
+    histFechaDesde: document.getElementById('histFechaDesde'),
+    histFechaHasta: document.getElementById('histFechaHasta'),
+    histSearchCliente: document.getElementById('histSearchCliente'),
+    btnFiltrarHist: document.getElementById('btnFiltrarHist'),
+    histContent: document.getElementById('histContent'),
+    histSummary: document.getElementById('histSummary')
+  };
+
+  // ═══════════════════════════════════════════════════
+  // TABS
+  // ═══════════════════════════════════════════════════
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      currentTab = tab;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      el.seccionTienda.classList.toggle('active', tab === 'tienda');
+      el.seccionHistorial.classList.toggle('active', tab === 'historial');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════
+  // v1.4 — HELPERS DE VARIANTES Y DESCRIPCIÓN
+  // ═══════════════════════════════════════════════════
+  // Wix Stores crea SIEMPRE una variante por defecto: "producto con
+  // variantes reales" = manageVariants true Y más de una variante.
+  // Es el mismo criterio que aplica el backend en listarProductos.
+  function tieneVariantes(p) {
+    return !!(p && p.manageVariants && Array.isArray(p.variants) && p.variants.length > 1);
+  }
+
+  function varianteElegida(p) {
+    if (!tieneVariantes(p)) return null;
+    const vid = variantSel[p.id];
+    if (!vid) return null;
+    return p.variants.find(v => v.variantId === vid) || null;
+  }
+
+  // Precio efectivo de la tarjeta: el de la variante si hay elegida.
+  function precioEfectivo(p) {
+    const v = varianteElegida(p);
+    if (v) return Number(v.price) || 0;
+    return (p.price !== null && p.price !== undefined) ? Number(p.price) : null;
+  }
+
+  // Stock efectivo: el de la variante si hay elegida; si no, true
+  // mientras alguna variante tenga stock (el producto es comprable).
+  function stockEfectivo(p) {
+    const v = varianteElegida(p);
+    if (v) return v.inStock !== false;
+    if (tieneVariantes(p)) return p.variants.some(x => x.inStock !== false);
+    return p.inStock !== false;
+  }
+
+  // Limpieza de la descripción de Wix Stores (viene con HTML).
+  // Mismo patrón que almacenLogic.web.js: replace(/<[^>]*>/g,'').
+  // El div es un nodo desacoplado y ya sin etiquetas: solo decodifica
+  // entidades (&amp;, &nbsp;) — nunca se reinyecta como HTML.
+  function limpiarDescripcion(raw) {
+    if (!raw) return '';
+    const sinTags = String(raw).replace(/<[^>]*>/g, ' ');
+    const d = document.createElement('div');
+    d.innerHTML = sinTags;
+    return (d.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  const DESC_LIMITE = 110;  // a partir de aquí se ofrece "▸ más"
+
+  // ═══════════════════════════════════════════════════
+  // RENDER TIENDA
+  // ═══════════════════════════════════════════════════
+  function render(data) {
+    allProductos = data.productos || [];
+    allCollections = data.collections || [];
+    allClientes = data.clientes || [];
+    allProductos.forEach(p => { quantities[p.id] = 1; });
+    // v1.4: estado de variantes/descripciones siempre coherente con el
+    // catálogo recién cargado (no arrastrar selecciones de un catálogo viejo)
+    variantSel = {};
+    descExpand = {};
+
+    if (allCollections.length > 0) {
+      el.filterCol.innerHTML = '<option value="">Todas las categorías</option>';
+      allCollections.sort((a, b) => a.name.localeCompare(b.name));
+      allCollections.forEach(c => {
+        el.filterCol.innerHTML += `<option value="${esc(c.id)}">${esc(c.name)}</option>`;
+      });
+      el.filterCol.style.display = '';
+    }
+
+    el.clientBar.style.display = 'flex';
+    el.toolbar.style.display = 'flex';
+    applyFilters();
+    renderFooter();
+  }
+
+  function applyFilters() {
+    const q = (el.search.value || '').toLowerCase().trim();
+    const colF = el.filterCol.value;
+
+    const filtered = allProductos.filter(p => {
+      if (q && !p.name.toLowerCase().includes(q) && !(p.sku || '').toLowerCase().includes(q)) return false;
+      if (colF) {
+        const inCol = (p.collections || []).some(c => c.id === colF);
+        if (!inCol) return false;
+      }
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      if (a.visible !== b.visible) return a.visible ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    el.counter.innerHTML = `<strong>${filtered.length}</strong> de ${allProductos.length} productos`;
+
+    if (filtered.length === 0) {
+      el.content.innerHTML = '<div class="empty-state">Sin resultados</div>';
+      return;
+    }
+
+    let html = '<div class="products">';
+    filtered.forEach(p => { html += buildProductCard(p); });
+    html += '</div>';
+    el.content.innerHTML = html;
+    bindCardEvents();
+  }
+
+  function convertWixImageUrl(wixUrl) {
+    if (!wixUrl) return '';
+    if (!wixUrl.startsWith('wix:image://')) return wixUrl;
+    try {
+      const match = wixUrl.match(/wix:image:\/\/v1\/([^\/]+)/);
+      if (match && match[1]) return 'https://static.wixstatic.com/media/' + match[1];
+    } catch (e) {}
+    return '';
+  }
+
+  function buildProductCard(p) {
+    const hasVar = tieneVariantes(p);
+    const selVar = varianteElegida(p);
+    const inStock = stockEfectivo(p);
+    const visCls = inStock === false ? ' not-visible' : '';
+    const qty = quantities[p.id] || 1;
+
+    let imgHTML = '';
+    const imgUrl = convertWixImageUrl(p.mainMedia);
+    if (imgUrl) {
+      imgHTML = `<img class="prod-img" src="${esc(imgUrl)}" alt="${esc(p.name)}" loading="lazy">`;
+    } else {
+      imgHTML = '<span class="prod-img-placeholder">📦</span>';
+    }
+
+    let ribbonHTML = p.ribbon ? `<span class="ribbon-chip">${esc(p.ribbon)}</span>` : '';
+
+    // v1.4 — chip de variantes sobre la foto
+    const variantsChipHTML = hasVar
+      ? `<span class="variants-chip">${p.variants.length} VARIANTES</span>`
+      : '';
+
+    // ── Precio: variante elegida > rango de variantes > precio base ──
+    let priceDisplay;
+    let priceCls = 'prod-price';
+    if (selVar) {
+      priceDisplay = (Number(selVar.price) || 0).toFixed(2) + ' €';
+    } else if (hasVar) {
+      const ps = p.variants.map(v => Number(v.price) || 0).filter(x => x > 0);
+      if (ps.length) {
+        const min = Math.min(...ps);
+        const max = Math.max(...ps);
+        priceDisplay = (min === max)
+          ? min.toFixed(2) + ' €'
+          : min.toFixed(2) + ' – ' + max.toFixed(2) + ' €';
+        if (min !== max) priceCls += ' is-range';
+      } else {
+        priceDisplay = p.formattedPrice || '—';
+      }
+    } else {
+      priceDisplay = p.formattedPrice || (p.price !== null && p.price !== undefined ? Number(p.price).toFixed(2) + ' €' : '—');
+    }
+
+    const stockHTML = inStock
+      ? '<div style="font-size:10px;color:var(--green);font-weight:600;margin-top:2px;">En stock</div>'
+      : '<div style="font-size:10px;color:var(--red);font-weight:600;margin-top:2px;">Sin stock</div>';
+
+    // ── v1.4 — DESCRIPCIÓN ──
+    let descHTML = '';
+    const descTxt = limpiarDescripcion(p.description);
+    if (descTxt) {
+      const larga = descTxt.length > DESC_LIMITE;
+      const abierta = !!descExpand[p.id];
+      const clamp = (larga && !abierta) ? ' clamped' : '';
+      descHTML = `<div class="prod-desc${clamp}">${esc(descTxt)}</div>`;
+      if (larga) {
+        descHTML += `<button class="desc-toggle" data-desc-toggle="${esc(p.id)}">${abierta ? '▾ menos' : '▸ más'}</button>`;
+      }
+    }
+
+    // ── v1.4 — SELECTOR DE VARIANTE ──
+    // Sin variante elegida NO se puede vender: el backend v1.5.12
+    // devolvería MISSING_VARIANT (Wix exige options.variantId).
+    let variantHTML = '';
+    if (hasVar) {
+      const pendiente = !selVar;
+      let opts = `<option value="">— Elegir variante —</option>`;
+      p.variants.forEach(v => {
+        const sel = (selVar && selVar.variantId === v.variantId) ? ' selected' : '';
+        const agotado = v.inStock === false ? ' · SIN STOCK' : '';
+        opts += `<option value="${esc(v.variantId)}"${sel}>${esc(v.label)} · ${(Number(v.price) || 0).toFixed(2)} €${agotado}</option>`;
+      });
+      variantHTML = `
+        <div class="variant-row">
+          <span class="variant-label">Variante</span>
+          <select class="variant-select${pendiente ? ' pending' : ''}" data-variant-for="${esc(p.id)}">${opts}</select>
+        </div>`;
+    }
+
+    // Vendible: precio > 0, con stock y — si tiene variantes — elegida
+    const precio = precioEfectivo(p);
+    const canSell = precio !== null && precio > 0 && inStock && (!hasVar || !!selVar);
+    const sellLabel = (hasVar && !selVar) ? '⚠️ ELIGE VARIANTE' : '🛒 VENTA';
+
+    return `
+      <div class="prod-card${visCls}" data-id="${p.id}">
+        <div class="prod-img-wrap">
+          ${imgHTML}
+          ${ribbonHTML}
+          ${variantsChipHTML}
+          <span class="hidden-chip">SIN STOCK</span>
+        </div>
+        <div class="prod-body">
+          <div class="prod-name">${esc(p.name)}</div>
+          ${(p.collections || []).length > 0
+            ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">' +
+              (p.collections || []).map(c =>
+                `<span style="font-size:8px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 6px;border-radius:3px;background:var(--accent-dim);color:var(--accent);">${esc(c.name)}</span>`
+              ).join('') + '</div>'
+            : ''}
+          ${p.sku ? `<div class="prod-sku">SKU: ${esc(p.sku)}</div>` : ''}
+          ${descHTML}
+          <div class="prod-price-row">
+            <span><span class="${priceCls}">${priceDisplay}</span></span>
+            <span class="prod-type">${esc(p.productType)}</span>
+          </div>
+          ${stockHTML}
+        </div>
+        ${variantHTML}
+        <div class="prod-action" id="action-${p.id}">
+          <div class="qty-wrap">
+            <button class="qty-btn qty-minus" data-id="${p.id}">−</button>
+            <span class="qty-val" id="qty-${p.id}">${qty}</span>
+            <button class="qty-btn qty-plus" data-id="${p.id}">+</button>
+          </div>
+          <button class="btn-sell" data-id="${p.id}" ${canSell ? '' : 'disabled'}>
+            ${sellLabel}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  // v1.4 — repinta UNA sola tarjeta (variante / descripción) sin tocar
+  // el resto del grid y sin duplicar listeners.
+  function refrescarCard(productId) {
+    const p = allProductos.find(x => x.id === productId);
+    const vieja = el.content.querySelector(`.prod-card[data-id="${productId}"]`);
+    if (!p || !vieja) return;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = buildProductCard(p);
+    const nueva = tmp.firstElementChild;
+    if (!nueva) return;
+    vieja.replaceWith(nueva);
+    bindCardEvents(nueva);
+  }
+
+  // v1.4: acepta ámbito (grid completo o una tarjeta concreta)
+  function bindCardEvents(scope) {
+    const root = scope || el.content;
+
+    root.querySelectorAll('.qty-minus').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        if (quantities[id] > 1) {
+          quantities[id]--;
+          const q = document.getElementById('qty-' + id);
+          if (q) q.textContent = quantities[id];
+        }
+      });
+    });
+    root.querySelectorAll('.qty-plus').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        quantities[id] = (quantities[id] || 1) + 1;
+        const q = document.getElementById('qty-' + id);
+        if (q) q.textContent = quantities[id];
+      });
+    });
+
+    // v1.4 — cambio de variante → repinta esa tarjeta (precio, stock, botón)
+    root.querySelectorAll('.variant-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const id = sel.dataset.variantFor;
+        const vid = sel.value || '';
+        if (vid) variantSel[id] = vid; else delete variantSel[id];
+        refrescarCard(id);
+      });
+    });
+
+    // v1.4 — desplegar / plegar descripción
+    root.querySelectorAll('.desc-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.descToggle;
+        descExpand[id] = !descExpand[id];
+        refrescarCard(id);
+      });
+    });
+
+    // v1.3: Botón VENTA → mostrar selector de pago (no vender directo)
+    root.querySelectorAll('.btn-sell').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        const id = btn.dataset.id;
+        const prod = allProductos.find(p => p.id === id);
+        if (!prod) return;
+
+        // v1.4: defensa en cliente — nunca vender sin variante elegida
+        if (tieneVariantes(prod) && !varianteElegida(prod)) {
+          showToast('⚠️ Elige la variante antes de vender', true);
+          return;
+        }
+
+        // Validar cliente antes de mostrar métodos de pago
+        if (!selectedClient && !anonMode) {
+          showToast('⚠️ Selecciona un cliente, crea uno nuevo, o usa "Sin cliente"', true);
+          el.clientSearch.focus();
+          return;
+        }
+
+        showPaymentSelector(prod);
+      });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════
+  // v1.3: SELECTOR DE MÉTODO DE PAGO
+  // ═══════════════════════════════════════════════════
+  function showPaymentSelector(prod) {
+    const actionDiv = document.getElementById('action-' + prod.id);
+    if (!actionDiv) return;
+
+    // Si ya hay un selector abierto en esta card, no duplicar
+    if (actionDiv.parentElement.querySelector('.pay-selector')) return;
+
+    const payDiv = document.createElement('div');
+    payDiv.className = 'pay-selector';
+    payDiv.innerHTML = `
+      <span class="pay-label">💳 Método de pago:</span>
+      <button class="pay-btn pay-efectivo" data-method="Efectivo">💵 Efectivo</button>
+      <button class="pay-btn pay-tarjeta" data-method="Tarjeta">💳 Tarjeta</button>
+      <button class="pay-btn pay-bizum" data-method="Bizum">📱 Bizum</button>
+      <button class="pay-cancel">✕ Cancelar</button>
+    `;
+
+    actionDiv.parentElement.appendChild(payDiv);
+
+    // Ocultar botones de acción normales
+    actionDiv.style.display = 'none';
+
+    // Bind pay buttons
+    payDiv.querySelectorAll('.pay-btn').forEach(payBtn => {
+      payBtn.addEventListener('click', () => {
+        const metodo = payBtn.dataset.method;
+        // Cerrar selector
+        payDiv.remove();
+        actionDiv.style.display = 'flex';
+        // Ejecutar venta
+        doSell(prod, actionDiv.querySelector('.btn-sell'), metodo);
+      });
+    });
+
+    // Cancel
+    payDiv.querySelector('.pay-cancel').addEventListener('click', () => {
+      payDiv.remove();
+      actionDiv.style.display = 'flex';
+    });
+  }
+
+  function doSell(prod, btn, metodoPago) {
+    const qty = quantities[prod.id] || 1;
+
+    btn.disabled = true;
+    btn.classList.add('selling');
+    btn.textContent = '⏳ Procesando…';
+
+    // v1.4 — variante elegida (null en productos simples)
+    const selVar = varianteElegida(prod);
+    const precio = precioEfectivo(prod);
+
+    const payload = {
+      productId: prod.id,
+      productName: prod.name,
+      price: precio,
+      currency: prod.currency,
+      quantity: qty,
+      metodoPago: metodoPago,
+      variantId: selVar ? selVar.variantId : '',
+      variantLabel: selVar ? selVar.label : ''
+    };
+
+    if (selectedClient) {
+      payload.contactId = selectedClient.contactId;
+      payload.contactName = selectedClient.nombreCompleto;
+      payload.contactEmail = selectedClient.email;
+      payload.contactPhone = selectedClient.telefono;
+    }
+
+    // Guardar datos para factura post-venta.
+    // v1.4: en la factura el nombre lleva la variante ("· 250ml"),
+    // igual que en PaymentReservations (backend v1.5.12).
+    lastSaleData = { ...payload };
+    lastSaleData.productName = selVar ? `${prod.name} · ${selVar.label}` : prod.name;
+
+    parent.postMessage({ type: 'sell', payload }, '*');
+  }
+
+  function renderFooter() {
+    const total = allProductos.length;
+    const visible = allProductos.filter(p => p.visible).length;
+    const hidden = total - visible;
+    el.footer.style.display = 'flex';
+    el.footer.innerHTML = `
+      <span class="footer-item">Total: <strong>${total}</strong></span>
+      <span class="footer-item">Visibles: <strong>${visible}</strong></span>
+      <span class="footer-item">Ocultos: <strong>${hidden}</strong></span>
+    `;
+  }
+
+  // ═══════════════════════════════════════════════════
+  // HISTORIAL
+  // ═══════════════════════════════════════════════════
+  // Defaults: último mes
+  (function initHistDates() {
+    const hoy = new Date();
+    const hace30 = new Date(hoy);
+    hace30.setDate(hace30.getDate() - 30);
+    el.histFechaDesde.value = hace30.toISOString().split('T')[0];
+    el.histFechaHasta.value = hoy.toISOString().split('T')[0];
+  })();
+
+  el.btnFiltrarHist.addEventListener('click', () => {
+    el.histContent.innerHTML = '<div class="loading"><div class="spinner"></div><span>Cargando historial…</span></div>';
+    el.histSummary.style.display = 'none';
+
+    parent.postMessage({
+      type: 'loadHistory',
+      payload: {
+        fechaDesde: el.histFechaDesde.value || '',
+        fechaHasta: el.histFechaHasta.value || '',
+        limit: 50
+      }
+    }, '*');
+  });
+
+  function renderHistorial(ventas) {
+    const filtroCliente = (el.histSearchCliente.value || '').toLowerCase().trim();
+
+    let filtered = ventas;
+    if (filtroCliente) {
+      filtered = ventas.filter(v =>
+        (v.clienteNombre || '').toLowerCase().includes(filtroCliente) ||
+        (v.clienteEmail || '').toLowerCase().includes(filtroCliente)
+      );
+    }
+
+    if (filtered.length === 0) {
+      el.histContent.innerHTML = '<div class="empty-state">No se encontraron ventas</div>';
+      el.histSummary.style.display = 'none';
+      return;
+    }
+
+    let html = '<div class="history-table-wrap"><table class="history-table">';
+    html += '<thead><tr>';
+    html += '<th>Fecha</th><th>Producto</th><th>Cant.</th><th>Precio</th><th>Total</th><th>Cliente</th><th>Estado</th><th>Factura</th>';
+    html += '</tr></thead><tbody>';
+
+    filtered.forEach(v => {
+      const fecha = v.fecha ? new Date(v.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+      const total = parseFloat(v.totalOrder || v.precio || 0).toFixed(2);
+      const precio = parseFloat(v.precio || 0).toFixed(2);
+
+      html += `<tr data-orderid="${esc(v.orderId || '')}">`;
+      html += `<td class="td-date">${fecha}</td>`;
+      html += `<td>${esc(v.productName)}</td>`;
+      html += `<td style="text-align:center;">${v.quantity}</td>`;
+      html += `<td class="td-price">${precio} €</td>`;
+      html += `<td class="td-price">${total} €</td>`;
+      html += `<td>${esc(v.clienteNombre)}${v.clienteEmail ? '<br><span style="font-size:9px;color:var(--muted);">' + esc(v.clienteEmail) + '</span>' : ''}</td>`;
+      html += `<td><span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:var(--green-dim);color:var(--green);">${v.paymentStatus || 'PAID'}</span></td>`;
+// Botón factura: si ya tenemos URL → abrir; si invoiceId del backend → Ver (anti-duplicación); si no → Factura nueva
+      const oid = v.orderId || '';
+      const hasUrl = invoiceUrlMap[oid];
+      const hasExistingInvoice = v.invoiceId;
+      if (hasUrl) {
+        html += `<td><button class="btn-invoice-sm done" data-orderid="${esc(oid)}" data-action="open">📄 Ver</button></td>`;
+      } else if (hasExistingInvoice) {
+        html += `<td><button class="btn-invoice-sm done" data-orderid="${esc(oid)}" data-name="${esc(v.clienteNombre)}" data-email="${esc(v.clienteEmail || '')}" data-contactid="${esc(v.contactId || '')}" data-product="${esc(v.productName)}" data-price="${total}" data-qty="${v.quantity}" data-action="generate">📄 Ver</button></td>`;
+      } else {
+        html += `<td><button class="btn-invoice-sm" data-orderid="${esc(oid)}" data-name="${esc(v.clienteNombre)}" data-email="${esc(v.clienteEmail || '')}" data-contactid="${esc(v.contactId || '')}" data-product="${esc(v.productName)}" data-price="${total}" data-qty="${v.quantity}" data-action="generate"${!v.clienteEmail ? ' disabled title="Sin email"' : ''}>📄 Factura</button></td>`;
+      }
+      html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    el.histContent.innerHTML = html;
+
+    // Bind invoice buttons
+    el.histContent.querySelectorAll('.btn-invoice-sm').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        const action = btn.dataset.action;
+        const orderId = btn.dataset.orderid;
+
+        // Si ya tenemos URL → abrir directo (igual que checkout btn._invoiceUrl)
+        if (action === 'open' && invoiceUrlMap[orderId]) {
+          window.open(invoiceUrlMap[orderId], '_blank');
+          return;
+        }
+
+        // Si no → generar nueva factura
+        btn.disabled = true;
+        btn.textContent = '⏳…';
+
+        parent.postMessage({
+          type: 'generateProductInvoice',
+          payload: {
+            contactId: btn.dataset.contactid || '',
+            contactEmail: btn.dataset.email || '',
+            contactName: btn.dataset.name || '',
+            productName: btn.dataset.product || '',
+            price: parseFloat(btn.dataset.price) || 0,
+            quantity: parseInt(btn.dataset.qty) || 1,
+            orderId: orderId || ''
+          }
+        }, '*');
+      });
+    });
+
+    // Summary
+    const totalVentas = filtered.length;
+    const totalImporte = filtered.reduce((sum, v) => sum + parseFloat(v.totalOrder || v.precio || 0), 0);
+    el.histSummary.style.display = 'flex';
+    el.histSummary.innerHTML = `
+      <span class="summary-item">Ventas: <strong>${totalVentas}</strong></span>
+      <span class="summary-item">Total: <strong>${totalImporte.toFixed(2)} €</strong></span>
+    `;
+  }
+
+  // Filtro local cliente (sin recargar)
+  el.histSearchCliente.addEventListener('input', () => {
+    if (window._lastHistVentas) renderHistorial(window._lastHistVentas);
+  });
+
+  // ═══════════════════════════════════════════════════
+  // TOAST
+  // ═══════════════════════════════════════════════════
+  let toastTimer;
+  function showToast(msg, isError, actionHtml) {
+    clearTimeout(toastTimer);
+    el.toast.innerHTML = msg + (actionHtml || '');
+    el.toast.className = 'toast show' + (isError ? ' toast-error' : '');
+    toastTimer = setTimeout(() => { el.toast.className = 'toast'; }, actionHtml ? 8000 : 2500);
+  }
+
+  function esc(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  // ═══════════════════════════════════════════════════
+  // FILTER EVENTS (sin cambios)
+  // ═══════════════════════════════════════════════════
+  el.search.addEventListener('input', applyFilters);
+  el.filterCol.addEventListener('change', applyFilters);
+
+  // ═══════════════════════════════════════════════════
+  // CLIENT SEARCH & SELECTION (sin cambios)
+  // ═══════════════════════════════════════════════════
+  let clientSearchTimeout;
+  el.clientSearch.addEventListener('input', () => {
+    clearTimeout(clientSearchTimeout);
+    clientSearchTimeout = setTimeout(filterClients, 200);
+  });
+
+  function filterClients() {
+    const q = (el.clientSearch.value || '').toLowerCase().trim();
+    if (q.length < 2) { el.clientSelect.style.display = 'none'; return; }
+    const matches = allClientes.filter(c => {
+      return c.nombreCompleto.toLowerCase().includes(q)
+        || c.email.toLowerCase().includes(q)
+        || c.telefono.includes(q);
+    }).slice(0, 20);
+    if (matches.length === 0) { el.clientSelect.style.display = 'none'; return; }
+    el.clientSelect.innerHTML = '<option value="">— Seleccionar —</option>';
+    matches.forEach(c => {
+      const label = `${c.nombreCompleto}${c.email ? ' · ' + c.email : ''}${c.telefono ? ' · ' + c.telefono : ''}`;
+      el.clientSelect.innerHTML += `<option value="${esc(c.contactId)}">${esc(label)}</option>`;
+    });
+    el.clientSelect.style.display = '';
+  }
+
+  el.clientSelect.addEventListener('change', () => {
+    const id = el.clientSelect.value;
+    if (!id) return;
+    const client = allClientes.find(c => c.contactId === id);
+    if (!client) return;
+    selectedClient = client;
+    anonMode = false;
+    el.clientSearch.style.display = 'none';
+    el.clientSelect.style.display = 'none';
+    el.clientSelected.textContent = `✓ ${client.nombreCompleto}${client.email ? ' · ' + client.email : ''}`;
+    el.clientSelected.style.display = '';
+    el.clientClear.style.display = '';
+    el.clientNewBtn.style.display = 'none';
+    el.clientAnonBtn.style.display = 'none';
+    showToast(`Cliente: ${client.nombreCompleto}`);
+  });
+
+  el.clientClear.addEventListener('click', () => {
+    selectedClient = null;
+    anonMode = false;
+    el.clientSearch.value = '';
+    el.clientSearch.style.display = '';
+    el.clientSelect.style.display = 'none';
+    el.clientSelected.style.display = 'none';
+    el.clientClear.style.display = 'none';
+    el.clientNewBtn.style.display = '';
+    el.clientAnonBtn.style.display = '';
+    el.clientAnonBtn.classList.remove('active');
+  });
+
+  // ═══════════════════════════════════════════════════
+  // ANONYMOUS MODE (sin cambios)
+  // ═══════════════════════════════════════════════════
+  el.clientAnonBtn.addEventListener('click', () => {
+    anonMode = true;
+    selectedClient = null;
+    el.clientSearch.style.display = 'none';
+    el.clientSelect.style.display = 'none';
+    el.clientNewBtn.style.display = 'none';
+    el.clientAnonBtn.classList.add('active');
+    el.clientSelected.textContent = '⚡ Venta sin cliente';
+    el.clientSelected.style.display = '';
+    el.clientClear.style.display = '';
+    showToast('Modo venta rápida — sin cliente');
+  });
+
+  // ═══════════════════════════════════════════════════
+  // NEW CLIENT FORM (sin cambios)
+  // ═══════════════════════════════════════════════════
+  el.clientNewBtn.addEventListener('click', () => {
+    el.newClientForm.style.display = 'flex';
+    el.clientNewBtn.style.display = 'none';
+    el.newNombre.value = ''; el.newApellido.value = '';
+    el.newEmail.value = ''; el.newTelefono.value = '';
+    el.newNombre.focus();
+  });
+  el.newClientCancel.addEventListener('click', () => {
+    el.newClientForm.style.display = 'none';
+    el.clientNewBtn.style.display = '';
+  });
+  el.newClientConfirm.addEventListener('click', () => {
+    const nombre = el.newNombre.value.trim();
+    const email = el.newEmail.value.trim();
+    const telefono = el.newTelefono.value.trim();
+    // v1.4.1: Wix permite crear el contacto sin email (crearContactoTienda
+    // solo exige nombre). Se pide nombre + al menos una vía de contacto.
+    if (!nombre) { showToast('⚠️ El nombre es obligatorio', true); el.newNombre.focus(); return; }
+    if (!email && !telefono) { showToast('⚠️ Indica al menos email o teléfono', true); el.newEmail.focus(); return; }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showToast('⚠️ El email no es válido', true); el.newEmail.focus(); return; }
+    el.newClientConfirm.disabled = true;
+    el.newClientConfirm.textContent = '⏳ Creando…';
+    parent.postMessage({
+      type: 'crearContacto',
+      payload: {
+        nombre, apellido: el.newApellido.value.trim(),
+        email, telefono
+      }
+    }, '*');
+  });
+
+  // ═══════════════════════════════════════════════════
+  // COMMS WITH WIX
+  // ═══════════════════════════════════════════════════
+  window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'data') {
+      render(msg.payload);
+    }
+
+    if (msg.type === 'sold') {
+      const btn = el.content.querySelector(`.btn-sell[data-id="${msg.payload?.productId}"]`);
+      if (btn) {
+        btn.classList.remove('selling');
+        btn.classList.add('sold');
+        btn.textContent = '✅ Vendido';
+        setTimeout(() => {
+          btn.classList.remove('sold');
+          btn.textContent = '🛒 VENTA';
+          btn.disabled = false;
+        }, 2000);
+      }
+
+      // v1.3: Guardar orderId para factura
+      if (lastSaleData) {
+        lastSaleData.orderId = msg.payload?.orderId || '';
+      }
+
+      // v1.3: Toast con botón factura si hay email de cliente
+      const hasEmail = lastSaleData?.contactEmail;
+      const invoiceAction = hasEmail
+        ? `<span class="toast-action" id="toastInvoiceBtn">📄 Factura</span>`
+        : '';
+      // v1.4: el nombre mostrado incluye la variante ("· 250ml")
+      const nombreVendido = msg.payload?.nombreConVariante || lastSaleData?.productName || msg.payload?.productName || 'Producto';
+      showToast(`✅ ${nombreVendido} · ${lastSaleData?.metodoPago || ''} · ${msg.payload?.tiempoVenta || ''}s`, false, invoiceAction);
+
+      // Bind invoice button in toast
+      if (hasEmail) {
+        setTimeout(() => {
+          const invoiceBtn = document.getElementById('toastInvoiceBtn');
+          if (invoiceBtn) {
+            invoiceBtn.addEventListener('click', () => {
+              invoiceBtn.textContent = '⏳…';
+              parent.postMessage({
+                type: 'generateProductInvoice',
+                payload: {
+                  contactId: lastSaleData.contactId || '',
+                  contactEmail: lastSaleData.contactEmail || '',
+                  contactName: lastSaleData.contactName || '',
+                  contactPhone: lastSaleData.contactPhone || '',
+                  productName: lastSaleData.productName || '',
+                  price: lastSaleData.price || 0,
+                  quantity: lastSaleData.quantity || 1,
+                  currency: lastSaleData.currency || 'EUR',
+                  metodoPago: lastSaleData.metodoPago || '',
+                  orderId: lastSaleData.orderId || ''
+                }
+              }, '*');
+            });
+          }
+        }, 50);
+      }
+    }
+
+    if (msg.type === 'sellError') {
+      const productId = msg.payload?.productId;
+      const btn = el.content.querySelector(`.btn-sell[data-id="${productId}"]`);
+
+      // v1.4: MISSING_VARIANT — el backend devuelve las variantes reales.
+      // Se incorporan al catálogo en memoria y se repinta esa tarjeta con
+      // el selector, en lugar de mostrar un error opaco.
+      if (msg.payload?.error === 'MISSING_VARIANT') {
+        const info = (msg.payload?.missingVariants || [])[0];
+        const prod = allProductos.find(p => p.id === productId);
+        if (prod && info && Array.isArray(info.variants) && info.variants.length > 1) {
+          prod.variants = info.variants;
+          prod.manageVariants = true;
+          delete variantSel[prod.id];
+          refrescarCard(prod.id);
+        } else if (btn) {
+          btn.classList.remove('selling');
+          btn.textContent = '🛒 VENTA';
+          btn.disabled = false;
+        }
+        showToast('⚠️ ' + (msg.payload?.message || 'Selecciona una variante'), true);
+        return;
+      }
+
+      if (btn) {
+        btn.classList.remove('selling');
+        btn.textContent = '🛒 VENTA';
+        btn.disabled = false;
+      }
+      showToast('❌ Error: ' + (msg.payload?.error || 'No se pudo registrar'), true);
+    }
+
+    if (msg.type === 'error') {
+      el.content.innerHTML = `<div class="error-msg">❌ ${esc(msg.message || 'Error')}</div>`;
+    }
+
+    // ── Contacto creado (sin cambios) ──
+    if (msg.type === 'contactoCreado') {
+      const cliente = msg.payload;
+      if (cliente && cliente.contactId) {
+        allClientes.push(cliente);
+        selectedClient = cliente;
+        anonMode = false;
+        el.clientSearch.style.display = 'none';
+        el.clientSelect.style.display = 'none';
+        el.clientSelected.textContent = `✓ ${cliente.nombreCompleto}${cliente.email ? ' · ' + cliente.email : ''}`;
+        el.clientSelected.style.display = '';
+        el.clientClear.style.display = '';
+        el.newClientForm.style.display = 'none';
+        el.clientNewBtn.style.display = 'none';
+        el.clientAnonBtn.style.display = 'none';
+        showToast(`✅ Cliente creado: ${cliente.nombreCompleto}`);
+      } else {
+        showToast('❌ Error creando cliente', true);
+      }
+      el.newClientConfirm.disabled = false;
+      el.newClientConfirm.textContent = '✓ Crear y usar';
+    }
+    if (msg.type === 'contactoError') {
+      showToast('❌ Error: ' + (msg.payload?.error || 'No se pudo crear'), true);
+      el.newClientConfirm.disabled = false;
+      el.newClientConfirm.textContent = '✓ Crear y usar';
+    }
+
+    // ── v1.3: Historial cargado ──
+    if (msg.type === 'historyData') {
+      window._lastHistVentas = msg.payload?.ventas || [];
+      renderHistorial(window._lastHistVentas);
+    }
+    if (msg.type === 'historyError') {
+      el.histContent.innerHTML = `<div class="error-msg">❌ ${esc(msg.message || 'Error')}</div>`;
+    }
+
+    // ── v1.3: Factura generada — patrón idéntico a checkout reservas ──
+    if (msg.type === 'invoiceReady') {
+      const url = msg.payload?.invoiceUrl;
+      const orderId = msg.payload?.orderId;
+
+      // Guardar URL en mapa para reusar sin regenerar
+      if (orderId && url) {
+        invoiceUrlMap[orderId] = url;
+      }
+
+      // Abrir factura automáticamente (igual que checkout)
+      if (url) {
+        window.open(url, '_blank');
+        showToast('Factura generada ✅');
+      }
+
+      // Actualizar botón en historial → "Ver" (reutilizable)
+      if (orderId) {
+        const btn = el.histContent.querySelector(`.btn-invoice-sm[data-orderid="${orderId}"]`);
+        if (btn) {
+          btn.classList.add('done');
+          btn.textContent = '📄 Ver';
+          btn.disabled = false;
+          btn.dataset.action = 'open';
+        }
+      }
+    }
+    if (msg.type === 'invoiceError') {
+      const errorMsg = msg.message || 'Error';
+      if (errorMsg === 'EMAIL_REQUIRED') {
+        showToast('⚠️ Email requerido para generar factura', true);
+      } else {
+        showToast('❌ Factura: ' + errorMsg, true);
+      }
+      // Reset historial button
+      const orderId = msg.orderId;
+      if (orderId) {
+        const btn = el.histContent.querySelector(`.btn-invoice-sm[data-orderid="${orderId}"]`);
+        if (btn) { btn.disabled = false; btn.textContent = '📄 Factura'; }
+      }
+    }
+  });
+
+  // Boot
+  parent.postMessage({ type: 'ready' }, '*');
+</script>
+</body>
+</html>
