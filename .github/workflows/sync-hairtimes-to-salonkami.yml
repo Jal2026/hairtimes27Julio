@@ -1,0 +1,383 @@
+# =====================================================================
+# Sync KAMISUITE V2 — HAIRTIMES  ->  SALON KAMI (salonkamiagosto)
+# Archivo: .github/workflows/sync-hairtimes-to-salonkami.yml
+# VERSION: 1.0.0
+# CHANGELOG:
+#   1.0.0 (17-Ago-2026) — Equivalente en GitHub Actions de
+#         sync-ht-to-salonkami.sh v1.1.0. Diferencias respecto al workflow
+#         de KALONICE v2.1.0:
+#           · backend: se copian TODOS, incluidos los que no existen aún
+#             en el destino (Wix sí admite altas de backend desde el repo).
+#           · pares_manuales: equivalencias declaradas a mano para páginas
+#             que difieren en nombre Y pageId a la vez.
+#           · protección de plantilla vacía: si en HAIRTIMES la página es
+#             la plantilla por defecto de Wix y en el destino hay código
+#             real, el par se salta (no se borra código bueno).
+#           · html-widgets: se copian como referencia (no despliegan).
+#
+# LÍMITE DE WIX: no se pueden CREAR ficheros de página desde el repo.
+# Las páginas que no existan en Salón KAMI se crean en el editor y
+# después se vuelve a lanzar el workflow.
+#
+# REQUISITO: secreto de repositorio SALONKAMI_SYNC_TOKEN
+#            (PAT con Contents: Read and write sobre Jal2026/salonkamiagosto)
+# =====================================================================
+
+name: Sync KAMISUITE V2 HairTimes to SALON KAMI
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Solo analizar y reportar (sin commit ni push)"
+        type: boolean
+        default: true
+      pares_manuales:
+        description: 'Equivalencias a mano, separadas por ";". Formato: "HT sin .js => SK sin .js"'
+        type: string
+        default: ""
+      excluir_paginas:
+        description: 'Páginas del DESTINO que no se sobrescriben, separadas por ";" (nombre de fichero sin .js)'
+        type: string
+        default: ""
+      excluir_backend:
+        description: 'Ficheros de backend que no se copian, separados por ";" (ej: jobs.config)'
+        type: string
+        default: ""
+
+concurrency:
+  group: sync-kamisuite-ht-to-salonkami
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DESTINO_REPO: Jal2026/salonkamiagosto
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar HAIRTIMES (repo origen = este repo)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Descargar SALON KAMI (repo destino)
+        uses: actions/checkout@v4
+        with:
+          repository: Jal2026/salonkamiagosto
+          token: ${{ secrets.SALONKAMI_SYNC_TOKEN }}
+          path: salonkami-target
+          ref: main
+          fetch-depth: 0
+
+      - name: Analizar y construir el plan — NO modifica nada
+        shell: bash
+        env:
+          PARES_MAN: ${{ github.event.inputs.pares_manuales }}
+          EXCL_PG: ${{ github.event.inputs.excluir_paginas }}
+          EXCL_BK: ${{ github.event.inputs.excluir_backend }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PYTHON'
+          import os, json, re, difflib, unicodedata
+          from pathlib import Path
+
+          ws  = Path(os.environ["GITHUB_WORKSPACE"])
+          src = ws
+          dst = ws / "salonkami-target"
+
+          def lista(nombre):
+              return {x.strip() for x in os.environ.get(nombre, "").split(";") if x.strip()}
+
+          excl_bk = lista("EXCL_BK")
+          excl_pg = lista("EXCL_PG")
+
+          rep = []
+          def out(s=""):
+              print(s); rep.append(s)
+
+          def norm(s):
+              return unicodedata.normalize("NFC", s).strip()
+
+          def leer(p):
+              return Path(p).read_text(encoding="utf-8", errors="replace")
+
+          def es_plantilla(t):
+              s = re.sub(r"\s+", "", t)
+              if len(s) == 0:
+                  return True
+              marcas = ("Hello, World", "Hola mundo", "Write your JavaScript", "Escribe tu código")
+              return len(s) < 420 and "onReady" in t and any(m in t for m in marcas)
+
+          plan = {"backend": [], "public": [], "root": [], "pages": [], "widgets": []}
+
+          # ---------- BACKEND (se copian todos, también los nuevos) ----------
+          sb, db = src / "src" / "backend", dst / "src" / "backend"
+          dst_names = {str(p.relative_to(db)) for p in db.rglob("*") if p.is_file()}
+          nuevos, sobre, saltados = [], [], []
+          for p in sorted(x for x in sb.rglob("*") if x.is_file()):
+              rel = str(p.relative_to(sb))
+              if p.name in excl_bk or rel in excl_bk:
+                  saltados.append(rel); continue
+              plan["backend"].append({"src": str(p), "dst": str(db / rel), "rel": rel})
+              (sobre if rel in dst_names else nuevos).append(rel)
+          solo_dst = sorted(dst_names - {x["rel"] for x in plan["backend"]} - set(saltados))
+
+          out("# INFORME SYNC  HAIRTIMES -> SALÓN KAMI")
+          out("")
+          out("## 1. Backend")
+          out(f"- Se sobrescriben: **{len(sobre)}**")
+          out(f"- Se CREAN nuevos en el destino: **{len(nuevos)}**")
+          for n in sorted(nuevos):
+              out(f"  - + `{n}`")
+          if saltados:
+              out(f"- Excluidos por input: {', '.join('`'+x+'`' for x in sorted(saltados))}")
+          out(f"- Solo en el destino (intactos): {', '.join('`'+x+'`' for x in solo_dst) or '—'}")
+          out("")
+
+          # ---------- PUBLIC ----------
+          sp, dp = src / "src" / "public", dst / "src" / "public"
+          for p in sorted(x for x in sp.rglob("*") if x.is_file()):
+              rel = str(p.relative_to(sp))
+              plan["public"].append({"src": str(p), "dst": str(dp / rel), "rel": rel})
+          out("## 2. Public (incluye custom-elements)")
+          out(f"- Ficheros copiados: **{len(plan['public'])}**")
+          out("")
+
+          # ---------- RAÍZ ----------
+          for f in ("package.json", "dependencies-metadata.json", ".eslintrc.json"):
+              if (src / f).exists():
+                  plan["root"].append({"src": str(src / f), "dst": str(dst / f), "rel": f})
+          out("## 3. Raíz")
+          out(f"- {', '.join('`'+x['rel']+'`' for x in plan['root']) or '—'}")
+          out("- `wix.config.json` y `wix.lock` NO se tocan.")
+          out("")
+
+          # ---------- PAGES ----------
+          def pages(root):
+              d = root / "src" / "pages"
+              items = []
+              for p in sorted(d.glob("*.js"), key=lambda x: x.name):
+                  n = p.name
+                  if n.lower() == "masterpage.js":
+                      items.append({"pid": "__M__", "name": "__M__", "path": p, "file": n}); continue
+                  stem = n[:-3]
+                  if "." not in stem:
+                      items.append({"pid": None, "name": norm(stem), "path": p, "file": n}); continue
+                  vis, pid = stem.rsplit(".", 1)
+                  items.append({"pid": pid, "name": norm(vis), "path": p, "file": n})
+              return items
+
+          H, S = pages(src), pages(dst)
+          ht_by_file = {h["file"]: h for h in H}
+          sk_by_file = {k["file"]: k for k in S}
+
+          by_name, by_pid = {}, {}
+          for k in S:
+              by_name.setdefault(k["name"], []).append(k)
+              if k["pid"]:
+                  by_pid.setdefault(k["pid"], []).append(k)
+
+          consumed, matched, pairs, via = set(), set(), [], {}
+
+          # Pass 0 — pares declarados a mano
+          errores = []
+          for linea in [x.strip() for x in os.environ.get("PARES_MAN", "").split(";") if x.strip()]:
+              if "=>" not in linea:
+                  errores.append(f"formato inválido (falta '=>'): {linea}"); continue
+              a, b = [x.strip() for x in linea.split("=>", 1)]
+              fa = a if a.endswith(".js") else a + ".js"
+              fb = b if b.endswith(".js") else b + ".js"
+              if fa not in ht_by_file:
+                  errores.append(f"no existe en HAIRTIMES: {fa}"); continue
+              if fb not in sk_by_file:
+                  errores.append(f"no existe en SALÓN KAMI: {fb}"); continue
+              h, k = ht_by_file[fa], sk_by_file[fb]
+              if k["file"] in consumed:
+                  errores.append(f"destino ya emparejado: {fb}"); continue
+              pairs.append((h, k)); consumed.add(k["file"]); matched.add(h["file"]); via[h["file"]] = "manual"
+
+          if errores:
+              print("ERROR en pares_manuales:")
+              for e in errores:
+                  print("  - " + e)
+              raise SystemExit(1)
+
+          # Pass 1 — por NOMBRE visible
+          for h in H:
+              if h["file"] in matched:
+                  continue
+              c = [k for k in by_name.get(h["name"], []) if k["file"] not in consumed]
+              if len(c) == 1:
+                  pairs.append((h, c[0])); consumed.add(c[0]["file"]); matched.add(h["file"]); via[h["file"]] = "nombre"
+
+          # Pass 2 — por pageId contra destino aún libre
+          for h in H:
+              if h["file"] in matched or not h["pid"]:
+                  continue
+              c = [k for k in by_pid.get(h["pid"], []) if k["file"] not in consumed]
+              if len(c) == 1:
+                  pairs.append((h, c[0])); consumed.add(c[0]["file"]); matched.add(h["file"]); via[h["file"]] = "pageId"
+
+          excluidas, protegidas = [], []
+          for h, k in pairs:
+              if k["file"][:-3] in excl_pg or k["file"] in excl_pg:
+                  excluidas.append(k["file"]); continue
+              if es_plantilla(leer(h["path"])) and not es_plantilla(leer(k["path"])):
+                  protegidas.append((h["file"], k["file"])); continue
+              plan["pages"].append({"src": str(h["path"]), "dst": str(k["path"]),
+                                    "de": h["file"], "a": k["file"], "via": via[h["file"]]})
+
+          sin_par   = [h for h in H if h["file"] not in matched]
+          sin_par_c = [h for h in sin_par if not es_plantilla(leer(h["path"]))]
+          sin_par_v = [h for h in sin_par if es_plantilla(leer(h["path"]))]
+          solo_sk   = [k for k in S if k["file"] not in consumed]
+          libres_sk = [k for k in solo_sk if not es_plantilla(leer(k["path"]))]
+
+          out("## 4. Page code")
+          out(f"- Páginas emparejadas y sincronizadas: **{len(plan['pages'])}**")
+          out("")
+          out("| vía | HAIRTIMES | SALÓN KAMI (conserva su nombre y pageId) |")
+          out("|---|---|---|")
+          for pr in sorted(plan["pages"], key=lambda x: x["de"]):
+              out(f"| {pr['via']} | {pr['de'][:-3]} | {pr['a'][:-3]} |")
+          out("")
+          if excluidas:
+              out(f"- Excluidas por input: {', '.join('`'+x[:-3]+'`' for x in excluidas)}")
+              out("")
+          if protegidas:
+              out("- **Protegidas** (en HAIRTIMES son la plantilla vacía y en el destino hay código real; NO se tocan):")
+              for a, b in protegidas:
+                  out(f"  - `{a[:-3]}` -> `{b[:-3]}`")
+              out("")
+
+          out(f"### 4.1 Sin emparejar y CON código ({len(sin_par_c)}) — decide")
+          out("(a) ya existe con otro nombre y otro pageId -> declararla en pares_manuales; o")
+          out("(b) no existe -> crearla en el editor de Salón KAMI y relanzar.")
+          out("")
+          out("| HAIRTIMES | líneas | mejor candidato | 2.º candidato |")
+          out("|---|---|---|---|")
+          for h in sorted(sin_par_c, key=lambda x: x["file"]):
+              a = leer(h["path"])[:20000]
+              cand = sorted(((difflib.SequenceMatcher(None, a, leer(k["path"])[:20000]).ratio(), k["file"])
+                             for k in libres_sk), reverse=True)
+              c1 = f"{cand[0][1][:-3]} ({cand[0][0]:.0%})" if cand else "—"
+              c2 = f"{cand[1][1][:-3]} ({cand[1][0]:.0%})" if len(cand) > 1 else "—"
+              out(f"| {h['file'][:-3]} | {len(a.splitlines())} | {c1} | {c2} |")
+          out("")
+          out(f"### 4.2 Sin emparejar y SIN código ({len(sin_par_v)}) — ignorar")
+          for h in sorted(sin_par_v, key=lambda x: x["file"]):
+              out(f"- `{h['file'][:-3]}`")
+          out("")
+          out(f"### 4.3 Solo en Salón KAMI ({len(solo_sk)}) — intactas")
+          for k in sorted(solo_sk, key=lambda x: x["file"]):
+              marca = "" if not es_plantilla(leer(k["path"])) else "  _(plantilla vacía)_"
+              out(f"- `{k['file'][:-3]}`{marca}")
+          out("")
+
+          # ---------- HTML WIDGETS (referencia) ----------
+          hw = src / "html-widgets"
+          if hw.is_dir():
+              for p in sorted(x for x in hw.rglob("*") if x.is_file()):
+                  rel = str(p.relative_to(hw))
+                  plan["widgets"].append({"src": str(p), "dst": str(dst / "html-widgets" / rel), "rel": rel})
+          out("## 5. html-widgets (solo referencia en el repo, NO se despliegan)")
+          out(f"- Ficheros copiados: **{len(plan['widgets'])}**")
+          out("")
+
+          Path("/tmp/plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+          informe = "\n".join(rep)
+          Path("/tmp/informe-sync.md").write_text(informe, encoding="utf-8")
+          resumen = os.environ.get("GITHUB_STEP_SUMMARY")
+          if resumen:
+              open(resumen, "a", encoding="utf-8").write(informe + "\n")
+          PYTHON
+
+      - name: Subir informe como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: informe-sync
+          path: /tmp/informe-sync.md
+          if-no-files-found: warn
+
+      - name: Crear rama de copia de seguridad
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd salonkami-target
+          SAFETY_BRANCH="backup-before-sync-${GITHUB_RUN_ID}"
+          git branch "$SAFETY_BRANCH" HEAD
+          git push origin "$SAFETY_BRANCH"
+          echo "SAFETY_BRANCH=$SAFETY_BRANCH" >> "$GITHUB_ENV"
+
+      - name: Aplicar el plan
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PYTHON'
+          import json, shutil
+          from pathlib import Path
+          plan = json.loads(Path("/tmp/plan.json").read_text(encoding="utf-8"))
+          total = 0
+          for bloque in ("backend", "public", "root", "pages", "widgets"):
+              for it in plan[bloque]:
+                  d = Path(it["dst"]); d.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(it["src"], d); total += 1
+              print(f"{bloque}: {len(plan[bloque])} ficheros")
+          print(f"TOTAL copiados: {total}")
+          PYTHON
+
+      - name: Guardas de seguridad
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd salonkami-target
+
+          if ! git diff --quiet -- wix.config.json wix.lock; then
+            echo "ERROR: se ha modificado wix.config.json o wix.lock."
+            exit 1
+          fi
+
+          git add -A
+          BAD="$(git diff --cached --name-status -- src/pages | awk 'NF && $1 != "M" { print }')"
+          if [ -n "$BAD" ]; then
+            echo "ERROR: cambio no permitido en src/pages (alta/borrado/renombrado):"
+            printf '%s\n' "$BAD"
+            exit 1
+          fi
+          if git diff --cached --name-only | grep -Eq '^wix\.config\.json$|^wix\.lock$'; then
+            echo "ERROR: intento de commitear configuración de site protegida."
+            exit 1
+          fi
+          if git diff --cached --name-only | grep -q '^src/backend/jobs\.config$'; then
+            echo "*** AVISO: cambia src/backend/jobs.config — Salón KAMI pasará a ejecutar"
+            echo "*** los crones de HAIRTIMES (recordatorios y sync de Google Calendar)."
+          fi
+
+      - name: Commit y envío a SALON KAMI
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd salonkami-target
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --cached --quiet; then
+            echo "No hay cambios que enviar."
+            exit 0
+          fi
+
+          git commit -m "Sync KAMISUITE: backend + public + config + page code desde HAIRTIMES"
+          git push origin HEAD:main
+
+          echo "SINCRONIZACION COMPLETADA. Backup: ${SAFETY_BRANCH:-(ver paso backup)}"
