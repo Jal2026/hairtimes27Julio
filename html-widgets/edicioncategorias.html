@@ -1,0 +1,1303 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KAMISUITE — Edición Categorías</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+/* ═══════════════════════════════════════════════════
+   KAMISUITE — Edición Categorías (Tour de Servicios) v1.1.0
+   Dark theme idéntico a Edición Servicios. Edita HairSalonServices:
+   el primer nivel de Tour (página pública de categorías).
+   v1.1.0: CRUD completo. El widget deja de requerir el dashboard
+   de Wix para gobernar el Tour público. Los slugs de página
+   dinámica los sigue generando Wix; el backend valida colisiones
+   antes de insertar y verifica el slug post-insert (rollback duro).
+   ═══════════════════════════════════════════════════ */
+:root {
+  --bg: #0f1117;
+  --surface: #181b23;
+  --surface2: #1e222c;
+  --surface3: #252a36;
+  --border: rgba(255, 255, 255, .08);
+  --border-hover: rgba(255, 255, 255, .18);
+  --text: #e8e9ed;
+  --text-secondary: rgba(255, 255, 255, .65);
+  --muted: rgba(255, 255, 255, .40);
+  --accent: #c9a44a;
+  --accent-dim: rgba(201, 164, 74, .15);
+  --green: #36c06a;
+  --green-dim: rgba(54, 192, 106, .12);
+  --red: #e85454;
+  --red-dim: rgba(232, 84, 84, .12);
+  --blue: #4a9ec9;
+  --blue-dim: rgba(74, 158, 201, .12);
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: "Bai Jamjuree", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 12px 14px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.header-brand {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.header-version {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: .5px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.search-box {
+  flex: 1;
+  min-width: 180px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px 8px 32px;
+  outline: none;
+  transition: border-color .2s;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='rgba(255,255,255,.35)' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cline x1='9.5' y1='9.5' x2='13' y2='13'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: 10px center;
+}
+.search-box:focus { border-color: var(--accent); }
+.search-box::placeholder { color: var(--muted); }
+
+.filter-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 7px 28px 7px 10px;
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 11px;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  transition: border-color .2s;
+}
+.filter-select:focus { border-color: var(--accent); }
+
+.counter {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .3px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.counter strong { color: var(--accent); }
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error-msg {
+  background: var(--red-dim);
+  border: 1px solid rgba(232, 84, 84, .25);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color .2s, box-shadow .2s;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .25);
+}
+
+.card-img-wrap {
+  width: 100%;
+  height: 150px;
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.card-img { width: 100%; height: 100%; object-fit: cover; }
+.card-img-placeholder { font-size: 28px; color: var(--muted); opacity: .25; }
+
+.card-body { padding: 14px 16px 34px 16px; }
+
+.card.is-hidden { border-color: rgba(201, 164, 74, .4); }
+.card.is-hidden .card-name { color: var(--accent); }
+.card.is-hidden::after {
+  content: 'INACTIVA';
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid rgba(201, 164, 74, .30);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.card-toggle {
+  position: absolute;
+  bottom: 10px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 3;
+}
+.card-toggle-label {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.card-toggle-label.on { color: var(--green); }
+.card-toggle-label.off { color: var(--red); }
+.card-switch {
+  width: 34px;
+  height: 18px;
+  border-radius: 10px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  position: relative;
+  cursor: pointer;
+  transition: background .18s, border-color .18s;
+  flex-shrink: 0;
+}
+.card-switch::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform .18s, background .18s;
+}
+.card-switch.on { background: var(--green-dim); border-color: var(--green); }
+.card-switch.on::after { transform: translateX(16px); background: var(--green); }
+.card-switch.busy { opacity: .5; pointer-events: none; }
+
+.card-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+  padding-right: 55px;
+}
+.card-subtitle {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.card-info {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.info-item { display: flex; align-items: baseline; gap: 4px; }
+.info-label { color: var(--muted); }
+.info-value { color: var(--text-secondary); font-weight: 600; }
+.info-value.group { color: var(--blue); }
+
+.modal-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, .7);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius);
+  width: 90%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .5);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-title { font-size: 14px; font-weight: 700; color: var(--accent); }
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all .15s;
+}
+.modal-close:hover { color: var(--text); background: var(--surface3); }
+.modal-body { padding: 20px; }
+
+.form-group { margin-bottom: 16px; }
+.form-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.form-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color .2s;
+}
+.form-input:focus { border-color: var(--accent); }
+.form-input::placeholder { color: var(--muted); }
+textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font-family: inherit; }
+.form-hint { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.form-hint.lock { color: var(--blue); }
+
+.image-area { display: flex; align-items: center; gap: 14px; }
+.image-preview {
+  width: 130px;
+  height: 90px;
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 24px;
+  flex-shrink: 0;
+}
+.image-preview.has-img { cursor: pointer; position: relative; }
+.image-preview.has-img::after {
+  content: '⤢ Ampliar';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  text-align: center;
+  color: #fff;
+  background: rgba(0, 0, 0, .55);
+  padding: 3px 0;
+  opacity: 0;
+  transition: opacity .15s;
+}
+.image-preview.has-img:hover::after { opacity: 1; }
+.image-preview img { width: 100%; height: 100%; object-fit: cover; }
+.image-actions { flex: 1; }
+.image-hint { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.btn-upload {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-upload:hover { border-color: var(--accent); color: var(--accent); }
+
+.info-box {
+  background: var(--blue-dim);
+  border: 1px solid rgba(74, 158, 201, .25);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.info-box strong { color: var(--blue); }
+
+.modal-footer {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+.btn {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  border: none;
+}
+.btn-cancel { background: var(--surface3); color: var(--text-secondary); }
+.btn-cancel:hover { background: var(--surface2); color: var(--text); }
+.btn-save { background: var(--accent); color: var(--bg); }
+.btn-save:hover { opacity: .9; }
+.btn-save:disabled { opacity: .5; cursor: not-allowed; }
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(60px);
+  background: var(--surface3);
+  border: 1px solid var(--border-hover);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  opacity: 0;
+  transition: all .3s ease;
+  pointer-events: none;
+  z-index: 2000;
+}
+.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+.toast.success { border-color: var(--green); color: var(--green); }
+.toast.error { border-color: var(--red); color: var(--red); }
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* v1.1.0 · Botón + Nueva Categoría en la toolbar */
+.btn-new-cat {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  cursor: pointer;
+  transition: opacity .15s;
+  white-space: nowrap;
+}
+.btn-new-cat:hover { opacity: .88; }
+
+/* v1.1.0 · Aviso "Sin grupos" en cards */
+.warning-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--red-dim);
+  color: var(--red);
+  border: 1px solid rgba(232, 84, 84, .30);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+
+/* v1.1.0 · Modal footer con dos zonas (izq: Duplicar+Eliminar, der: Cancelar+Guardar) */
+.modal-footer-left {
+  display: flex;
+  gap: 8px;
+  margin-right: auto;
+}
+.btn-aux {
+  background: var(--surface3);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  flex: 0 0 auto;
+}
+.btn-aux:hover { background: var(--surface2); color: var(--text); border-color: var(--border-hover); }
+.btn-danger {
+  background: var(--red-dim);
+  color: var(--red);
+  border: 1px solid rgba(232, 84, 84, .30);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  flex: 0 0 auto;
+}
+.btn-danger:hover { background: rgba(232, 84, 84, .22); border-color: var(--red); }
+
+/* v1.1.0 · Mini-modal de confirmación de borrado */
+.confirm-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, .82);
+  z-index: 1100;
+  align-items: center;
+  justify-content: center;
+}
+.confirm-overlay.open { display: flex; }
+.confirm-box {
+  background: var(--surface);
+  border: 1px solid var(--red);
+  border-radius: var(--radius);
+  width: 90%;
+  max-width: 380px;
+  padding: 22px 20px 18px 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .55);
+}
+.confirm-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--red);
+  letter-spacing: .5px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+.confirm-msg {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.confirm-msg strong { color: var(--text); }
+.confirm-hint {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.confirm-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  outline: none;
+  margin-bottom: 14px;
+}
+.confirm-input:focus { border-color: var(--red); }
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.confirm-actions .btn {
+  flex: 1;
+  padding: 9px 12px;
+}
+.btn-confirm-delete {
+  background: var(--red);
+  color: #fff;
+}
+.btn-confirm-delete:hover { opacity: .9; }
+.btn-confirm-delete:disabled { opacity: .5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="header-brand">KAMISUITE · Edición Categorías · Tour de Servicios</span>
+    <span class="header-version">v1.1.0</span>
+  </div>
+
+  <div class="toolbar" id="toolbar" style="display:none;">
+    <input type="text" class="search-box" id="searchBox" placeholder="Buscar categoría...">
+    <select class="filter-select" id="filterVisibility">
+      <option value="">Activas e inactivas</option>
+      <option value="visible">Solo activas</option>
+      <option value="hidden">Solo inactivas</option>
+    </select>
+    <button class="btn-new-cat" id="btnNewCat" type="button">+ Nueva Categoría</button>
+    <span class="counter" id="counter"></span>
+  </div>
+
+  <div id="content">
+    <div class="loading"><div class="spinner"></div><span>Cargando categorías…</span></div>
+  </div>
+
+  <!-- MODAL EDICIÓN -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title" id="modalTitle">Editar Categoría</span>
+        <button class="modal-close" id="btnModalClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="fCatId">
+
+        <div class="form-group">
+          <label class="form-label">Título *</label>
+          <input type="text" class="form-input" id="fTitle" placeholder="Nombre de la categoría">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Subtítulo</label>
+          <input type="text" class="form-input" id="fSubtitle" placeholder="Subtítulo breve">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Descripción</label>
+          <textarea class="form-input" id="fDescription" rows="3" placeholder="Descripción visible en la página de categorías..."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Grupos de catálogo (groupCatalog)</label>
+          <input type="text" class="form-input" id="fGroupCatalog" placeholder="coloracion, cortesmujer…">
+          <p class="form-hint">Conecta con los <b>group</b> de los servicios. Separa varios por coma. Determina qué servicios aparecen al entrar en esta categoría.</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Orden</label>
+          <input type="number" class="form-input" id="fOrden" min="0" step="1" placeholder="0">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Imagen</label>
+          <div class="image-area">
+            <div id="fImagePreview" class="image-preview">🖼️</div>
+            <div class="image-actions">
+              <input type="file" id="fImageFile" accept="image/*" style="display:none;">
+              <button class="btn-upload" onclick="document.getElementById('fImageFile').click()">📁 Cambiar imagen</button>
+              <div class="image-hint">JPG, PNG, WebP. Máx. 3 MB.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="info-box">
+          Los enlaces a las páginas (LISTAR e ITEM) los gestiona la plataforma automáticamente y <strong>no se editan</strong> aquí. Esta pantalla refina los textos, la imagen y los grupos de cada categoría.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-footer-left" id="modalFooterLeft">
+          <button class="btn-aux" id="btnDuplicate" type="button">Duplicar</button>
+          <button class="btn-danger" id="btnDelete" type="button">Eliminar</button>
+        </div>
+        <button class="btn btn-cancel" id="btnCancel">Cancelar</button>
+        <button class="btn btn-save" id="btnSave">Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v1.1.0 · Mini-modal de confirmación de borrado -->
+  <div class="confirm-overlay" id="confirmDeleteOverlay">
+    <div class="confirm-box">
+      <div class="confirm-title">⚠️ Eliminar categoría</div>
+      <div class="confirm-msg">
+        Vas a eliminar <strong id="confirmDeleteName">—</strong>. Esta acción no se puede deshacer: la URL del Tour asociada dejará de existir.
+      </div>
+      <div class="confirm-hint">
+        Los servicios que apuntaban a esta categoría <em>no se borran</em>: siguen accesibles desde Recepción Pro o desde otras categorías con el mismo grupo.
+        <br><br>
+        Para confirmar, escribe el nombre exacto de la categoría:
+      </div>
+      <input type="text" class="confirm-input" id="confirmDeleteInput" autocomplete="off" spellcheck="false" placeholder="">
+      <div class="confirm-actions">
+        <button class="btn btn-cancel" id="btnConfirmDeleteCancel" type="button">Cancelar</button>
+        <button class="btn btn-confirm-delete" id="btnConfirmDeleteOk" type="button" disabled>Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+let allCategorias = [];
+let currentCatId = null;
+let modalMode = 'edit';         // v1.1.0 · 'edit' | 'create' | 'duplicate'
+let duplicateOriginCatId = null; // v1.1.0 · origen cuando modalMode='duplicate'
+
+let fImageBase64 = null, fImageFileName = null, fImageMimeType = null;
+let fImagePreviewUrl = '';
+let pendingImageCatId = null;
+let pendingToggle = null;      // {catId, nuevoActivo}
+let pendingDelete = null;      // v1.1.0 · {catId, name}
+// v1.1.0 · Si se crea una categoría con imagen adjunta, guardamos la
+// imagen para subirla en cuanto llegue el _id nuevo del backend.
+let pendingCreateImage = null; // {base64Data, fileName, mimeType}
+// v1.1.0 · Overrides aplicados tras un duplicado exitoso (para reflejar
+// cambios que el usuario hizo en el formulario respecto al origen).
+let pendingDuplicateOverrides = null;
+
+const el = {
+  toolbar: document.getElementById('toolbar'),
+  content: document.getElementById('content'),
+  search: document.getElementById('searchBox'),
+  filterVis: document.getElementById('filterVisibility'),
+  counter: document.getElementById('counter'),
+  toast: document.getElementById('toast'),
+  btnNewCat: document.getElementById('btnNewCat'),           // v1.1.0
+  modal: document.getElementById('modalOverlay'),
+  modalTitle: document.getElementById('modalTitle'),
+  modalFooterLeft: document.getElementById('modalFooterLeft'), // v1.1.0
+  btnDuplicate: document.getElementById('btnDuplicate'),     // v1.1.0
+  btnDelete: document.getElementById('btnDelete'),           // v1.1.0
+  btnModalClose: document.getElementById('btnModalClose'),
+  btnCancel: document.getElementById('btnCancel'),
+  btnSave: document.getElementById('btnSave'),
+  fCatId: document.getElementById('fCatId'),
+  fTitle: document.getElementById('fTitle'),
+  fSubtitle: document.getElementById('fSubtitle'),
+  fDescription: document.getElementById('fDescription'),
+  fGroupCatalog: document.getElementById('fGroupCatalog'),
+  fOrden: document.getElementById('fOrden'),
+  fImagePreview: document.getElementById('fImagePreview'),
+  fImageFile: document.getElementById('fImageFile'),
+  // v1.1.0 · Confirmación de borrado
+  confirmDelete: document.getElementById('confirmDeleteOverlay'),
+  confirmDeleteName: document.getElementById('confirmDeleteName'),
+  confirmDeleteInput: document.getElementById('confirmDeleteInput'),
+  btnConfirmDeleteOk: document.getElementById('btnConfirmDeleteOk'),
+  btnConfirmDeleteCancel: document.getElementById('btnConfirmDeleteCancel')
+};
+
+function setImagePreview(url, placeholder) {
+  fImagePreviewUrl = url || '';
+  if (url) {
+    el.fImagePreview.innerHTML = `<img src="${esc(url)}" alt="preview">`;
+    el.fImagePreview.classList.add('has-img');
+    el.fImagePreview.title = 'Abrir imagen en una pestaña nueva';
+  } else {
+    el.fImagePreview.innerHTML = placeholder || '🖼️';
+    el.fImagePreview.classList.remove('has-img');
+    el.fImagePreview.removeAttribute('title');
+  }
+}
+
+function render(data) {
+  allCategorias = data.categorias || [];
+  el.toolbar.style.display = 'flex';
+  applyFilters();
+}
+
+function applyFilters() {
+  const q = (el.search.value || '').toLowerCase().trim();
+  const visF = el.filterVis.value;
+  const filtered = allCategorias.filter(c => {
+    if (q && !(c.title || '').toLowerCase().includes(q) && !(c.groupCatalog || '').toLowerCase().includes(q)) return false;
+    if (visF === 'visible' && !c.activo) return false;
+    if (visF === 'hidden' && c.activo) return false;
+    return true;
+  });
+  el.counter.innerHTML = `Mostrando <strong>${filtered.length}</strong> de ${allCategorias.length}`;
+  if (filtered.length === 0) {
+    el.content.innerHTML = '<div class="empty-state">Sin resultados para los filtros actuales</div>';
+    return;
+  }
+  filtered.sort((a, b) => {
+    if ((a.orden || 0) !== (b.orden || 0)) return (a.orden || 0) - (b.orden || 0);
+    return (a.title || '').localeCompare(b.title || '');
+  });
+  let html = '<div class="cards">';
+  filtered.forEach(c => { html += buildCard(c); });
+  html += '</div>';
+  el.content.innerHTML = html;
+
+  el.content.querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.card-toggle')) return;
+      openEditModal(card.dataset.id);
+    });
+  });
+  el.content.querySelectorAll('.card-toggle').forEach(tg => {
+    tg.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleActivo(tg.dataset.toggleId, tg);
+    });
+  });
+}
+
+function buildCard(c) {
+  const hiddenCls = c.activo ? '' : ' is-hidden';
+  const imgHTML = c.imageUrl
+    ? `<img class="card-img" src="${esc(c.imageUrl)}" alt="${esc(c.title)}" loading="lazy">`
+    : '<span class="card-img-placeholder">🖼️</span>';
+  const groupTrim = (c.groupCatalog || '').trim();
+  const groupCell = groupTrim
+    ? `<span class="info-value group">${esc(groupTrim)}</span>`
+    : `<span class="warning-badge" title="Esta categoría no mostrará servicios hasta que se rellene groupCatalog">⚠ Sin grupos</span>`;
+  const isOn = c.activo === true;
+  return `
+    <div class="card${hiddenCls}" data-id="${c._id}">
+      <div class="card-img-wrap">${imgHTML}</div>
+      <div class="card-body">
+        <div class="card-name">${esc(c.title || '(sin título)')}</div>
+        <div class="card-subtitle">${esc(c.subtitle || '')}</div>
+        <div class="card-info">
+          <div class="info-item"><span class="info-label">Grupos:</span>${groupCell}</div>
+          <div class="info-item"><span class="info-label">Orden:</span><span class="info-value">${c.orden != null ? c.orden : '—'}</span></div>
+        </div>
+        <div class="card-toggle" data-toggle-id="${c._id}">
+          <span class="card-toggle-label ${isOn ? 'on' : 'off'}">${isOn ? 'ON' : 'OFF'}</span>
+          <div class="card-switch ${isOn ? 'on' : ''}" role="switch" aria-checked="${isOn}" title="${isOn ? 'Activa — desactivar' : 'Inactiva — activar'}"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// TOGGLE activo/inactivo sin abrir el modal
+function toggleActivo(catId, toggleEl) {
+  const c = allCategorias.find(x => x._id === catId);
+  if (!c) return;
+  const sw = toggleEl.querySelector('.card-switch');
+  if (sw && sw.classList.contains('busy')) return;
+
+  const nuevoActivo = !(c.activo === true);
+  if (sw) {
+    sw.classList.add('busy');
+    sw.classList.toggle('on', nuevoActivo);
+    sw.setAttribute('aria-checked', String(nuevoActivo));
+  }
+  const lbl = toggleEl.querySelector('.card-toggle-label');
+  if (lbl) { lbl.textContent = nuevoActivo ? 'ON' : 'OFF'; lbl.className = 'card-toggle-label ' + (nuevoActivo ? 'on' : 'off'); }
+
+  pendingToggle = { catId, nuevoActivo };
+  sendToParent({ type: 'toggleCategoria', payload: { catId, activo: nuevoActivo } });
+}
+
+// v1.1.0 · MODO edición sobre categoría existente
+function openEditModal(catId) {
+  const c = allCategorias.find(x => x._id === catId);
+  if (!c) return;
+  modalMode = 'edit';
+  duplicateOriginCatId = null;
+  currentCatId = catId;
+
+  el.modalTitle.textContent = 'Editar Categoría';
+  el.fCatId.value = c._id;
+  el.fTitle.value = c.title || '';
+  el.fSubtitle.value = c.subtitle || '';
+  el.fDescription.value = c.description || '';
+  el.fGroupCatalog.value = c.groupCatalog || '';
+  el.fOrden.value = (c.orden != null) ? c.orden : '';
+  fImageBase64 = null; fImageFileName = null; fImageMimeType = null;
+  el.fImageFile.value = '';
+  setImagePreview(c.imageUrl || '');
+
+  el.modalFooterLeft.style.display = 'flex';
+  el.btnSave.disabled = false;
+  el.btnSave.textContent = 'Guardar cambios';
+  el.modal.classList.add('open');
+  setTimeout(() => { try { el.fTitle.focus(); } catch (_) {} }, 40);
+}
+
+// v1.1.0 · MODO alta de categoría nueva (todo vacío)
+function openCreateModal() {
+  modalMode = 'create';
+  duplicateOriginCatId = null;
+  currentCatId = null;
+
+  el.modalTitle.textContent = 'Nueva Categoría';
+  el.fCatId.value = '';
+  el.fTitle.value = '';
+  el.fSubtitle.value = '';
+  el.fDescription.value = '';
+  el.fGroupCatalog.value = '';
+  el.fOrden.value = '';
+  fImageBase64 = null; fImageFileName = null; fImageMimeType = null;
+  el.fImageFile.value = '';
+  setImagePreview('');
+
+  el.modalFooterLeft.style.display = 'none';   // sin Duplicar / Eliminar en alta
+  el.btnSave.disabled = false;
+  el.btnSave.textContent = 'Crear categoría';
+  el.modal.classList.add('open');
+  setTimeout(() => { try { el.fTitle.focus(); } catch (_) {} }, 40);
+}
+
+// v1.1.0 · MODO duplicar (parte de una existente, exige nuevo título)
+function openDuplicateModal(catIdOrigen) {
+  const c = allCategorias.find(x => x._id === catIdOrigen);
+  if (!c) return;
+  modalMode = 'duplicate';
+  duplicateOriginCatId = catIdOrigen;
+  currentCatId = null;
+
+  el.modalTitle.textContent = 'Duplicar Categoría';
+  el.fCatId.value = '';
+  el.fTitle.value = '';                         // fuerza al usuario a teclear otro título
+  el.fSubtitle.value = c.subtitle || '';
+  el.fDescription.value = c.description || '';
+  el.fGroupCatalog.value = c.groupCatalog || '';
+  el.fOrden.value = (c.orden != null) ? c.orden : '';
+  fImageBase64 = null; fImageFileName = null; fImageMimeType = null;
+  el.fImageFile.value = '';
+  setImagePreview(c.imageUrl || '');            // preview de la imagen del origen (se reutiliza el asset)
+
+  el.modalFooterLeft.style.display = 'none';   // sin Duplicar / Eliminar en modo duplicar
+  el.btnSave.disabled = false;
+  el.btnSave.textContent = 'Crear duplicado';
+  el.modal.classList.add('open');
+  setTimeout(() => { try { el.fTitle.focus(); } catch (_) {} }, 40);
+}
+
+function closeModal() {
+  el.modal.classList.remove('open');
+  currentCatId = null;
+  duplicateOriginCatId = null;
+  modalMode = 'edit';
+}
+
+// v1.1.0 · Confirmación fuerte de borrado (escribir el nombre exacto)
+function askDeleteConfirm(catId) {
+  const c = allCategorias.find(x => x._id === catId);
+  if (!c) return;
+  pendingDelete = { catId, name: c.title || '' };
+  el.confirmDeleteName.textContent = c.title || '(sin título)';
+  el.confirmDeleteInput.value = '';
+  el.confirmDeleteInput.placeholder = c.title || '';
+  el.btnConfirmDeleteOk.disabled = true;
+  el.confirmDelete.classList.add('open');
+  setTimeout(() => { try { el.confirmDeleteInput.focus(); } catch (_) {} }, 40);
+}
+function closeDeleteConfirm() {
+  el.confirmDelete.classList.remove('open');
+  pendingDelete = null;
+  el.btnConfirmDeleteOk.disabled = true;
+}
+
+// v1.1.0 · GUARDAR — bifurca por modalMode
+function saveModal() {
+  const title = el.fTitle.value.trim();
+  if (!title) { showToast('El título es obligatorio', 'error'); return; }
+  el.btnSave.disabled = true;
+
+  if (modalMode === 'create') {
+    el.btnSave.textContent = 'Creando...';
+    // Guardamos la imagen pendiente para subirla en cuanto el backend
+    // devuelva el _id nuevo (evento categoriaCreated).
+    pendingCreateImage = fImageBase64
+      ? { base64Data: fImageBase64, fileName: fImageFileName, mimeType: fImageMimeType }
+      : null;
+
+    sendToParent({
+      type: 'createCategoria',
+      payload: {
+        title,
+        subtitle: el.fSubtitle.value.trim(),
+        description: el.fDescription.value,
+        groupCatalog: el.fGroupCatalog.value.trim(),
+        orden: el.fOrden.value === '' ? undefined : (parseInt(el.fOrden.value, 10) || 0)
+      }
+    });
+    return;
+  }
+
+  if (modalMode === 'duplicate') {
+    el.btnSave.textContent = 'Duplicando...';
+    // El backend duplica campos del origen; solo enviamos el nuevo título
+    // y el catId del origen. Si el usuario cambió groupCatalog/subtitle/etc
+    // en el formulario, los aplicamos como update posterior tras la copia.
+    pendingCreateImage = fImageBase64
+      ? { base64Data: fImageBase64, fileName: fImageFileName, mimeType: fImageMimeType }
+      : null;
+    // Guardamos también los overrides que aplicará el update post-duplicado
+    pendingDuplicateOverrides = {
+      subtitle: el.fSubtitle.value.trim(),
+      description: el.fDescription.value,
+      groupCatalog: el.fGroupCatalog.value.trim(),
+      orden: el.fOrden.value === '' ? undefined : (parseInt(el.fOrden.value, 10) || 0)
+    };
+    sendToParent({
+      type: 'duplicateCategoria',
+      payload: { catId: duplicateOriginCatId, nuevoTitle: title }
+    });
+    return;
+  }
+
+  // modo 'edit' (comportamiento v1.0.0)
+  el.btnSave.textContent = 'Guardando...';
+  const payload = {
+    _catId: el.fCatId.value,
+    title,
+    subtitle: el.fSubtitle.value.trim(),
+    description: el.fDescription.value,
+    groupCatalog: el.fGroupCatalog.value.trim(),
+    orden: el.fOrden.value === '' ? undefined : (parseInt(el.fOrden.value, 10) || 0)
+  };
+  sendToParent({ type: 'saveCategoria', payload });
+
+  if (fImageBase64) {
+    pendingImageCatId = el.fCatId.value;
+    sendToParent({
+      type: 'uploadCategoriaImage',
+      payload: {
+        catId: el.fCatId.value,
+        base64Data: fImageBase64,
+        fileName: fImageFileName,
+        mimeType: fImageMimeType
+      }
+    });
+  }
+}
+
+function onImageSelected() {
+  const file = el.fImageFile.files && el.fImageFile.files[0];
+  if (!file) return;
+  if (file.size > 3 * 1024 * 1024) {
+    showToast('Imagen demasiado grande (máx. 3 MB)', 'error');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl = ev.target.result;
+    fImageBase64 = dataUrl.split(',')[1];
+    fImageFileName = file.name;
+    fImageMimeType = file.type || 'image/jpeg';
+    setImagePreview(dataUrl);
+  };
+  reader.readAsDataURL(file);
+}
+
+// UTILS
+function showToast(msg, type = '') {
+  el.toast.textContent = msg;
+  el.toast.className = 'toast show' + (type ? ' ' + type : '');
+  setTimeout(() => el.toast.classList.remove('show'), 3000);
+}
+function esc(str) {
+  if (str === null || str === undefined) return '';
+  const d = document.createElement('div');
+  d.textContent = String(str);
+  return d.innerHTML;
+}
+
+// EVENTS
+el.search.addEventListener('input', applyFilters);
+el.filterVis.addEventListener('change', applyFilters);
+el.btnModalClose.addEventListener('click', closeModal);
+el.btnCancel.addEventListener('click', closeModal);
+el.btnSave.addEventListener('click', saveModal);
+el.modal.addEventListener('click', (e) => { if (e.target === el.modal) closeModal(); });
+el.fImageFile.addEventListener('change', onImageSelected);
+el.fImagePreview.addEventListener('click', () => {
+  if (fImagePreviewUrl) window.open(fImagePreviewUrl, '_blank', 'noopener');
+});
+
+// v1.1.0 · + Nueva Categoría
+el.btnNewCat.addEventListener('click', openCreateModal);
+
+// v1.1.0 · Duplicar (desde modal edición)
+el.btnDuplicate.addEventListener('click', () => {
+  if (modalMode !== 'edit' || !currentCatId) return;
+  const origen = currentCatId;
+  closeModal();
+  openDuplicateModal(origen);
+});
+
+// v1.1.0 · Eliminar (desde modal edición)
+el.btnDelete.addEventListener('click', () => {
+  if (modalMode !== 'edit' || !currentCatId) return;
+  askDeleteConfirm(currentCatId);
+});
+
+// v1.1.0 · Confirmación fuerte de borrado
+el.confirmDeleteInput.addEventListener('input', () => {
+  if (!pendingDelete) { el.btnConfirmDeleteOk.disabled = true; return; }
+  const typed = el.confirmDeleteInput.value.trim();
+  el.btnConfirmDeleteOk.disabled = (typed !== (pendingDelete.name || '').trim());
+});
+el.btnConfirmDeleteCancel.addEventListener('click', closeDeleteConfirm);
+el.confirmDelete.addEventListener('click', (e) => { if (e.target === el.confirmDelete) closeDeleteConfirm(); });
+el.btnConfirmDeleteOk.addEventListener('click', () => {
+  if (!pendingDelete) return;
+  el.btnConfirmDeleteOk.disabled = true;
+  el.btnConfirmDeleteOk.textContent = 'Eliminando...';
+  sendToParent({ type: 'deleteCategoria', payload: { catId: pendingDelete.catId } });
+});
+
+// COMMS WIX
+function sendToParent(msg) { parent.postMessage(msg, '*'); }
+let readyConfirmed = false;
+
+window.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || typeof msg !== 'object') return;
+
+  if (msg.type === 'data') {
+    readyConfirmed = true;
+    render(msg.payload);
+  }
+
+  if (msg.type === 'categoriaSaved') {
+    showToast('✓ Categoría actualizada', 'success');
+    closeModal();
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Guardar cambios';
+    if (msg.payload && msg.payload.categoria) {
+      const cv = msg.payload.categoria;
+      const idx = allCategorias.findIndex(c => c._id === cv._id);
+      if (idx >= 0) {
+        const x = allCategorias[idx];
+        if (cv.title !== undefined) x.title = cv.title;
+        if (cv.subtitle !== undefined) x.subtitle = cv.subtitle;
+        if (cv.description !== undefined) x.description = cv.description;
+        if (cv.groupCatalog !== undefined) x.groupCatalog = cv.groupCatalog;
+        if (cv.orden !== undefined) x.orden = cv.orden;
+        if (cv.imageUrl !== undefined) x.imageUrl = cv.imageUrl;
+      }
+      applyFilters();
+    }
+  }
+  if (msg.type === 'categoriaSaveError') {
+    showToast('✕ Error: ' + (msg.message || 'No se pudo guardar'), 'error');
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Guardar cambios';
+  }
+
+  if (msg.type === 'categoriaToggled') {
+    if (pendingToggle) {
+      const { catId, nuevoActivo } = pendingToggle;
+      pendingToggle = null;
+      const idx = allCategorias.findIndex(c => c._id === catId);
+      if (idx >= 0) allCategorias[idx].activo = nuevoActivo;
+      showToast(nuevoActivo ? '✓ Categoría activada' : '✓ Categoría desactivada', 'success');
+      applyFilters();
+    }
+  }
+  if (msg.type === 'categoriaToggleError') {
+    if (pendingToggle) {
+      pendingToggle = null;
+      showToast('✕ No se pudo cambiar el estado', 'error');
+      applyFilters();
+    }
+  }
+
+  if (msg.type === 'categoriaImageUploaded') {
+    showToast('✓ Imagen actualizada', 'success');
+    if (msg.payload && msg.payload.publicUrl && pendingImageCatId) {
+      const u = msg.payload.publicUrl + '?t=' + Date.now();
+      const idx = allCategorias.findIndex(c => c._id === pendingImageCatId);
+      if (idx >= 0) allCategorias[idx].imageUrl = u;
+      applyFilters();
+    }
+    pendingImageCatId = null;
+  }
+  if (msg.type === 'categoriaImageError') {
+    showToast('✕ Error subiendo imagen: ' + (msg.message || ''), 'error');
+    pendingImageCatId = null;
+  }
+
+  // v1.1.0 · Categoría CREADA (backend crearCategoria)
+  if (msg.type === 'categoriaCreated') {
+    const cv = msg.payload && msg.payload.categoria;
+    if (cv && cv._id) {
+      // Insertamos en el estado local y refrescamos sin refresh de página.
+      allCategorias.push(cv);
+      applyFilters();
+      showToast('✓ Categoría creada', 'success');
+
+      // Si el usuario había adjuntado imagen, subirla ahora con el _id nuevo.
+      if (pendingCreateImage) {
+        pendingImageCatId = cv._id;
+        sendToParent({
+          type: 'uploadCategoriaImage',
+          payload: {
+            catId: cv._id,
+            base64Data: pendingCreateImage.base64Data,
+            fileName: pendingCreateImage.fileName,
+            mimeType: pendingCreateImage.mimeType
+          }
+        });
+        pendingCreateImage = null;
+      }
+    }
+    closeModal();
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Guardar cambios';
+  }
+  if (msg.type === 'categoriaCreateError') {
+    showToast('✕ ' + (msg.message || 'No se pudo crear'), 'error');
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Crear categoría';
+    pendingCreateImage = null;
+  }
+
+  // v1.1.0 · Categoría DUPLICADA (backend duplicarCategoria)
+  if (msg.type === 'categoriaDuplicated') {
+    const cv = msg.payload && msg.payload.categoria;
+    if (cv && cv._id) {
+      allCategorias.push(cv);
+      applyFilters();
+      showToast('✓ Categoría duplicada', 'success');
+
+      // Aplicar overrides del formulario si difieren de lo copiado del origen.
+      if (pendingDuplicateOverrides) {
+        const ov = pendingDuplicateOverrides;
+        const changedSubtitle = (ov.subtitle !== undefined && ov.subtitle !== cv.subtitle);
+        const changedDesc = (ov.description !== undefined && ov.description !== cv.description);
+        const changedGroup = (ov.groupCatalog !== undefined && ov.groupCatalog !== cv.groupCatalog);
+        const changedOrden = (ov.orden !== undefined && ov.orden !== cv.orden);
+        if (changedSubtitle || changedDesc || changedGroup || changedOrden) {
+          sendToParent({
+            type: 'saveCategoria',
+            payload: {
+              _catId: cv._id,
+              subtitle: ov.subtitle,
+              description: ov.description,
+              groupCatalog: ov.groupCatalog,
+              orden: ov.orden
+            }
+          });
+        }
+        pendingDuplicateOverrides = null;
+      }
+
+      // Si el usuario adjuntó una imagen NUEVA en el modal de duplicar,
+      // subirla al _id nuevo (reemplaza la imagen heredada del origen).
+      if (pendingCreateImage) {
+        pendingImageCatId = cv._id;
+        sendToParent({
+          type: 'uploadCategoriaImage',
+          payload: {
+            catId: cv._id,
+            base64Data: pendingCreateImage.base64Data,
+            fileName: pendingCreateImage.fileName,
+            mimeType: pendingCreateImage.mimeType
+          }
+        });
+        pendingCreateImage = null;
+      }
+    }
+    closeModal();
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Guardar cambios';
+  }
+  if (msg.type === 'categoriaDuplicateError') {
+    showToast('✕ ' + (msg.message || 'No se pudo duplicar'), 'error');
+    el.btnSave.disabled = false;
+    el.btnSave.textContent = 'Crear duplicado';
+    pendingCreateImage = null;
+    pendingDuplicateOverrides = null;
+  }
+
+  // v1.1.0 · Categoría ELIMINADA (backend eliminarCategoria)
+  if (msg.type === 'categoriaDeleted') {
+    const catId = msg.payload && msg.payload.catId;
+    if (catId) {
+      const idx = allCategorias.findIndex(c => c._id === catId);
+      if (idx >= 0) allCategorias.splice(idx, 1);
+      applyFilters();
+      showToast('✓ Categoría eliminada', 'success');
+    }
+    closeDeleteConfirm();
+    el.btnConfirmDeleteOk.textContent = 'Eliminar';
+  }
+  if (msg.type === 'categoriaDeleteError') {
+    showToast('✕ ' + (msg.message || 'No se pudo eliminar'), 'error');
+    el.btnConfirmDeleteOk.disabled = false;
+    el.btnConfirmDeleteOk.textContent = 'Eliminar';
+  }
+
+  if (msg.type === 'error') {
+    el.content.innerHTML = `<div class="error-msg">❌ Error: ${esc(msg.message || 'Desconocido')}</div>`;
+  }
+});
+
+function pingReady() {
+  if (readyConfirmed) return;
+  sendToParent({ type: 'ready' });
+  setTimeout(pingReady, 800);
+}
+pingReady();
+</script>
+</body>
+</html>
