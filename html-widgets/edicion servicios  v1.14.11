@@ -9,10 +9,26 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.14.11
+       KAMISUITE — Edición Servicios Widget v1.14.12
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.14.12: 🩹 FIX del fix. v1.14.11 dejaba el desplegable de
+         categorías ILEGIBLE al abrirlo: fondo claro con texto claro.
+         Causa: .filter-select.is-fase declaraba
+         `background: var(--sky-dim)`, un celeste TRANSLÚCIDO
+         (alpha .12). La lista desplegada hereda el fondo del <select>,
+         y al ser transparente dejaba pasar el blanco por defecto del
+         navegador; sobre él, las <option> en var(--text-secondary)
+         (blanco al 65%) quedaban invisibles. Efecto secundario del
+         mismo error: la shorthand `background` sobrescribía también el
+         background-image de la flecha del select, que desaparecía.
+         Solución: .is-fase deja de tocar el fondo. Conserva solo
+         `color` y `border-color`, así el <select> mantiene su
+         var(--surface2) OPACO original, la lista se despliega en
+         oscuro y las reglas de v1.14.11 funcionan como se esperaba.
+         REGLA: nunca poner un background translúcido en un <select>
+         cuyo desplegable deba verse en tema oscuro.
        v1.14.11: 🎨 FIX ESTÉTICO de la señalización celeste introducida
          en v1.14.10. Al aplicar .is-fase al #filterCategory, el
          `color: var(--sky)` del <select> se heredaba a TODAS las
@@ -599,7 +615,11 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 .category-separator-label.is-fase { color: var(--sky); }
 .category-separator-line.is-fase { background: var(--sky-border); }
 .category-separator-count.is-fase { color: var(--sky); }
-.filter-select.is-fase { color: var(--sky); border-color: var(--sky-border); background: var(--sky-dim); }
+/* v1.14.12 — El <select> conserva el fondo opaco original. NO poner aquí
+   un background translúcido: la lista desplegada hereda el fondo del
+   select, y con transparencia deja pasar el blanco por defecto del
+   navegador, dejando texto claro sobre fondo claro (v1.14.11). */
+.filter-select.is-fase { color: var(--sky); border-color: var(--sky-border); }
 /* v1.14.11 — Las <option> sin color propio heredan el del <select>. Con
    .is-fase activo eso teñía de celeste TODA la lista desplegada y anulaba
    la distinción. Se fija el color normal en las opciones y solo la de
@@ -683,7 +703,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.14.11</span>
+    <span class="header-version"> v1.14.12</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
