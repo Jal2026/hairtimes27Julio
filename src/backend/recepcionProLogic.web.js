@@ -1,9 +1,49 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.49
-// FECHA: 5 de agosto de 2026
+// VERSION: 1.0.50
+// FECHA: 18 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.50: 🧾 SEGREGACIÓN FISCAL EXTERNO / INTERNO.
+//          Un pack ya NO puede mezclar servicios de familia 'externo' con
+//          servicios del salón.
+//
+//          DETECTADO el 18-ago-2026 revisando el informe de agosto de
+//          Hair-Times: tres packs del histórico llevaban una línea de la
+//          profesional externa dentro de una cita de personal INTERNO —
+//          Raquel 22-jul 45€ (cobrado), Ricardo 11-ago 20€ (cobrado),
+//          Angela 17-jul 25€ (sin cobrar).
+//
+//          POR QUÉ IMPORTA: marcarPagadoReserva v1.0.37 enruta el cobro por
+//          el TITULAR del pack, no línea a línea. Esos importes fueron por
+//          tanto al ledger INTERNO (PaymentReservations) en vez de al de la
+//          externa (PagoreservasExternos). El salón facturó 65€ de
+//          servicios que NO presta y que pertenecen a OTRA ENTIDAD FISCAL,
+//          con su base imponible inflada en esa cantidad. La externa tiene
+//          su propia caja y su propia facturación: no son el mismo sujeto.
+//          Con VERI*FACTU esto pasa a ser un registro firmado y encadenado
+//          con un importe que no corresponde al emisor.
+//
+//          SE CORTA EN EL MOTOR, NO EN EL INFORME: el informe solo refleja
+//          lo que el cobro decidió. Guardia en las TRES puertas por las que
+//          una línea entra a un pack:
+//            · crearPackReserva          — principal Y complementos
+//            · agregarServicioReserva    — puerta por la que entraron los 3
+//                                          casos (el modal ofrece el
+//                                          catálogo entero, externos incluidos)
+//            · agregarComplementoReserva
+//          Helpers nuevos: esServicioExterno, staffEsExterno,
+//          validarSegregacionFiscal.
+//
+//          FAIL-OPEN DELIBERADO: si el catálogo no resuelve la familia o
+//          StaffConfig no resuelve el titular, se deja pasar y se registra
+//          en el log. Bloquear por un dato ausente pararía la caja del
+//          salón, que es peor que el defecto que se corrige.
+//
+//          NO se toca el enrutado de marcarPagadoReserva ni ninguna otra
+//          función: impedida la mezcla en origen, enrutar por titular
+//          vuelve a ser correcto.
 //
 // v1.0.49: 🛍 HISTÓRICO DE COMPRA DE PRODUCTOS en getProductosCustomCliente.
 //          El panel de cliente de Recepción muestra ahora, además de PRIME,
@@ -1076,7 +1116,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.49';
+const VERSION = '1.0.50';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1261,6 +1301,96 @@ async function resolverScheduleIdAncla(wixAnclaId) {
 // Carga todos los servicios reservables + índice por setupUid
 // para resolver fases (mapeoFases.ref) y complementos.
 // =====================================================
+
+// =====================================================
+// v1.0.50 — GUARDIA DE SEGREGACIÓN FISCAL (externo vs interno)
+// =====================================================
+// PROBLEMA REAL DETECTADO (18-ago-2026, informe de agosto de Hair-Times):
+//   Tres packs del histórico llevaban una línea de servicio EXTERNO dentro
+//   de una cita cuyo titular es personal INTERNO:
+//     · 22-jul · Raquel  · Pedicura Spa Semipermanente 45€ · COBRADO
+//     · 11-ago · Ricardo · Manicura Tradicional        20€ · COBRADO
+//     · 17-jul · Angela  · Manicura Semipermanente     25€ · confirmada
+//
+//   Consecuencia: marcarPagadoReserva enruta el cobro por el titular del
+//   PACK, así que esos importes fueron al ledger INTERNO
+//   (PaymentReservations) en lugar del ledger de la externa
+//   (PagoreservasExternos). El salón facturó 65€ de servicios que NO
+//   presta y que pertenecen a OTRA ENTIDAD FISCAL. La base imponible del
+//   salón quedó inflada en esa cantidad.
+//
+//   Con VERI*FACTU esto deja de ser un dato incómodo en un informe: pasa a
+//   ser un registro de facturación firmado y encadenado con un importe que
+//   no corresponde al emisor. Por eso se corta en el motor, no en el
+//   informe: el informe solo refleja lo que el cobro decidió.
+//
+// REGLA: un pack NO puede mezclar servicios de familia externa con
+//   servicios internos. O es una cita del salón, o es una cita de la
+//   profesional externa. La caja de cada una es independiente.
+//
+// DÓNDE SE APLICA: en las TRES puertas por las que una línea entra a un
+//   pack — crearPackReserva (alta), agregarServicioReserva (servicio
+//   adicional) y agregarComplementoReserva (complemento).
+//
+// FAIL-OPEN DELIBERADO: si el catálogo no resuelve la familia de un
+//   servicio, se deja pasar. Bloquear por un dato ausente pararía la caja
+//   del salón, que es peor que el defecto que se corrige. La familia
+//   ausente se registra en el log para poder auditarla.
+const FAMILIA_EXTERNA = 'externo';
+
+// ¿Es de familia externa el servicio del catálogo?
+function esServicioExterno(svc) {
+  if (!svc) return false;
+  return String(svc.family || '').trim().toLowerCase() === FAMILIA_EXTERNA;
+}
+
+// ¿El titular del pack es personal externo? Lookup por wixResourceId, el
+// mismo patrón que ya usa marcarPagadoReserva v1.0.37 para enrutar el cobro.
+// Devuelve null si no se puede determinar (→ fail-open en el llamador).
+async function staffEsExterno(staffId) {
+  if (!staffId) return null;
+  try {
+    const r = await wixData.query(CMS_STAFF)
+      .eq('wixResourceId', staffId).limit(1)
+      .find({ suppressAuth: true });
+    if (!r.items?.length) return null;
+    return !!r.items[0].isExternal;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ staffEsExterno lookup falló: ${e.message}`);
+    return null;
+  }
+}
+
+// Valida que un servicio pueda entrar en un pack cuyo titular es `staffId`.
+// Devuelve { ok:true } o { ok:false, error:'<mensaje para el operador>' }.
+async function validarSegregacionFiscal(svc, staffId, contexto) {
+  const svcExterno = esServicioExterno(svc);
+  const titularExterno = await staffEsExterno(staffId);
+
+  // Fail-open: sin dato de titular no se bloquea (ver nota de arriba).
+  if (titularExterno === null) {
+    if (svcExterno) {
+      console.warn(`${TAG} ⚠️ [${contexto}] Servicio externo "${svc?.label}" sin poder verificar el titular (staffId=${staffId}). Se deja pasar.`);
+    }
+    return { ok: true };
+  }
+
+  if (svcExterno && !titularExterno) {
+    return {
+      ok: false,
+      error: `"${svc?.label || 'Ese servicio'}" lo presta personal externo y no puede cobrarse en una cita del salón: son cajas y facturación independientes. Créala como cita de la profesional externa.`
+    };
+  }
+
+  if (!svcExterno && titularExterno) {
+    return {
+      ok: false,
+      error: `"${svc?.label || 'Ese servicio'}" es un servicio del salón y no puede añadirse a una cita de la profesional externa: son cajas y facturación independientes.`
+    };
+  }
+
+  return { ok: true };
+}
 
 async function cargarCatalogoCompleto() {
   const result = await wixData.query(CMS_CATALOGO)
@@ -1882,6 +2012,31 @@ export const crearPackReserva = webMethod(
       const principalBase = porSetupUid[principalSetupUid];
       if (!principalBase) {
         return { ok: false, version: VERSION, error: { message: `Servicio principal no encontrado: ${principalSetupUid}` } };
+      }
+
+      // v1.0.50 — SEGREGACIÓN FISCAL en el alta. Cubre el principal y todos
+      // los complementos elegidos: basta UNA línea de la otra naturaleza para
+      // que el pack acabe cobrándose en el ledger equivocado, porque
+      // marcarPagadoReserva enruta por el TITULAR, no por línea.
+      {
+        const seg = await validarSegregacionFiscal(principalBase, staffId, 'crearPackReserva');
+        if (!seg.ok) {
+          console.warn(`${TAG} ⛔ Segregación fiscal (principal): ${seg.error}`);
+          return { ok: false, version: VERSION, error: { message: seg.error } };
+        }
+        // Los complementos llegan como setupUid suelto o como objeto {setupUid,...}.
+        const principalExterno = esServicioExterno(principalBase);
+        for (const c of (complementosSetupUid || [])) {
+          const uid = (c && typeof c === 'object') ? c.setupUid : c;
+          if (!uid) continue;
+          const svcComp = porSetupUid[uid];
+          if (!svcComp) continue;   // fail-open: ya lo resolverá el constructor de fases
+          if (esServicioExterno(svcComp) !== principalExterno) {
+            const msg = `"${svcComp.label || 'Un servicio elegido'}" no puede ir en la misma cita que "${principalBase.label || 'el servicio principal'}": uno lo presta el salón y el otro personal externo, y su facturación es independiente.`;
+            console.warn(`${TAG} ⛔ Segregación fiscal (complemento): ${msg}`);
+            return { ok: false, version: VERSION, error: { message: msg } };
+          }
+        }
       }
 
       // v1.0.25 — Si llega varianteSel, trabajar sobre una COPIA del principal
@@ -3201,6 +3356,13 @@ export const agregarComplementoReserva = webMethod(
         .find({ suppressAuth: true });
       if (r2.items.length === 0) return { ok: false, error: 'Complemento no encontrado en catálogo' };
       const svc = r2.items[0];
+
+      // v1.0.50 — SEGREGACIÓN FISCAL (misma regla que agregarServicioReserva).
+      const segComp = await validarSegregacionFiscal(svc, registro.staffId, 'agregarComplementoReserva');
+      if (!segComp.ok) {
+        console.warn(`${TAG} ⛔ Segregación fiscal: ${segComp.error}`);
+        return { ok: false, error: segComp.error };
+      }
       // v1.0.44 — variante elegida: sustituye precio, duración y label.
       // Sin varianteSel se usan los valores base del catálogo (v1.0.43).
       const baseLabel = svc.label || 'Complemento';
@@ -3317,6 +3479,15 @@ export const agregarServicioReserva = webMethod(
       const { porSetupUid } = await cargarCatalogoCompleto();
       const principalBase = porSetupUid[setupUid];
       if (!principalBase) return { ok: false, error: 'Servicio nuevo no encontrado en catálogo' };
+
+      // v1.0.50 — SEGREGACIÓN FISCAL. Esta es la puerta por la que entraron
+      // los tres casos detectados el 18-ago: el modal de "servicio adicional"
+      // ofrece el catálogo completo, incluidos los servicios de la externa.
+      const segAdd = await validarSegregacionFiscal(principalBase, registro.staffId, 'agregarServicioReserva');
+      if (!segAdd.ok) {
+        console.warn(`${TAG} ⛔ Segregación fiscal: ${segAdd.error}`);
+        return { ok: false, error: segAdd.error };
+      }
 
       // v1.0.43 — variante elegida del servicio añadido. Sin varianteSel,
       // `principal` es el objeto de catálogo tal cual (precio/duración base).
