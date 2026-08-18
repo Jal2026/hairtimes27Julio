@@ -1,6 +1,41 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.7.0
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.7.1
 // =====================================================
+// v2.7.1 (18 ago 2026): SEGREGACIÓN FISCAL EN EL DESGLOSE.
+//
+//   DEFECTO. Una línea de servicio de familia 'externo' cobrada DENTRO de
+//   una cita de personal interno se contabilizaba como facturación del
+//   salón. Caso real detectado en el informe de agosto de Hair-Times:
+//   "Manicura Tradicional 20€" aparecía bajo MANICURA_&_PEDICURA, sumando
+//   al total del periodo y a la base imponible del salón. Ese dinero es de
+//   la profesional externa, que es OTRA ENTIDAD FISCAL con su propia caja.
+//   En el histórico hay tres casos (65€ en total): Raquel 22-jul 45€,
+//   Ricardo 11-ago 20€ (ambos cobrados) y Angela 17-jul 25€ (sin cobrar).
+//
+//   POR QUÉ PASA. marcarPagadoReserva enruta el cobro por el TITULAR del
+//   pack, no línea a línea. Si la línea externa entra en una cita de
+//   Ricardo, su importe va al ledger interno y el informe lo lee como
+//   ingreso del salón. El informe no estaba mal escrito: estaba mal
+//   alimentado.
+//
+//   FIX. Toda línea cuyo label coincida con un servicio de family='externo'
+//   del catálogo se saca del circuito interno: no entra en el desglose por
+//   categorías, ni en el ranking de servicios, ni en la productividad, y se
+//   DESCUENTA de totalIngresos, del día, del día de semana, del método de
+//   pago, del botón y del staff. Deja de inflar la base imponible.
+//
+//   NO SE OCULTA: cada línea apartada viaja en `externosEnPackInterno`
+//   (fecha, servicio, importe, titular del pack, cliente) para que el
+//   defecto sea auditable y se pueda corregir el registro en el CMS antes
+//   de conectar VERI*FACTU. Queda además traza en el log.
+//
+//   ESTO SANEA EL HISTÓRICO. Que no vuelva a ocurrir lo garantiza
+//   recepcionProLogic v1.0.50, que impide mezclar en el propio motor.
+//
+//   El bloque de externos (bruto + comisión) NO cambia: esas líneas nunca
+//   estuvieron en él, porque su cobro no está en el ledger de la externa.
+//   Corregir el registro en el CMS las hará aparecer ahí, que es su sitio.
+//
 // v2.7.0 (18 ago 2026): EXTERNOS V2 · BONOS · AUDITORÍA DE COBROS ·
 //                       CATÁLOGO CMS · SANEAMIENTO
 //
@@ -167,7 +202,7 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const VERSION = '2.7.0';
+const VERSION = '2.7.1';
 const TAG = `[Stats v${VERSION}]`;
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
@@ -347,6 +382,8 @@ export const obtenerEstadisticas = webMethod(
       const mapaNombreDuracion = {};
       // setupUid → label, para nombrar los canjes de bono (§ bloque 4bis).
       const mapaSetupUidLabel = {};
+      // v2.7.1 — labels (minúsculas) de los servicios de familia 'externo'.
+      const labelsExternos = new Set();
 
       try {
         let catalogo = [];
@@ -377,6 +414,12 @@ export const obtenerEstadisticas = webMethod(
           }
           const uid = String(it.setupUid || '').trim();
           if (uid) mapaSetupUidLabel[uid] = nombre;
+          // v2.7.1 — Etiquetas de servicios de familia EXTERNA. Sirven para
+          // sacarlos del circuito interno aunque el cobro haya ido al ledger
+          // del salón (ver bloque 3).
+          if (String(it.family || '').trim().toLowerCase() === 'externo') {
+            labelsExternos.add(nombre.toLowerCase());
+          }
         }
         console.log(`${TAG} ServiceCatalog: ${catalogo.length} servicios, ${Object.keys(mapaSetupUidLabel).length} con setupUid`);
       } catch (catCmsErr) {
@@ -508,6 +551,7 @@ export const obtenerEstadisticas = webMethod(
       let ingresosComplementosST = 0;
       const productividadPorStaff = {};
       const porBoton = {};   // v2.7.0 — auditoría por botón pulsado
+      const externosEnPackInterno = [];  // v2.7.1 — líneas de externo mal enrutadas
 
       const addToDesglose = (categoria, nombre, precio, subgrupo) => {
         const catNorm = normCat(categoria);
@@ -589,6 +633,49 @@ export const obtenerEstadisticas = webMethod(
           }
           nombre = nombre.replace(/,\s*$/, '').trim();
           if (!nombre) continue;
+
+          // ── v2.7.1 · SEGREGACIÓN FISCAL EN EL INFORME ────────────────
+          //    Una línea de servicio de familia 'externo' NO es facturación
+          //    del salón aunque su cobro haya ido al ledger interno: el
+          //    dinero es de la profesional externa, que es otra entidad
+          //    fiscal con su propia caja.
+          //    Caso real (18-ago-2026): Manicura Tradicional 20€ dentro de
+          //    la cita de Ricardo del 11-ago. Aparecía en el desglose bajo
+          //    MANICURA_&_PEDICURA sumando a la base imponible del salón.
+          //    Se descuenta del total y se aparta a `externosEnPackInterno`
+          //    para que el defecto sea VISIBLE y auditable, no silencioso.
+          //    El motor ya impide que vuelva a ocurrir (recepcionProLogic
+          //    v1.0.50); esto sanea lo que ya está en el histórico.
+          const nombreLimpioExt = nombre.replace(/^[^\p{L}\d]+/u, '').trim().toLowerCase();
+          if (labelsExternos.has(nombreLimpioExt)) {
+            if (precio > 0) {
+              totalIngresos -= precio;                  // no es ingreso del salón
+              porStaff[staff] = (porStaff[staff] || 0) - precio;
+              if (productividadPorStaff[staff]) {
+                productividadPorStaff[staff].ingresos -= precio;
+              }
+              if (p.fechaPago) {
+                const diaExt = new Date(p.fechaPago).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
+                if (ingresosPorDia[diaExt] !== undefined) ingresosPorDia[diaExt] -= precio;
+                const dsExt = DIAS_SEMANA[new Date(p.fechaPago).getDay()];
+                if (ingresosPorDiaSemana[dsExt] !== undefined) ingresosPorDiaSemana[dsExt] -= precio;
+              }
+              const metodoExt = p.tipoPago || 'Sin especificar';
+              if (porMetodo[metodoExt] !== undefined) porMetodo[metodoExt] -= precio;
+              const botonExt = normalizarBoton(p.tipoPago);
+              if (porBoton[botonExt]) porBoton[botonExt].importe -= precio;
+
+              externosEnPackInterno.push({
+                fecha: p.fechaPago ? new Date(p.fechaPago).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID }) : '',
+                servicio: nombre,
+                importe: precio,
+                staffPack: staff,
+                cliente: (p.nombreCliente || '').trim()
+              });
+              console.warn(`${TAG} ⚠️ Línea EXTERNA en pack interno: "${nombre}" ${precio}€ (titular ${staff}, cliente ${(p.nombreCliente || '').trim()}) — descontada de la facturación del salón`);
+            }
+            continue;   // fuera del desglose, del ranking y de la productividad
+          }
 
           const esExtra = nombre.startsWith('✏️');
           if (esExtra) {
@@ -1058,6 +1145,18 @@ export const obtenerEstadisticas = webMethod(
         promedioPorDiaSemana[ds] = count > 0 ? Math.round((total / count) * 100) / 100 : 0;
       }
 
+      // v2.7.1 — Redondeo tras los descuentos de líneas externas: restar
+      // flotantes deja colas de céntimo (20.000000000000004).
+      totalIngresos = round2(totalIngresos);
+      for (const k of Object.keys(ingresosPorDia)) ingresosPorDia[k] = round2(ingresosPorDia[k]);
+      for (const k of Object.keys(ingresosPorDiaSemana)) ingresosPorDiaSemana[k] = round2(ingresosPorDiaSemana[k]);
+      for (const k of Object.keys(porMetodo)) porMetodo[k] = round2(porMetodo[k]);
+      for (const k of Object.keys(porStaff)) porStaff[k] = round2(porStaff[k]);
+      for (const k of Object.keys(porBoton)) porBoton[k].importe = round2(porBoton[k].importe);
+      for (const k of Object.keys(productividadPorStaff)) {
+        productividadPorStaff[k].ingresos = round2(productividadPorStaff[k].ingresos);
+      }
+
       // ── v2.7.0: EJE DE DÍAS CONTINUO ──────────────────────────────
       //    Antes el eje se construía SOLO con los días que tenían cobros,
       //    así que un domingo cerrado DESAPARECÍA del gráfico en vez de
@@ -1301,7 +1400,16 @@ export const obtenerEstadisticas = webMethod(
         // devengó al comprarlo. Ver cabecera del archivo.
         canjesBono,
         trabajoBono,
-        deudaBonos
+        deudaBonos,
+        // v2.7.1 — INCIDENCIAS: líneas de servicio externo cobradas dentro
+        // de una cita del salón. Ya descontadas de la facturación, pero se
+        // exponen para que el defecto sea auditable y se pueda corregir el
+        // registro en el CMS antes de conectar VERI*FACTU.
+        externosEnPackInterno: {
+          n: externosEnPackInterno.length,
+          importe: round2(externosEnPackInterno.reduce((acc, x) => acc + x.importe, 0)),
+          lineas: externosEnPackInterno
+        }
       };
     } catch (error) {
       console.error(`${TAG} Error:`, error);
