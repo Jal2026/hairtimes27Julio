@@ -2,8 +2,21 @@
 // BACKEND externosInformeLogic.web.js — KAMISUITE
 // INFORME DE PERSONAL EXTERNO v1.0.0
 // =====================================================
-// VERSION: 1.0.0
+// VERSION: 1.1.0
 // FECHA: 18 de agosto de 2026
+//
+// v1.1.0 — PARIDAD DE HERRAMIENTAS CON ESTADÍSTICAS.
+//   La v1.0.0 recortó, además de los datos que no aplican a una externa,
+//   herramientas de análisis que sí aplican: comparador de periodos y
+//   orden por importe. Eran dos ejes distintos —qué información se ve y
+//   qué puede hacer quien la mira— y se trataron como uno.
+//   Se añade lo que faltaba:
+//     · ingresosPorDiaRanking — misma serie ordenada por importe.
+//     · promediosDiaSemana en ambas series — columna "vs Media".
+//     · conteos y promedios en porDiaSemana — nº de días de cada tipo.
+//     · eje de días continuo (los días sin actividad salen a 0).
+//   El comparador de periodos NO necesita backend nuevo: el page code
+//   llama dos veces a este mismo método, como hace Estadísticas.
 // ARCHIVO: backend/externosInformeLogic.web.js
 //
 // QUÉ ES
@@ -77,7 +90,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const TAG = `[ExtInforme v${VERSION}]`;
 
 const CMS_PAGOS_EXTERNOS = 'PagoreservasExternos';
@@ -233,6 +246,19 @@ function nuevoBloque(nombre, pct) {
   };
 }
 
+// Construye una serie de días en el orden que se le pase, con base, IVA,
+// día de la semana y la media de ese día dentro del periodo.
+function serieDias(orden, dias, divisor, mediaDe) {
+  return {
+    labels: orden,
+    valores: orden.map(d => round2(dias[d])),
+    valoresBase: orden.map(d => round2(dias[d] / divisor)),
+    valoresIva: orden.map(d => round2(dias[d] - dias[d] / divisor)),
+    diasSemana: orden.map(d => DIAS_SEMANA[new Date(`${d}T12:00:00`).getDay()]),
+    promediosDiaSemana: orden.map(d => mediaDe(DIAS_SEMANA[new Date(`${d}T12:00:00`).getDay()]))
+  };
+}
+
 // Convierte los acumuladores internos en la forma que consume el widget.
 function cerrarBloque(b, vatRate) {
   const divisor = 1 + (vatRate / 100);
@@ -266,6 +292,21 @@ function cerrarBloque(b, vatRate) {
   });
 
   const diasOrdenados = Object.keys(b._dias).sort();
+
+  // v1.1.0 — Media por día de la semana dentro del periodo, para la
+  // columna "vs Media" del listado diario: dice si un martes concreto se
+  // desvía de lo que suele dar un martes, que es la comparación útil.
+  const acumDS = {};
+  for (const d of diasOrdenados) {
+    const ds = DIAS_SEMANA[new Date(`${d}T12:00:00`).getDay()];
+    if (!acumDS[ds]) acumDS[ds] = { total: 0, n: 0 };
+    acumDS[ds].total += b._dias[d];
+    acumDS[ds].n++;
+  }
+  const mediaDe = (dia) => {
+    const a = acumDS[dia];
+    return (a && a.n > 0) ? round2(a.total / a.n) : 0;
+  };
   const clientesArr = Object.values(b._clientes)
     .map(c => ({ nombre: c.nombre, visitas: c.visitas, importe: round2(c.importe) }))
     .sort((a, b2) => b2.importe - a.importe);
@@ -281,16 +322,21 @@ function cerrarBloque(b, vatRate) {
     comision: round2(b.comision),
     netoProfesional: round2(b.bruto - b.comision),
     ticketMedio: b.citas > 0 ? round2(b.bruto / b.citas) : 0,
-    ingresosPorDia: {
-      labels: diasOrdenados,
-      valores: diasOrdenados.map(d => round2(b._dias[d])),
-      valoresBase: diasOrdenados.map(d => round2(b._dias[d] / divisor)),
-      valoresIva: diasOrdenados.map(d => round2(b._dias[d] - b._dias[d] / divisor)),
-      diasSemana: diasOrdenados.map(d => DIAS_SEMANA[new Date(`${d}T12:00:00`).getDay()])
-    },
+    ingresosPorDia: serieDias(diasOrdenados, b._dias, divisor, mediaDe),
+    // v1.1.0 — Misma serie ordenada por importe descendente, para el
+    // selector Día/Importe del widget. El gráfico siempre va cronológico;
+    // solo cambia la tabla.
+    ingresosPorDiaRanking: serieDias(
+      [...diasOrdenados].sort((x, y) => b._dias[y] - b._dias[x]),
+      b._dias, divisor, mediaDe
+    ),
     porDiaSemana: {
       labels: DIAS_SEMANA.filter(d => b._diaSemana[d] !== undefined),
-      valores: DIAS_SEMANA.filter(d => b._diaSemana[d] !== undefined).map(d => round2(b._diaSemana[d]))
+      valores: DIAS_SEMANA.filter(d => b._diaSemana[d] !== undefined).map(d => round2(b._diaSemana[d])),
+      // Nº de días de cada tipo en el periodo y media por día: sin esto,
+      // comparar un sábado (4 en el mes) con un lunes (5) engaña.
+      conteos: DIAS_SEMANA.filter(d => b._diaSemana[d] !== undefined).map(d => (acumDS[d]?.n || 0)),
+      promedios: DIAS_SEMANA.filter(d => b._diaSemana[d] !== undefined).map(d => mediaDe(d))
     },
     porServicio: servicios,
     porCategoria,
@@ -426,6 +472,24 @@ export const obtenerInformeExternos = webMethod(
           metodo,
           comision: round2(importeCobro * pct / 100)
         });
+      }
+
+      // v1.1.0 — Eje de días continuo: los días sin actividad se rellenan
+      // con 0 para que no desaparezcan de la serie. Un día cerrado a cero
+      // es información; un día ausente falsea la forma del mes.
+      {
+        const cursor = new Date(`${fechaDesde}T12:00:00`);
+        const fin = new Date(`${fechaHasta}T12:00:00`);
+        const todos = [];
+        let guarda = 0;
+        while (cursor <= fin && guarda < 1000) {
+          todos.push(diaMadrid(cursor));
+          cursor.setDate(cursor.getDate() + 1);
+          guarda++;
+        }
+        for (const b of Object.values(bloques)) {
+          for (const d of todos) if (b._dias[d] === undefined) b._dias[d] = 0;
+        }
       }
 
       // ── Cierre ──
