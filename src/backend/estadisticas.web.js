@@ -1,6 +1,129 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.5.3
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.7.0
 // =====================================================
+// v2.7.0 (18 ago 2026): EXTERNOS V2 · BONOS · AUDITORÍA DE COBROS ·
+//                       CATÁLOGO CMS · SANEAMIENTO
+//
+//   Consolida en una sola entrega todo lo que el widget v2.6.2 ya espera
+//   y los defectos abiertos del informe mensual. Base: v2.5.3 desplegada
+//   en Hair-Times y Salón Kami.
+//
+//   ── 1) EXTERNOS: del registro V1 al ledger vivo ───────────────────
+//   El bloque leía SvExternalRecords, colección V1 que dejó de
+//   alimentarse cuando Recepción PRO V2 desvió el cobro externo a
+//   PagoreservasExternos (recepcionProLogic v1.0.37, rama isExternal,
+//   bookingId = 'EXT_<reservaId>'). Resultado: el informe mensual daba
+//   CERO en facturación externa y CERO en comisión, mientras el informe
+//   del día sí las mostraba. Ese ingreso no viajaba a la gestoría.
+//
+//   Además la comisión se cruzaba por CATEGORÍA del servicio contra
+//   ExternalServices.serviceName. El informe del día la resuelve POR
+//   EMPLEADO (cierreExternosLogic v1.1.0). Dos criterios distintos sobre
+//   los mismos cobros = dos cifras distintas. Se adopta el del informe
+//   del día, replicado literal:
+//       ExternalServices.staffResourceId → StaffConfig.wixResourceId
+//       → StaffConfig.displayName ←→ PagoreservasExternos.staff
+//   Sin fallback global: empleado no encontrado ⇒ 0 % (aplicar la
+//   comisión de OTRO externo daría un dato falso).
+//   Fallback compat para filas legacy sin staffResourceId: se indexan
+//   por contactPerson, igual que hace cierreExternosLogic.
+//
+//   UNIÓN CON EL HISTÓRICO (decisión de Jal): PagoreservasExternos del
+//   rango + las filas PAGADAS de SvExternalRecords cuyo 'EXT_' + _id NO
+//   esté ya en el set de bookingId. Dedup EXACTA, no heurística. Así no
+//   se pierden los externos anteriores a marzo-2026, que solo viven en
+//   la colección V1.
+//
+//   FECHA DE CORTE: fechaPago, coherente con el resto del informe
+//   (el bloque de PaymentReservations ya filtra por fechaPago). Las
+//   filas legacy de SvExternalRecords no tienen fechaPago: se usa su
+//   campo date, que es lo único que hay.
+//
+//   BRUTO Y COMISIÓN SEPARADOS: el bruto del externo NO es del salón —
+//   el salón se queda la comisión pactada. `externos` devuelve ambos
+//   (ventaBruta, comisionTotal) y sigue sumando SOLO la comisión al
+//   granTotal, como ya hacía. NUEVO: cada línea del desglose lleva
+//   también su ventaBruta, para que el widget pueda mostrar las dos
+//   columnas sin recalcular nada.
+//
+//   ── 2) BONOS CANJEADOS: el trabajo servido que no deja caja ───────
+//   Un servicio servido contra bono deja un cobro a 0 € en el ledger.
+//   Consecuencia: la profesional que lo ejecutó no lo veía en su
+//   productividad, el servicio no aparecía en el ranking, y el mes con
+//   muchos canjes parecía flojo sin serlo.
+//
+//   CRITERIO FISCAL (decisión de producto, Jal 18-ago-2026): el IVA del
+//   bono se devengó el día que el cliente lo COMPRÓ — ese cobro ya está
+//   en PaymentReservations, ya cuenta en facturación y ya lleva su IVA.
+//   El canje NO vuelve a sumar a ningún total de ingresos: hacerlo sería
+//   declarar dos veces el mismo dinero.
+//
+//   Se añaden TRES bloques nuevos, ninguno de los cuales toca
+//   totalIngresos, totalVentas, totalBaseImponible, totalImpuesto,
+//   porMetodoPago ni granTotal:
+//
+//     · canjesBono   — nº de canjes y valor de tarifa consumido en el
+//                      periodo (KamisuiteVoucherRedemptions.amountSaved,
+//                      filtrado por redeemDate). Con desglose por
+//                      servicio y por profesional.
+//     · trabajoBono  — el mismo trabajo repartido por profesional y por
+//                      servicio, para que producción y ranking lo vean.
+//                      Marcado como servido-contra-bono. NO facturación.
+//     · deudaBonos   — FOTO DE HOY, no del periodo: usos vivos de los
+//                      bonos ACTIVOS por su valor unitario. Es servicio
+//                      ya cobrado que el salón debe y que ocupará agenda.
+//                      Se marca `esFotoActual: true` para que el widget
+//                      no lo presente como una cifra del rango elegido.
+//
+//   El importe de cada canje es el precio de la línea EN EL MOMENTO de
+//   servirlo (amountSaved, lo graba recepcionProLogic). Si el catálogo
+//   sube de precio después, los canjes viejos conservan el precio viejo.
+//   NO se recalculan contra la tarifa actual: sería reescribir historia.
+//
+//   El nombre del servicio del canje se resuelve cruzando
+//   serviceSetupUid contra ServiceCatalog.setupUid. Un canje de un
+//   servicio ya retirado del catálogo sale como 'Servicio retirado' en
+//   lugar de omitirse — el trabajo se hizo.
+//
+//   ── 3) COBROS POR BOTÓN PULSADO (widget v2.6.2) ───────────────────
+//   Vista de AUDITORÍA paralela a la de canales. Cuenta PULSACIONES, no
+//   dinero por canal: 'Mixto' es una fila propia porque fue UN botón, y
+//   su importe NO se reparte. `porBotonPago` + `botonTotales`.
+//   El widget ya lo pinta desde v2.6.2 y hasta hoy salía vacío.
+//
+//   ── 4) CATÁLOGO CMS EN LUGAR DE WIX BOOKINGS ──────────────────────
+//   Categoría y duración de cada servicio se resolvían con
+//   services.queryServices (Wix Bookings). En un salón V2 el catálogo es
+//   CMS puro y NINGÚN servicio existe en Bookings: los mapas salían
+//   vacíos, todo caía en 'OTROS' y la productividad por minutos daba 0.
+//
+//   Ahora la fuente primaria es ServiceCatalog (label → group/family +
+//   duration). Bookings se mantiene como fuente SECUNDARIA porque el
+//   histórico V1 tiene nombres de aquella época ("Tinte (AP)", "Corte de
+//   caballero") que no existen en el catálogo actual; sin ella se
+//   perderían los minutos del histórico. Orden: CMS → Bookings →
+//   palabras clave. Si Bookings no responde (salón V2 puro) no es error.
+//
+//   ── 5) SANEAMIENTO ────────────────────────────────────────────────
+//   · EJE DE DÍAS CONTINUO: se recorre fechaDesde→fechaHasta y se
+//     rellenan con 0 los días sin cobros. Antes el eje se construía solo
+//     con los días que tenían cobros, así que un domingo cerrado
+//     DESAPARECÍA del gráfico en vez de verse a cero.
+//   · PAGINACIÓN de PaymentReservations con el bucle skip/limit que ya
+//     usa obtenerMediaDiaSemanaAnio. El .limit(1000) seco truncaba en
+//     SILENCIO cualquier informe de trimestre o de año.
+//   · EWCM RETIRADO. El parámetro excludeEfectivo y su filtro se
+//     eliminan: incompatible con la obligación VERI*FACTU (registro
+//     íntegro e inalterable de TODAS las operaciones). El widget dejó de
+//     enviarlo en v2.6.1; aquí se retira el código muerto.
+//   · DÍA EN ZONA MADRID: el día se calculaba con toISOString() (UTC).
+//     En verano imputaba al día siguiente los cobros posteriores a las
+//     22:00. Pasa a toLocaleDateString('en-CA', Europe/Madrid), como ya
+//     hacía el resto del archivo desde v2.5.3.
+//
+//   NO SE TOCA: KPIs, IVA, tablaDesglose, ratio ST, clientesPorTipo,
+//   porDiaSemana, productos, comparativa, ni obtenerMediaDiaSemanaAnio.
+//
 // v2.5.3: Fix Día de semana con poco histórico + zona Madrid
 //   - obtenerMediaDiaSemanaAnio funciona aunque solo haya 1 ocurrencia histórica
 //   - Elimina el filtro mínimo cnt < 2
@@ -44,14 +167,46 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const TAG = '[Stats v2.5.3]';
+const VERSION = '2.7.0';
+const TAG = `[Stats v${VERSION}]`;
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
 const CMS_EXTERNAL_RECORDS = 'SvExternalRecords';
+const CMS_PAGOS_EXTERNOS = 'PagoreservasExternos';
+const CMS_STAFF = 'StaffConfig';
+const CMS_SERVICE_CATALOG = 'ServiceCatalog';
+const CMS_VOUCHER_REDEMPTIONS = 'KamisuiteVoucherRedemptions';
+const CMS_VOUCHERS = 'KamisuiteVouchers';
 const CMS_SALON_CONFIG = 'SalonConfig';
+const PREFIJO_PAGO_EXT = 'EXT_';
 const TIMEZONE_MADRID = 'Europe/Madrid';
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DEFAULT_VAT_RATE = 21;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v2.7.0 — HELPERS DE MÓDULO
+// ═══════════════════════════════════════════════════════════════════════════
+
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+// Normaliza el tipoPago del ledger al nombre de BOTÓN que el operador
+// pulsó en Recepción. El widget v2.6.2 espera exactamente estas etiquetas:
+// Tarjeta / Efectivo / Bizum / Mixto / Canje. Cualquier otra cosa se
+// devuelve tal cual (capitalizada) en vez de descartarse: un método
+// desconocido debe VERSE en una vista de auditoría, no desaparecer.
+function normalizarBoton(tipoPago) {
+  const t = String(tipoPago || '').trim();
+  if (!t) return 'Sin especificar';
+  const u = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  if (u.includes('TARJETA')) return 'Tarjeta';
+  if (u.includes('EFECTIVO')) return 'Efectivo';
+  if (u.includes('BIZUM')) return 'Bizum';
+  if (u.includes('MIXTO')) return 'Mixto';
+  if (u.includes('CANJE')) return 'Canje';
+  return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUNCIÓN PRINCIPAL
@@ -59,9 +214,9 @@ const DEFAULT_VAT_RATE = 21;
 
 export const obtenerEstadisticas = webMethod(
   Permissions.Anyone,
-  async ({ fechaDesde, fechaHasta, excludeEfectivo }) => {
+  async ({ fechaDesde, fechaHasta }) => {
     try {
-      console.log(`${TAG} Estadísticas: ${fechaDesde} → ${fechaHasta}${excludeEfectivo ? ' [EWCM]' : ''}`);
+      console.log(`${TAG} Estadísticas: ${fechaDesde} → ${fechaHasta}`);
 
       // ── Helpers ──
       const normCat = (c) => (c || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
@@ -149,36 +304,84 @@ export const obtenerEstadisticas = webMethod(
       // ══════════════════════════════════════════════════════════════
       // 1. LEER PAYMENTRESERVATIONS
       // ══════════════════════════════════════════════════════════════
-      let query = wixData.query(COLECCION_PAGOS);
-      if (fechaDesde) query = query.ge('fechaPago', new Date(fechaDesde));
-      if (fechaHasta) {
-        const hasta = new Date(fechaHasta);
-        hasta.setDate(hasta.getDate() + 1);
-        query = query.lt('fechaPago', hasta);
+      // v2.7.0 — PAGINADO. El .limit(1000) seco truncaba en silencio los
+      // informes de trimestre y de año. Mismo bucle skip/limit que ya usa
+      // obtenerMediaDiaSemanaAnio en este archivo.
+      let pagos = [];
+      {
+        let offset = 0;
+        let hayMas = true;
+        while (hayMas) {
+          let query = wixData.query(COLECCION_PAGOS);
+          if (fechaDesde) query = query.ge('fechaPago', new Date(fechaDesde));
+          if (fechaHasta) {
+            const hasta = new Date(fechaHasta);
+            hasta.setDate(hasta.getDate() + 1);
+            query = query.lt('fechaPago', hasta);
+          }
+          const result = await query.ascending('fechaPago').skip(offset).limit(500).find();
+          const lote = result.items || [];
+          pagos = pagos.concat(lote);
+          hayMas = lote.length === 500;
+          offset += 500;
+        }
       }
-      query = query.limit(1000);
-      const result = await query.find();
-      let pagos = result.items;
       console.log(`${TAG} Registros brutos: ${pagos.length}`);
 
-      // ══════════════════════════════════════════════════════════════
-      // v2.3: EWCM — Filtrar pagos en efectivo
-      // ══════════════════════════════════════════════════════════════
-      if (excludeEfectivo) {
-        const antesFiltro = pagos.length;
-        pagos = pagos.filter(p => {
-          const tipo = (p.tipoPago || '').toUpperCase();
-          return tipo !== 'EFECTIVO';
-        });
-        console.log(`${TAG} EWCM: ${antesFiltro} → ${pagos.length} registros (${antesFiltro - pagos.length} efectivo excluidos)`);
-      }
+      // v2.7.0 — EWCM RETIRADO. Incompatible con VERI*FACTU (registro
+      // íntegro de TODAS las operaciones). El widget dejó de enviar
+      // excludeEfectivo en v2.6.1; aquí desaparece el filtro.
 
       // ══════════════════════════════════════════════════════════════
-      // 2. MAPAS desde queryServices: categoría + duración
+      // 2. MAPAS de categoría + duración
+      //    v2.7.0 — FUENTE PRIMARIA: ServiceCatalog (CMS).
+      //    En un salón V2 el catálogo es CMS puro y NINGÚN servicio existe
+      //    en Wix Bookings: queryServices devolvía vacío, todo caía en
+      //    'OTROS' y la productividad por minutos salía a 0.
+      //    Bookings se mantiene DESPUÉS como fuente secundaria porque el
+      //    histórico V1 tiene nombres de aquella época que no están en el
+      //    catálogo actual. El catálogo NO pisa lo ya cargado.
       // ══════════════════════════════════════════════════════════════
       const mapaNombreCategoria = {};
       const mapaNombreCategoriaLower = {};
       const mapaNombreDuracion = {};
+      // setupUid → label, para nombrar los canjes de bono (§ bloque 4bis).
+      const mapaSetupUidLabel = {};
+
+      try {
+        let catalogo = [];
+        let offCat = 0;
+        let masCat = true;
+        while (masCat) {
+          const r = await wixData.query(CMS_SERVICE_CATALOG)
+            .skip(offCat).limit(200).find({ suppressAuth: true });
+          const lote = r.items || [];
+          catalogo = catalogo.concat(lote);
+          masCat = lote.length === 200;
+          offCat += 200;
+        }
+        for (const it of catalogo) {
+          const nombre = String(it.label || '').trim();
+          if (!nombre) continue;
+          // group es la categoría comercial del catálogo V2; family es el
+          // motor (coloracion/simple/tratamiento/comun/externo). Para el
+          // informe manda group; family solo si no hay group.
+          const cat = String(it.group || it.family || '').trim() || 'SIN CATEGORÍA';
+          const catFinal = canonCat(cat);
+          mapaNombreCategoria[nombre] = catFinal;
+          mapaNombreCategoriaLower[nombre.toLowerCase()] = catFinal;
+          const dur = (typeof it.duration === 'number') ? it.duration : 0;
+          if (dur > 0) {
+            mapaNombreDuracion[nombre] = dur;
+            mapaNombreDuracion[nombre.toLowerCase()] = dur;
+          }
+          const uid = String(it.setupUid || '').trim();
+          if (uid) mapaSetupUidLabel[uid] = nombre;
+        }
+        console.log(`${TAG} ServiceCatalog: ${catalogo.length} servicios, ${Object.keys(mapaSetupUidLabel).length} con setupUid`);
+      } catch (catCmsErr) {
+        console.warn(`${TAG} ServiceCatalog: ${catCmsErr.message}`);
+      }
 
       try {
         const elevatedQuery = elevate(services.queryServices);
@@ -188,16 +391,24 @@ export const obtenerEstadisticas = webMethod(
           const cat = svc.category?.name || 'SIN CATEGORÍA';
           if (nombre) {
             const catFinal = canonCat(cat);
-            mapaNombreCategoria[nombre] = catFinal;
-            mapaNombreCategoriaLower[nombre.toLowerCase()] = catFinal;
+            // v2.7.0 — NO pisar lo que ya vino del catálogo CMS.
+            if (!mapaNombreCategoria[nombre]) {
+              mapaNombreCategoria[nombre] = catFinal;
+              mapaNombreCategoriaLower[nombre.toLowerCase()] = catFinal;
+            }
             const duraciones = svc.schedule?.availabilityConstraints?.sessionDurations || [];
-            mapaNombreDuracion[nombre] = duraciones.length > 0 ? duraciones[0] : 0;
-            mapaNombreDuracion[nombre.toLowerCase()] = mapaNombreDuracion[nombre];
+            const dur = duraciones.length > 0 ? duraciones[0] : 0;
+            if (dur > 0 && !mapaNombreDuracion[nombre]) {
+              mapaNombreDuracion[nombre] = dur;
+              mapaNombreDuracion[nombre.toLowerCase()] = dur;
+            }
           }
         }
-        console.log(`${TAG} ${Object.keys(mapaNombreCategoria).length} servicios, duraciones cargadas`);
+        console.log(`${TAG} Mapas tras Bookings: ${Object.keys(mapaNombreCategoria).length} servicios`);
       } catch (catErr) {
-        console.warn(`${TAG} queryServices: ${catErr.message}`);
+        // Salón V2 puro: Bookings vacío o sin permisos. NO es un error —
+        // el catálogo CMS ya cubrió los servicios vivos.
+        console.warn(`${TAG} queryServices (secundaria, no bloqueante): ${catErr.message}`);
       }
 
       const buscarCategoria = (nombre) => {
@@ -296,6 +507,7 @@ export const obtenerEstadisticas = webMethod(
       let ingresosSTPrincipal = 0;
       let ingresosComplementosST = 0;
       const productividadPorStaff = {};
+      const porBoton = {};   // v2.7.0 — auditoría por botón pulsado
 
       const addToDesglose = (categoria, nombre, precio, subgrupo) => {
         const catNorm = normCat(categoria);
@@ -322,7 +534,9 @@ export const obtenerEstadisticas = webMethod(
         clientesPorTipo[tipoCliente] = (clientesPorTipo[tipoCliente] || 0) + 1;
 
         if (p.fechaPago) {
-          const dia = new Date(p.fechaPago).toISOString().split('T')[0];
+          // v2.7.0 — día en Europe/Madrid. Con toISOString() (UTC) los
+          // cobros posteriores a las 22:00 en verano caían al día siguiente.
+          const dia = new Date(p.fechaPago).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
           ingresosPorDia[dia] = (ingresosPorDia[dia] || 0) + importe;
           const diaSemana = DIAS_SEMANA[new Date(p.fechaPago).getDay()];
           ingresosPorDiaSemana[diaSemana] = (ingresosPorDiaSemana[diaSemana] || 0) + importe;
@@ -332,6 +546,13 @@ export const obtenerEstadisticas = webMethod(
 
         const metodo = p.tipoPago || 'Sin especificar';
         porMetodo[metodo] = (porMetodo[metodo] || 0) + importe;
+
+        // v2.7.0 — AUDITORÍA POR BOTÓN. Cuenta PULSACIONES, no canales:
+        // 'Mixto' es fila propia (fue UN botón) y su importe NO se reparte.
+        const botonKey = normalizarBoton(p.tipoPago);
+        if (!porBoton[botonKey]) porBoton[botonKey] = { metodo: botonKey, n: 0, importe: 0 };
+        porBoton[botonKey].n++;
+        porBoton[botonKey].importe += importe;
 
         const staffRaw = (p.staff || '').toUpperCase();
         if (staffRaw === 'TIENDA_POS') {
@@ -430,72 +651,186 @@ export const obtenerEstadisticas = webMethod(
       }
 
       // ══════════════════════════════════════════════════════════════
-      // 4. EXTERNOS — v2.4: solo status PAGADO
+      // 4. EXTERNOS — v2.7.0: ledger vivo + comisión POR EMPLEADO
+      //
+      //    Fuente primaria : PagoreservasExternos (V2, fechaPago)
+      //    Fuente histórica: SvExternalRecords PAGADO (V1, date), solo
+      //                      las filas cuyo 'EXT_'+_id NO esté ya en el
+      //                      set de bookingId. Dedup exacta.
+      //    Comisión        : por empleado, replicando literal
+      //                      cierreExternosLogic v1.1.0. Sin fallback
+      //                      global: empleado desconocido ⇒ 0 %.
       // ══════════════════════════════════════════════════════════════
       let externosResult = { citas: 0, ventaBruta: 0, comisionTotal: 0, desglose: [] };
       try {
-        let mapaComisiones = {};
-        let comisionFallback = 0;
-        const catResult = await wixData.query(CMS_EXTERNAL_SERVICES).eq('activeStatus', true).limit(100).find();
-        for (const item of (catResult.items || [])) {
-          const nombre = (item.serviceName || '').trim().toUpperCase();
-          const pct = Number(item.commissionPercentage || 0);
-          if (nombre) mapaComisiones[nombre] = pct;
-          if (comisionFallback === 0 && pct > 0) comisionFallback = pct;
+        // ── 4.1 Mapa displayName(UPPER) → % ────────────────────────────
+        //    ExternalServices.staffResourceId → StaffConfig.wixResourceId
+        //    → StaffConfig.displayName, que es lo que Recepción PRO graba
+        //    en PagoreservasExternos.staff.
+        const mapaComisiones = {};
+        try {
+          const catResult = await wixData.query(CMS_EXTERNAL_SERVICES)
+            .eq('activeStatus', true).limit(100).find({ suppressAuth: true });
+          const catalogoExt = catResult.items || [];
+
+          const resourceIds = [];
+          for (const it of catalogoExt) {
+            const rid = it.staffResourceId;
+            if (typeof rid === 'string' && rid.length > 0) resourceIds.push(rid);
+          }
+
+          const displayNamePorResourceId = {};
+          if (resourceIds.length) {
+            try {
+              const staffResult = await wixData.query(CMS_STAFF)
+                .hasSome('wixResourceId', resourceIds).limit(100).find({ suppressAuth: true });
+              for (const st of (staffResult.items || [])) {
+                const rid = st.wixResourceId;
+                if (typeof rid === 'string' && rid.length > 0) {
+                  const dn = st.displayName || st.canonicalName || '';
+                  if (dn) displayNamePorResourceId[rid] = dn;
+                }
+              }
+            } catch (stErr) {
+              console.warn(`${TAG} Externos — StaffConfig: ${stErr.message}`);
+            }
+          }
+
+          for (const item of catalogoExt) {
+            const pct = Number(item.commissionPercentage || 0);
+            const rid = item.staffResourceId;
+            const displayName = (typeof rid === 'string' && rid.length > 0)
+              ? (displayNamePorResourceId[rid] || '')
+              : '';
+            if (displayName) {
+              const key = displayName.trim().toUpperCase();
+              if (key) mapaComisiones[key] = pct;
+            } else {
+              // Fila legacy sin staffResourceId: se indexa por contactPerson,
+              // igual que hace cierreExternosLogic. Se auto-migra sola en
+              // cuanto el operador abre Gestión Externos.
+              const contact = String(item.contactPerson || '').trim().toUpperCase();
+              if (contact) mapaComisiones[contact] = pct;
+            }
+          }
+        } catch (catErr) {
+          console.warn(`${TAG} Externos — ExternalServices: ${catErr.message}`);
         }
 
-        const startRange = new Date(new Date(`${fechaDesde}T00:00:00`).getTime() - 3 * 3600000);
-        const endRange = new Date(new Date(`${fechaHasta}T23:59:59`).getTime() + 3 * 3600000);
-        let allExtRecords = [];
-        let extOffset = 0;
-        let extHasMore = true;
-        while (extHasMore) {
-          const extResult = await wixData.query(CMS_EXTERNAL_RECORDS)
-            .eq('status', 'PAGADO')
-            .ge('date', startRange).le('date', endRange)
-            .ascending('date').skip(extOffset).limit(100).find();
-          allExtRecords = allExtRecords.concat(extResult.items || []);
-          extHasMore = (extResult.items || []).length === 100;
-          extOffset += 100;
+        // ── 4.2 Ledger V2: PagoreservasExternos por fechaPago ──────────
+        const desdeD = new Date(`${fechaDesde}T00:00:00`);
+        const hastaD = new Date(`${fechaHasta}T23:59:59.999`);
+
+        let pagosExt = [];
+        {
+          let offExt = 0;
+          let masExt = true;
+          while (masExt) {
+            const r = await wixData.query(CMS_PAGOS_EXTERNOS)
+              .ge('fechaPago', desdeD).le('fechaPago', hastaD)
+              .ascending('fechaPago').skip(offExt).limit(200)
+              .find({ suppressAuth: true });
+            const lote = r.items || [];
+            pagosExt = pagosExt.concat(lote);
+            masExt = lote.length === 200;
+            offExt += 200;
+          }
         }
 
-        const citasValidas = allExtRecords.filter(item => {
-          if (!item.date) return false;
-          const d = new Date(item.date);
-          const madridDate = d.toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
-          if (madridDate < fechaDesde || madridDate > fechaHasta) return false;
-          return true;
+        // Filtro fino por fecha Madrid (mismo patrón que el informe del día).
+        pagosExt = pagosExt.filter(pe => {
+          if (!pe.fechaPago) return false;
+          const d = new Date(pe.fechaPago).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
+          return d >= fechaDesde && d <= fechaHasta;
         });
 
+        const bookingIdsV2 = new Set();
+        for (const pe of pagosExt) {
+          const bid = String(pe.bookingId || '').trim();
+          if (bid) bookingIdsV2.add(bid);
+        }
+
+        // ── 4.3 Histórico V1: solo lo que NO esté ya en V2 ─────────────
+        //    Necesario para no perder los externos anteriores a marzo-2026,
+        //    que solo viven en SvExternalRecords.
+        let legacyExt = [];
+        try {
+          const startRange = new Date(desdeD.getTime() - 3 * 3600000);
+          const endRange = new Date(hastaD.getTime() + 3 * 3600000);
+          let allExtRecords = [];
+          let extOffset = 0;
+          let extHasMore = true;
+          while (extHasMore) {
+            const extResult = await wixData.query(CMS_EXTERNAL_RECORDS)
+              .eq('status', 'PAGADO')
+              .ge('date', startRange).le('date', endRange)
+              .ascending('date').skip(extOffset).limit(100).find();
+            const lote = extResult.items || [];
+            allExtRecords = allExtRecords.concat(lote);
+            extHasMore = lote.length === 100;
+            extOffset += 100;
+          }
+          legacyExt = allExtRecords.filter(item => {
+            if (!item.date) return false;
+            const madridDate = new Date(item.date).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
+            if (madridDate < fechaDesde || madridDate > fechaHasta) return false;
+            // Dedup EXACTA por la clave que escribe Recepción PRO V2.
+            return !bookingIdsV2.has(PREFIJO_PAGO_EXT + item._id);
+          });
+        } catch (legErr) {
+          console.warn(`${TAG} Externos — histórico V1: ${legErr.message}`);
+        }
+
+        // ── 4.4 Agregación ────────────────────────────────────────────
         let ventaBruta = 0, comisionTotal = 0;
         const desglosePorServicio = {};
-        for (const cita of citasValidas) {
-          const precio = Number(cita.totalPrice || 0);
-          const catUpper = (cita.category || '').trim().toUpperCase();
-          let pctComision = mapaComisiones[catUpper] !== undefined ? mapaComisiones[catUpper] : 0;
-          if (pctComision === 0) {
-            for (const parte of catUpper.split('+').map(p => p.trim())) {
-              if (mapaComisiones[parte] !== undefined) { pctComision = mapaComisiones[parte]; break; }
-            }
-            if (pctComision === 0 && comisionFallback > 0) pctComision = comisionFallback;
-          }
-          const comision = Math.round((precio * pctComision / 100) * 100) / 100;
+
+        const acumular = (nombreServicio, staffNombre, precio) => {
+          const staffUpper = String(staffNombre || '').trim().toUpperCase();
+          const pct = (staffUpper && mapaComisiones[staffUpper] !== undefined)
+            ? mapaComisiones[staffUpper]
+            : 0;
+          const comision = round2(precio * pct / 100);
           ventaBruta += precio;
           comisionTotal += comision;
-          const nombreServicio = cita.modality || cita.category || 'Servicio externo';
-          if (!desglosePorServicio[nombreServicio]) desglosePorServicio[nombreServicio] = { nombre: nombreServicio, count: 0, ventaBruta: 0, comision: 0 };
-          desglosePorServicio[nombreServicio].count++;
-          desglosePorServicio[nombreServicio].ventaBruta += precio;
-          desglosePorServicio[nombreServicio].comision += comision;
+          const key = nombreServicio || 'Servicio externo';
+          if (!desglosePorServicio[key]) {
+            desglosePorServicio[key] = { nombre: key, count: 0, ventaBruta: 0, comision: 0 };
+          }
+          desglosePorServicio[key].count++;
+          desglosePorServicio[key].ventaBruta += precio;
+          desglosePorServicio[key].comision += comision;
+        };
+
+        // V2: el servicio viaja dentro de `descripcion` con el formato
+        // "Nombre (Precio€), Nombre2 (Precio€)" que escribe
+        // marcarPagadoReserva. Se toma el primer token sin su sufijo.
+        for (const pe of pagosExt) {
+          const primerToken = String(pe.descripcion || '').split(',')[0].trim();
+          const idxParen = primerToken.lastIndexOf('(');
+          const nombre = idxParen > 0 ? primerToken.slice(0, idxParen).trim() : primerToken;
+          acumular(nombre, pe.staff, Number(pe.importeTotal || 0));
+        }
+
+        // V1: la fila legacy trae modality/category y no lleva staff, así
+        // que el % se resuelve por el nombre de la externa configurada.
+        for (const cita of legacyExt) {
+          const nombre = cita.modality || cita.category || '';
+          acumular(nombre, cita.staff || cita.contactPerson || '', Number(cita.totalPrice || 0));
         }
 
         externosResult = {
-          citas: citasValidas.length,
-          ventaBruta: Math.round(ventaBruta * 100) / 100,
-          comisionTotal: Math.round(comisionTotal * 100) / 100,
-          desglose: Object.values(desglosePorServicio)
+          citas: pagosExt.length + legacyExt.length,
+          ventaBruta: round2(ventaBruta),
+          comisionTotal: round2(comisionTotal),
+          desglose: Object.values(desglosePorServicio).map(it => ({
+            nombre: it.nombre,
+            count: it.count,
+            ventaBruta: round2(it.ventaBruta),
+            comision: round2(it.comision)
+          }))
         };
-        console.log(`${TAG} Externos: ${citasValidas.length} citas PAGADAS, bruta=${externosResult.ventaBruta}€, comisión=${externosResult.comisionTotal}€`);
+        console.log(`${TAG} Externos: ${pagosExt.length} V2 + ${legacyExt.length} V1 = ${externosResult.citas} citas, bruta=${externosResult.ventaBruta}€, comisión=${externosResult.comisionTotal}€`);
       } catch (extErr) { console.warn(`${TAG} Error externos: ${extErr.message}`); }
 
       // ══════════════════════════════════════════════════════════════
@@ -553,9 +888,166 @@ export const obtenerEstadisticas = webMethod(
       }
 
       // ══════════════════════════════════════════════════════════════
+      // 5bis. BONOS — v2.7.0
+      //
+      //   CRITERIO FISCAL (decisión de producto): el IVA del bono se
+      //   devengó al COMPRARLO. Ese cobro ya está en PaymentReservations,
+      //   ya cuenta en facturación y ya lleva su IVA. El canje NO vuelve a
+      //   sumar a ningún total de ingresos — sería declarar dos veces el
+      //   mismo dinero.
+      //
+      //   Pero el TRABAJO sí se hizo: un servicio servido contra bono deja
+      //   un cobro a 0 € y hasta ahora desaparecía de la productividad y
+      //   del ranking. Estos tres bloques lo hacen visible SIN tocar
+      //   ninguna cifra de facturación.
+      // ══════════════════════════════════════════════════════════════
+      let canjesBono = { disponible: false, n: 0, valorConsumido: 0, porServicio: [], porStaff: [] };
+      let trabajoBono = { disponible: false, n: 0, valorTarifa: 0, porServicio: [], porStaff: [] };
+      let deudaBonos = { disponible: false, esFotoActual: true, bonosVivos: 0, usosPendientes: 0, valorPendiente: 0 };
+
+      try {
+        const desdeD = new Date(`${fechaDesde}T00:00:00`);
+        const hastaD = new Date(`${fechaHasta}T23:59:59.999`);
+
+        let canjes = [];
+        let offC = 0;
+        let masC = true;
+        while (masC) {
+          const r = await wixData.query(CMS_VOUCHER_REDEMPTIONS)
+            .ge('redeemDate', desdeD).le('redeemDate', hastaD)
+            .ascending('redeemDate').skip(offC).limit(200)
+            .find({ suppressAuth: true });
+          const lote = r.items || [];
+          canjes = canjes.concat(lote);
+          masC = lote.length === 200;
+          offC += 200;
+        }
+
+        // Filtro fino por fecha Madrid, coherente con el resto del informe.
+        canjes = canjes.filter(c => {
+          if (!c.redeemDate) return false;
+          const d = new Date(c.redeemDate).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
+          return d >= fechaDesde && d <= fechaHasta;
+        });
+
+        let valorConsumido = 0;
+        const porServicioCanje = {};
+        const porStaffCanje = {};
+
+        for (const c of canjes) {
+          // amountSaved = precio de la línea EN EL MOMENTO de servirla.
+          // Si el catálogo sube después, el canje viejo conserva su precio
+          // viejo. NO se recalcula contra la tarifa actual.
+          const valor = Number(c.amountSaved || 0);
+          valorConsumido += valor;
+
+          const uid = String(c.serviceSetupUid || '').trim();
+          // Servicio retirado del catálogo: el trabajo se hizo igual, así
+          // que se muestra en vez de omitirse.
+          const nombreSvc = (uid && mapaSetupUidLabel[uid]) || (uid ? 'Servicio retirado' : 'Sin servicio');
+          if (!porServicioCanje[nombreSvc]) porServicioCanje[nombreSvc] = { nombre: nombreSvc, cantidad: 0, valor: 0 };
+          porServicioCanje[nombreSvc].cantidad++;
+          porServicioCanje[nombreSvc].valor += valor;
+
+          const staffCanje = normalizarStaff(c.staff) || 'Sin staff';
+          if (!porStaffCanje[staffCanje]) porStaffCanje[staffCanje] = { nombre: staffCanje, cantidad: 0, valor: 0 };
+          porStaffCanje[staffCanje].cantidad++;
+          porStaffCanje[staffCanje].valor += valor;
+        }
+
+        const svcArr = Object.values(porServicioCanje)
+          .map(it => ({ nombre: it.nombre, cantidad: it.cantidad, valor: round2(it.valor) }))
+          .sort((a, b) => b.valor - a.valor);
+        const staffArr = Object.values(porStaffCanje)
+          .map(it => ({ nombre: it.nombre, cantidad: it.cantidad, valor: round2(it.valor) }))
+          .sort((a, b) => b.valor - a.valor);
+
+        canjesBono = {
+          disponible: true,
+          n: canjes.length,
+          valorConsumido: round2(valorConsumido),
+          porServicio: svcArr,
+          porStaff: staffArr
+        };
+
+        // trabajoBono expone lo MISMO desde la óptica de producción, para
+        // que el widget pueda sumarlo al ranking de servicios y a la
+        // productividad marcándolo como servido-contra-bono. Va aparte a
+        // propósito: quien pinte facturación NO debe tocar esto.
+        trabajoBono = {
+          disponible: true,
+          n: canjes.length,
+          valorTarifa: round2(valorConsumido),
+          porServicio: svcArr,
+          porStaff: staffArr
+        };
+
+        console.log(`${TAG} Canjes de bono: ${canjes.length}, valor de tarifa consumido=${canjesBono.valorConsumido}€ (NO suma a facturación)`);
+      } catch (canjeErr) {
+        console.warn(`${TAG} Error canjes de bono: ${canjeErr.message}`);
+      }
+
+      try {
+        // DEUDA PENDIENTE — FOTO DE HOY, no del periodo consultado.
+        // Servicio ya cobrado que el salón debe y que ocupará agenda.
+        // Valor unitario = paidPrice / totalUses (lo que el cliente pagó
+        // realmente por uso, no la tarifa). Si faltan datos, cae a
+        // retailPrice / totalUses.
+        let vivos = [];
+        let offV = 0;
+        let masV = true;
+        while (masV) {
+          const r = await wixData.query(CMS_VOUCHERS)
+            .skip(offV).limit(200).find({ suppressAuth: true });
+          const lote = r.items || [];
+          vivos = vivos.concat(lote);
+          masV = lote.length === 200;
+          offV += 200;
+        }
+
+        const ahora = Date.now();
+        // Booleanos y estados se filtran en JS, no con .eq (regla del
+        // proyecto: .eq sobre Boolean no es fiable en Wix Data).
+        const activos = vivos.filter(v => {
+          if (String(v.status || '').toUpperCase() !== 'ACTIVO') return false;
+          const rest = Number(v.remainingUses || 0);
+          if (rest <= 0) return false;
+          if (v.expirationDate && new Date(v.expirationDate).getTime() < ahora) return false;
+          return true;
+        });
+
+        let usosPendientes = 0;
+        let valorPendiente = 0;
+        for (const v of activos) {
+          const rest = Number(v.remainingUses || 0);
+          const total = Number(v.totalUses || 0);
+          const pagado = Number(v.paidPrice || 0);
+          const tarifa = Number(v.retailPrice || 0);
+          const unitario = total > 0
+            ? (pagado > 0 ? pagado / total : tarifa / total)
+            : 0;
+          usosPendientes += rest;
+          valorPendiente += rest * unitario;
+        }
+
+        deudaBonos = {
+          disponible: true,
+          esFotoActual: true,
+          bonosVivos: activos.length,
+          usosPendientes,
+          valorPendiente: round2(valorPendiente)
+        };
+        console.log(`${TAG} Deuda de bonos (foto de hoy): ${activos.length} bonos vivos, ${usosPendientes} usos, ${deudaBonos.valorPendiente}€`);
+      } catch (deudaErr) {
+        console.warn(`${TAG} Error deuda de bonos: ${deudaErr.message}`);
+      }
+
+      // ══════════════════════════════════════════════════════════════
       // 6. CONSTRUIR RESPUESTA
       // ══════════════════════════════════════════════════════════════
-      if (pagos.length === 0 && externosResult.citas === 0 && productosResult.pedidos === 0) {
+      // v2.7.0 — los canjes de bono cuentan como actividad: un periodo con
+      // solo canjes tuvo trabajo real aunque no entrara caja.
+      if (pagos.length === 0 && externosResult.citas === 0 && productosResult.pedidos === 0 && canjesBono.n === 0) {
         return { ok: true, hayDatos: false };
       }
 
@@ -564,6 +1056,25 @@ export const obtenerEstadisticas = webMethod(
       for (const [ds, total] of Object.entries(ingresosPorDiaSemana)) {
         const count = diasUnicosPorDiaSemana[ds] ? diasUnicosPorDiaSemana[ds].size : 0;
         promedioPorDiaSemana[ds] = count > 0 ? Math.round((total / count) * 100) / 100 : 0;
+      }
+
+      // ── v2.7.0: EJE DE DÍAS CONTINUO ──────────────────────────────
+      //    Antes el eje se construía SOLO con los días que tenían cobros,
+      //    así que un domingo cerrado DESAPARECÍA del gráfico en vez de
+      //    verse a cero, y la serie mentía sobre la forma del mes.
+      //    Ahora se recorre fechaDesde→fechaHasta y se rellena con 0.
+      //    El ranking por importe NO se rellena: un listado de "los días
+      //    que más facturaron" con veinte ceros al final no aporta nada.
+      if (fechaDesde && fechaHasta) {
+        const cursor = new Date(`${fechaDesde}T12:00:00`);
+        const finEje = new Date(`${fechaHasta}T12:00:00`);
+        let guarda = 0;
+        while (cursor <= finEje && guarda < 1000) {
+          const clave = cursor.toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
+          if (ingresosPorDia[clave] === undefined) ingresosPorDia[clave] = 0;
+          cursor.setDate(cursor.getDate() + 1);
+          guarda++;
+        }
       }
 
       // ── Ingresos por día (cronológico) — con IVA + día semana + promedio ──
@@ -602,6 +1113,25 @@ export const obtenerEstadisticas = webMethod(
 
       // ── Método de pago (sin IVA) ──
       const datosMetodoPago = { labels: Object.keys(porMetodo), valores: Object.values(porMetodo) };
+
+      // ── v2.7.0: Cobros por BOTÓN pulsado (auditoría) ──────────────
+      //    Orden fijo para que la tabla no baile entre periodos. Lo que
+      //    no encaje en el orden conocido va al final, pero se muestra.
+      const ORDEN_BOTONES = ['Tarjeta', 'Efectivo', 'Bizum', 'Mixto', 'Canje'];
+      const datosBoton = Object.values(porBoton)
+        .map(b => ({ metodo: b.metodo, n: b.n, importe: round2(b.importe) }))
+        .sort((a, b) => {
+          const ia = ORDEN_BOTONES.indexOf(a.metodo);
+          const ib = ORDEN_BOTONES.indexOf(b.metodo);
+          if (ia === -1 && ib === -1) return b.importe - a.importe;
+          if (ia === -1) return 1;
+          if (ib === -1) return -1;
+          return ia - ib;
+        });
+      const botonTotales = {
+        n: datosBoton.reduce((acc, b) => acc + b.n, 0),
+        importe: round2(datosBoton.reduce((acc, b) => acc + b.importe, 0))
+      };
 
       // ── Staff (sin IVA) ──
       const staffOrdenado = Object.entries(porStaff).sort((a, b) => b[1] - a[1]);
@@ -738,7 +1268,7 @@ export const obtenerEstadisticas = webMethod(
           }))
       };
 
-      console.log(`${TAG} OK: ${pagos.length} pagos, ventas=${totalVentas}€ (base=${ivaGlobal.base}€, IVA=${ivaGlobal.cuota}€ @${vatRate}%), propinas=${totalPropinas}€, ext=${externosResult.citas} PAGADAS/${externosResult.ventaBruta}€${excludeEfectivo ? ' [EWCM]' : ''}`);
+      console.log(`${TAG} OK: ${pagos.length} pagos, ventas=${totalVentas}€ (base=${ivaGlobal.base}€, IVA=${ivaGlobal.cuota}€ @${vatRate}%), propinas=${totalPropinas}€, ext=${externosResult.citas} citas bruta=${externosResult.ventaBruta}€ comisión=${externosResult.comisionTotal}€, canjes=${canjesBono.n}/${canjesBono.valorConsumido}€ (fuera de facturación)`);
 
       return {
         ok: true, hayDatos: true,
@@ -763,7 +1293,15 @@ export const obtenerEstadisticas = webMethod(
         granTotal,
         ratioSTvsComplementos,
         productividadStaff,
-        clientesPorTipo: datosClientes
+        clientesPorTipo: datosClientes,
+        // v2.7.0 — auditoría por botón pulsado (widget v2.6.2)
+        porBotonPago: datosBoton,
+        botonTotales,
+        // v2.7.0 — bonos. NINGUNO suma a facturación: el IVA del bono se
+        // devengó al comprarlo. Ver cabecera del archivo.
+        canjesBono,
+        trabajoBono,
+        deudaBonos
       };
     } catch (error) {
       console.error(`${TAG} Error:`, error);
