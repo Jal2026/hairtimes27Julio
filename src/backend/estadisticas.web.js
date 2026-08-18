@@ -1,6 +1,16 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.7.1
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.7.2
 // =====================================================
+// v2.7.2 (18 ago 2026): DESGLOSE DE EXTERNOS, TODAS LAS LÍNEAS.
+//   El desglose leía SOLO el primer servicio de cada cobro externo y le
+//   imputaba el importe ÍNTEGRO. Un cobro de 76,50€ con pedicura, manicura
+//   y depilación aparecía como una única pedicura de 76,50€: en agosto
+//   salían 3 manicuras tradicionales cuando en el ledger hay 4.
+//   Bruto y comisión TOTALES eran correctos — el fallo era de etiqueta, no
+//   de dinero. Ahora se parten todas las líneas y el importe se reparte
+//   prorrateado, así que la suma cuadra al céntimo aunque el ticket lleve
+//   descuento. Los totales del bloque no cambian.
+//
 // v2.7.1 (18 ago 2026): SEGREGACIÓN FISCAL EN EL DESGLOSE.
 //
 //   DEFECTO. Una línea de servicio de familia 'externo' cobrada DENTRO de
@@ -202,7 +212,7 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const VERSION = '2.7.1';
+const VERSION = '2.7.2';
 const TAG = `[Stats v${VERSION}]`;
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
@@ -892,11 +902,59 @@ export const obtenerEstadisticas = webMethod(
         // V2: el servicio viaja dentro de `descripcion` con el formato
         // "Nombre (Precio€), Nombre2 (Precio€)" que escribe
         // marcarPagadoReserva. Se toma el primer token sin su sufijo.
+        // v2.7.2 — TODAS las líneas del cobro, no solo la primera.
+        //   Antes se tomaba el primer token de `descripcion` y se le
+        //   imputaba el importe ÍNTEGRO del cobro. Con un cobro de varias
+        //   líneas —"Pedicura Spa (45€), Manicura Tradicional (20€),
+        //   Depilación (20€), Descuento -10%"— el desglose mostraba solo la
+        //   pedicura cargando los 76,50€ de las tres. Bruto y comisión
+        //   totales eran correctos; el detalle por servicio, falso.
+        //   Ahora se parte por comas respetando los paréntesis (mismo
+        //   patrón de split que el parseo de PaymentReservations de este
+        //   archivo) y el importe se reparte PRORRATEADO, de modo que la
+        //   suma de las líneas cuadra al céntimo con el importe cobrado
+        //   aunque el ticket llevara descuento.
         for (const pe of pagosExt) {
-          const primerToken = String(pe.descripcion || '').split(',')[0].trim();
-          const idxParen = primerToken.lastIndexOf('(');
-          const nombre = idxParen > 0 ? primerToken.slice(0, idxParen).trim() : primerToken;
-          acumular(nombre, pe.staff, Number(pe.importeTotal || 0));
+          const importeCobro = Number(pe.importeTotal || 0);
+          const desc = String(pe.descripcion || '');
+          const lineas = [];
+          for (const item of desc.split(/,\s*(?=[^)]*(?:\(|$))/)) {
+            const t = item.trim();
+            if (!t) continue;
+            // Descuentos y tokens de anotación no son servicios.
+            if (t.startsWith('🏷️') || t.startsWith('🛒') || t.startsWith('✏️')) continue;
+            const m = t.match(/\(\s*(-?[\d.,]+)\s*€\s*\)\s*$/);
+            const precio = m ? parseFloat(String(m[1]).replace(',', '.')) : 0;
+            let nombre = m ? t.slice(0, t.lastIndexOf('(')).trim() : t;
+            nombre = nombre.replace(/,\s*$/, '').trim();
+            if (!nombre) continue;
+            lineas.push({ nombre, precio: precio > 0 ? precio : 0 });
+          }
+
+          if (!lineas.length) {
+            acumular('Servicio externo', pe.staff, importeCobro);
+            continue;
+          }
+
+          const brutoLineas = lineas.reduce((acc, l) => acc + l.precio, 0);
+          if (brutoLineas <= 0) {
+            // Ninguna línea trae precio: no hay forma de repartir. Todo a la
+            // primera, que es el comportamiento anterior.
+            acumular(lineas[0].nombre, pe.staff, importeCobro);
+            continue;
+          }
+
+          // Prorrateo. El último recibe el resto para que no se pierda ni
+          // se invente un céntimo por redondeo.
+          let repartido = 0;
+          for (let i = 0; i < lineas.length; i++) {
+            const esUltima = (i === lineas.length - 1);
+            const parte = esUltima
+              ? round2(importeCobro - repartido)
+              : round2(importeCobro * (lineas[i].precio / brutoLineas));
+            repartido = round2(repartido + parte);
+            acumular(lineas[i].nombre, pe.staff, parte);
+          }
         }
 
         // V1: la fila legacy trae modality/category y no lleva staff, así
