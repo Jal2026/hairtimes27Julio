@@ -1,10 +1,30 @@
 // =====================================================
 // KAMISUITE - Page Code Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.3
-// FECHA: 6 de julio de 2026
+// VERSION: 1.9.4
+// FECHA: 19 de agosto de 2026
 //
 // CHANGELOG:
+// v1.9.4 (19-Ago-2026) — Borrado de contacto + detector de duplicados.
+//   - NEW: case 'auditarBorrado' → auditarContactoParaBorrado
+//     (fichaClienteLogic v1.9.14). SOLO LECTURA. Responde
+//     'borradoAuditoria' con {borrable, bloqueos, avisos, cascada,
+//     conserva, truncado} para que el widget pinte el modal.
+//   - NEW: case 'eliminarContacto' → eliminarContactoCRM con
+//     confirmado:true. En éxito responde 'contactoEliminado' y RETIRA
+//     el contacto de cachedClientes, para que no siga apareciendo en
+//     el buscador sin necesidad de refrescar la página.
+//     Si el backend lo bloquea, responde 'borradoBloqueado' con los
+//     códigos de bloqueo. Cualquier otro fallo → 'borradoError'.
+//   - NEW: case 'cargarDuplicados' → detectarDuplicadosCRM
+//     (crmToolsLogic v1.1.0). Responde 'duplicadosCargados'.
+//   - Imports ampliados: dos funciones más de fichaClienteLogic y una
+//     más de crmToolsLogic, en los imports que ya existían.
+//   - NINGÚN texto de error del backend viaja al widget, igual que en
+//     v1.9.3: solo códigos. Los mensajes en español los pone el widget.
+//   - Sin cambios en el resto del switch, en cargarCache,
+//     cargarDatosCliente, lanzarClasificacionSexo ni onReady.
+//
 // v1.9.3 (06-Jul-2026) — HOTFIX case 'crearContacto':
 //   - Se retira la llamada a cargarDatosCliente(r.contactId) después
 //     de 'contactoCreado'. Motivo: el widget desktop v1.7.4 / mobile
@@ -118,7 +138,9 @@ import {
   sincronizarClientProfile,
   enviarMensajeInbox,
   getProximasCitasCliente,
-  crearContactoCRM  // v1.9.2
+  crearContactoCRM,             // v1.9.2
+  auditarContactoParaBorrado,   // v1.9.4
+  eliminarContactoCRM           // v1.9.4
 } from 'backend/fichaClienteLogic.web';
 
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
@@ -132,7 +154,8 @@ import {
 // v1.8.0: Herramientas CRM — clasificación demográfica
 import {
   contarContactosSinSexo,
-  clasificarBatchSexo
+  clasificarBatchSexo,
+  detectarDuplicadosCRM  // v1.9.4
 } from 'backend/crmToolsLogic.web';
 
 // v1.9.0: Gestor de cupones nativos Wix
@@ -145,7 +168,7 @@ import {
   eliminarCupon
 } from 'backend/couponsLogic.web';
 
-const TAG = '[FichaCliente][PageCode][1.9.3]';
+const TAG = '[FichaCliente][PageCode][1.9.4]';
 
 let cachedClientes = [];
 let widgetReady    = false;
@@ -578,6 +601,103 @@ async function handleMessage(event) {
         }
       } catch (e) {
         sendToWidget('cuponesError', { message: e.message });
+      }
+      break;
+
+    // ═══════════════════════════════════════════════════════════
+    // v1.9.4 — BORRADO DE CONTACTO
+    // ═══════════════════════════════════════════════════════════
+
+    // Solo lectura. El widget la llama al abrir el modal de borrado,
+    // tanto desde la ficha del cliente como desde la pestaña de
+    // duplicados. No borra nada.
+    case 'auditarBorrado':
+      try {
+        const r = await auditarContactoParaBorrado({ contactId: data.contactId });
+        if (r?.ok) {
+          sendToWidget('borradoAuditoria', {
+            contactId: r.contactId,
+            borrable:  r.borrable,
+            bloqueos:  r.bloqueos,
+            avisos:    r.avisos,
+            cascada:   r.cascada,
+            conserva:  r.conserva,
+            truncado:  r.truncado
+          });
+        } else {
+          sendToWidget('borradoError', { contactId: data.contactId });
+        }
+      } catch (e) {
+        console.error(`${TAG} auditarBorrado excepción:`, e && e.message);
+        sendToWidget('borradoError', { contactId: data.contactId });
+      }
+      break;
+
+    // Borra. `confirmado:true` lo pone este page code, no el widget:
+    // es el acuse de que el operador ha pasado por el modal. El backend
+    // vuelve a auditar por su cuenta antes de destruir nada, así que
+    // esto no es la única defensa.
+    case 'eliminarContacto':
+      try {
+        const r = await eliminarContactoCRM({
+          contactId: data.contactId,
+          confirmado: true
+        });
+
+        if (r?.ok) {
+          // Retirar del caché local para que desaparezca del buscador
+          // sin refrescar la página.
+          cachedClientes = cachedClientes.filter(c => c.contactId !== data.contactId);
+
+          console.log(`${TAG} contacto ${data.contactId} eliminado | filas=${r.totalBorradas} | fallidas=${r.totalFallidas}`);
+
+          sendToWidget('contactoEliminado', {
+            contactId:     data.contactId,
+            totalBorradas: r.totalBorradas,
+            totalFallidas: r.totalFallidas,
+            conserva:      r.conserva,
+            truncado:      r.truncado,
+            totalCache:    cachedClientes.length
+          });
+        } else if (r?.error?.code === 'BLOQUEADO') {
+          sendToWidget('borradoBloqueado', {
+            contactId: data.contactId,
+            bloqueos:  r.bloqueos || []
+          });
+        } else {
+          sendToWidget('borradoError', { contactId: data.contactId });
+        }
+      } catch (e) {
+        console.error(`${TAG} eliminarContacto excepción:`, e && e.message);
+        sendToWidget('borradoError', { contactId: data.contactId });
+      }
+      break;
+
+    // ═══════════════════════════════════════════════════════════
+    // v1.9.4 — DETECTOR DE DUPLICADOS
+    // ═══════════════════════════════════════════════════════════
+    // Recorre TODOS los contactos: es una operación larga. El widget
+    // debe pintar estado de carga y no dispararla al abrir la pestaña
+    // más de una vez.
+    case 'cargarDuplicados':
+      try {
+        const r = await detectarDuplicadosCRM({
+          incluirNombres: data.incluirNombres !== false
+        });
+        if (r?.ok) {
+          console.log(`${TAG} duplicados: ${r.grupos.length} grupos sobre ${r.totalContactos} contactos`);
+          sendToWidget('duplicadosCargados', {
+            grupos:         r.grupos,
+            resumen:        r.resumen,
+            totalContactos: r.totalContactos,
+            truncado:       r.truncado
+          });
+        } else {
+          sendToWidget('duplicadosError', {});
+        }
+      } catch (e) {
+        console.error(`${TAG} cargarDuplicados excepción:`, e && e.message);
+        sendToWidget('duplicadosError', {});
       }
       break;
 
