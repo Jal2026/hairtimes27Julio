@@ -1,7 +1,24 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.104  ·  Marca de FICHA TÉCNICA en el buscador de clientes
+ * VERSION: 1.1.105  ·  Marcas de FICHA y PRODUCTO en el buscador
+ *
+ * v1.1.105 (19 ago 2026) — SEGUNDA INSIGNIA: PRODUCTO ACTIVO 🎁.
+ *
+ *   POR QUÉ. Un bono vendido sobre una ficha no aparece en una cita
+ *   creada sobre su duplicada: la lectura filtra por contactId exacto.
+ *   Nadie ve un error, simplemente no sale el bono. Con la insignia, la
+ *   recepcionista ve al elegir cliente que ahí hay algo contratado.
+ *
+ *   QUÉ MARCA. Bono activo, PRIME activa o tarjeta en vigor. El
+ *   criterio lo fija el backend y es el mismo que usa el bloqueo de
+ *   borrado del CRM: no pueden divergir.
+ *
+ *   El texto del tooltip llega hecho desde el page code v1.0.48 en
+ *   `productoTexto`. El widget no compone nada.
+ *
+ *   Mismas tres funciones de v1.1.104 y una clase CSS más.
+ *   INFORMATIVA: no cambia la selección, no ordena, no bloquea.
  *
  * v1.1.104 (19 ago 2026) — INSIGNIA 📋 EN LOS RESULTADOS DE CLIENTE.
  *
@@ -1866,7 +1883,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.104]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.105]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2805,6 +2822,8 @@ button { font-family: inherit; cursor: pointer; }
 .ks-cli-name { font-size:13px; font-weight:600; color:var(--ks-ink); }
 /* v1.1.104 — insignia de FICHA TÉCNICA. Informativa: no cambia nada del flujo. */
 .ks-ficha-pill { display:inline-block; margin-left:6px; font-size:11px; line-height:1; vertical-align:middle; opacity:.85; }
+/* v1.1.105 — insignia de PRODUCTO ACTIVO (bono / PRIME / tarjeta). Informativa. */
+.ks-prod-pill { display:inline-block; margin-left:4px; font-size:11px; line-height:1; vertical-align:middle; opacity:.85; }
 .ks-cli-sub { font-size:11px; color:var(--ks-ink3); }
 .ks-cli-selected { margin-top:8px; padding:9px 11px; background:oklch(0.97 0.02 255); border:1px solid color-mix(in oklab,#2f6fd9 30%,var(--ks-line)); border-radius:9px; display:flex; align-items:center; justify-content:space-between; }
 .ks-cli-sname { font-size:13px; font-weight:700; color:#2f6fd9; }
@@ -4398,7 +4417,7 @@ button { font-family: inherit; cursor: pointer; }
       this._ultimosClientes = clientes;
       wrap.innerHTML = `<div class="ks-cli-results">${clientes.map((c, i) => `
         <div class="ks-cli-item" data-idx="${i}">
-          <div class="ks-cli-name">${esc(c.nombreCompleto || c.nombre || 'Sin nombre')}${c.tieneFicha ? '<span class="ks-ficha-pill" title="Tiene ficha técnica">📋</span>' : ''}</div>
+          <div class="ks-cli-name">${esc(c.nombreCompleto || c.nombre || 'Sin nombre')}${c.tieneFicha ? '<span class="ks-ficha-pill" title="Tiene ficha técnica">📋</span>' : ''}${c.tieneProducto ? `<span class="ks-prod-pill" title="${esc(c.productoTexto || 'Tiene producto activo')}">🎁</span>` : ''}</div>
           <div class="ks-cli-sub">${esc(c.telefono || '')}${c.email ? ' · ' + esc(c.email) : ''}</div>
         </div>`).join('')}</div>`;
       wrap.querySelectorAll('.ks-cli-item').forEach(it => it.addEventListener('click', () => {
@@ -9817,7 +9836,7 @@ button { font-family: inherit; cursor: pointer; }
       box.style.display = 'block';
       box.innerHTML = clientes.map(c => `
         <div class="fc-cli" data-cid="${esc(c.contactId || '')}" data-nom="${esc(c.nombreCompleto || '')}" data-tel="${esc(c.telefono || '')}">
-          <div class="fc-cli-name">${esc(c.nombreCompleto || '—')}${c.tieneFicha ? '<span class="ks-ficha-pill" title="Tiene ficha técnica">📋</span>' : ''}</div>
+          <div class="fc-cli-name">${esc(c.nombreCompleto || '—')}${c.tieneFicha ? '<span class="ks-ficha-pill" title="Tiene ficha técnica">📋</span>' : ''}${c.tieneProducto ? `<span class="ks-prod-pill" title="${esc(c.productoTexto || 'Tiene producto activo')}">🎁</span>` : ''}</div>
         </div>`).join('');
       box.querySelectorAll('.fc-cli').forEach(el => {
         el.addEventListener('click', () => {
@@ -10332,7 +10351,7 @@ button { font-family: inherit; cursor: pointer; }
       this._espUltimosCli = clientes;
       wrap.innerHTML = `<div class="esp-cli-results">${clientes.map((c, i) => `
         <div class="esp-cli-item" data-idx="${i}">
-          <div class="esp-cli-name">${esc(c.nombreCompleto || c.nombre || 'Sin nombre')}${c.tieneFicha ? '<span class="ks-ficha-pill" title="Tiene ficha técnica">📋</span>' : ''}</div>
+          <div class="esp-cli-name">${esc(c.nombreCompleto || c.nombre || 'Sin nombre')}${c.tieneFicha ? '<span class="ks-ficha-pill" title="Tiene ficha técnica">📋</span>' : ''}${c.tieneProducto ? `<span class="ks-prod-pill" title="${esc(c.productoTexto || 'Tiene producto activo')}">🎁</span>` : ''}</div>
           <div class="esp-cli-sub">${esc(c.telefono || '')}${c.email ? ' · ' + esc(c.email) : ''}</div>
         </div>`).join('')}</div>`;
       wrap.querySelectorAll('.esp-cli-item').forEach(it => it.addEventListener('click', () => {
