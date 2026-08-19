@@ -1,10 +1,18 @@
 // =====================================================
 // KAMISUITE - Page Code Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.4
+// VERSION: 1.9.5
 // FECHA: 19 de agosto de 2026
 //
 // CHANGELOG:
+// v1.9.5 (19-Ago-2026) — La auditoría de borrado reenvía `contenido`.
+//   - El case 'auditarBorrado' añade `contenido` al mensaje
+//     'borradoAuditoria'. Es la clave nueva de fichaClienteLogic
+//     v1.9.15: trae el desglose por gravedad (cobros, bonos, ficha del
+//     cliente y citas) con el TEXTO de las anotaciones, no solo
+//     contadores, para que el modal enseñe lo que se va a perder.
+//   - Un único campo añadido. Nada más cambia en este archivo.
+//
 // v1.9.4 (19-Ago-2026) — Borrado de contacto + detector de duplicados.
 //   - NEW: case 'auditarBorrado' → auditarContactoParaBorrado
 //     (fichaClienteLogic v1.9.14). SOLO LECTURA. Responde
@@ -168,7 +176,7 @@ import {
   eliminarCupon
 } from 'backend/couponsLogic.web';
 
-const TAG = '[FichaCliente][PageCode][1.9.4]';
+const TAG = '[FichaCliente][PageCode][1.9.5]';
 
 let cachedClientes = [];
 let widgetReady    = false;
@@ -620,6 +628,7 @@ async function handleMessage(event) {
             borrable:  r.borrable,
             bloqueos:  r.bloqueos,
             avisos:    r.avisos,
+            contenido: r.contenido,   // v1.9.5
             cascada:   r.cascada,
             conserva:  r.conserva,
             truncado:  r.truncado
