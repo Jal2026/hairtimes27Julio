@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  crmToolsLogic.web.js — Herramientas CRM                      ║
-// ║  KAMISUITE · v1.0.0                                            ║
+// ║  KAMISUITE · v1.1.0                                            ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: Herramientas de mantenimiento y enriquecimiento del CRM.
@@ -16,6 +16,12 @@
 //   - Anthropic Claude API (secret KAMISUITE)
 //
 // CHANGELOG:
+//   v1.1.0 (19-Ago-2026) — Detector de contactos duplicados.
+//     - NEW detectarDuplicadosCRM: recorre TODOS los contactos y los
+//       agrupa por teléfono, por email y por nombre completo.
+//       Alimenta la pestaña "Duplicados" del CRM.
+//     - Sin cambios en contarContactosSinSexo, clasificarBatchSexo ni
+//       _clasificarNombresConClaude.
 //   v1.0.0 (26-May-2026) — Versión inicial
 //     - clasificarBatchSexo: procesa N contactos (offset+limit),
 //       clasifica por nombre con Claude, escribe campo custom.sexo
@@ -29,8 +35,8 @@ import { elevate } from 'wix-auth';
 import { fetch } from 'wix-fetch';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.0.0';
-const TAG = '[CrmTools v1.0.0]';
+const VERSION = '1.1.0';
+const TAG = '[CrmTools v1.1.0]';
 
 // ═══════════════════════════════════════════════════════════════════
 // contarContactosSinSexo
@@ -261,3 +267,274 @@ ${nombres.map((n, i) => `${i + 1}. ${n || '(vacío)'}`).join('\n')}`;
     return nombres.map(() => 'desconocido');
   }
 }
+// ═══════════════════════════════════════════════════════════════════
+// detectarDuplicadosCRM — v1.1.0
+// Recorre TODOS los contactos y devuelve los grupos con más de un
+// contacto que comparten teléfono, email o nombre completo.
+//
+// POR QUÉ EL TELÉFONO ES EL CRITERIO PRINCIPAL:
+//   Wix Contacts NO permite crear dos contactos con el mismo email:
+//   createContact lo rechaza siempre. Con el mismo TELÉFONO sí deja,
+//   lanzando DUPLICATE_CONTACT_EXISTS que el operador puede saltar con
+//   "Crear igualmente" (allowDuplicates:true) desde el propio CRM
+//   (fichaClienteLogic v1.9.11 / widget v1.7.4). Por eso el duplicado
+//   real de este sistema es, casi siempre, un teléfono repetido.
+//   Los grupos por email existen igualmente porque un contacto puede
+//   tener VARIOS emails y coincidir con el secundario de otro.
+//
+// PAGINACIÓN: skip/limit de 1.000 con tope de seguridad en 10.000,
+//   copiado literalmente de cargarTodosContactos (recepcionLogic.web.js),
+//   que es la misma función con la que el CRM llena su caché. Así el
+//   detector ve exactamente el mismo universo que el buscador.
+//
+// INDEXADO: se leen TODOS los emails y TODOS los teléfonos de cada
+//   contacto, no solo el primero. El extractor de emails replica
+//   extraerEmailsContacto de reminderLogic v1.5.0 (info.emails como
+//   array o {items}, c.emails, primaryEmail, loginEmail,
+//   primaryInfo.email). El de teléfonos sigue la misma forma.
+//
+// NORMALIZACIÓN DE TELÉFONO: se queda con los dígitos y compara los
+//   ÚLTIMOS 9. Es lo que hace equivalentes "+34 600 11 22 33",
+//   "0034600112233" y "600112233". Nueve porque es la longitud del
+//   número nacional español. Un número extranjero de menos de 9 dígitos
+//   se compara entero.
+//
+// Payload: { incluirNombres } — opcional, por defecto true.
+//   Los grupos por NOMBRE son ruidosos (homónimos reales) y se marcan
+//   con criterio 'NOMBRE' para que la UI los pueda separar.
+//
+// Devuelve:
+//   { ok, version, totalContactos, truncado, grupos: [
+//       { criterio:'TELEFONO'|'EMAIL'|'NOMBRE', valor, total,
+//         contactos:[{ contactId, nombreCompleto, email, telefono }] }
+//     ] }
+//
+// SOLO LECTURA. Esta función no modifica ni borra nada.
+// ═══════════════════════════════════════════════════════════════════
+
+const DUP_PAGE_SIZE  = 1000;
+const DUP_TOPE_TOTAL = 10000;
+
+function _dupNormalizarTelefono(v) {
+  const digitos = String(v || '').replace(/\D/g, '');
+  if (!digitos) return '';
+  return digitos.length > 9 ? digitos.slice(-9) : digitos;
+}
+
+function _dupNormalizarNombre(v) {
+  return String(v || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')   // fuera acentos
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Réplica del extractor de reminderLogic v1.5.0.
+function _dupExtraerEmails(c) {
+  const out = new Set();
+
+  const push = (raw) => {
+    const e = String((raw && raw.email) || raw || '').toLowerCase().trim();
+    if (e) out.add(e);
+  };
+  const recorrer = (fuente) => {
+    if (!fuente) return;
+    const lista = Array.isArray(fuente)
+      ? fuente
+      : Array.isArray(fuente.items) ? fuente.items : [];
+    for (const entry of lista) push(entry);
+  };
+
+  recorrer(c?.info?.emails);
+  recorrer(c?.emails);
+  push(c?.primaryEmail);
+  push(c?.loginEmail);
+  push(c?.primaryInfo?.email);
+
+  return [...out];
+}
+
+function _dupExtraerTelefonos(c) {
+  const out = new Set();
+
+  const push = (raw) => {
+    const t = _dupNormalizarTelefono((raw && raw.phone) || raw || '');
+    if (t) out.add(t);
+  };
+  const recorrer = (fuente) => {
+    if (!fuente) return;
+    const lista = Array.isArray(fuente)
+      ? fuente
+      : Array.isArray(fuente.items) ? fuente.items : [];
+    for (const entry of lista) push(entry);
+  };
+
+  recorrer(c?.info?.phones);
+  recorrer(c?.phones);
+  push(c?.primaryPhone);
+  push(c?.primaryInfo?.phone);
+
+  return [...out];
+}
+
+// Mismo shape que formatearContacto de recepcionLogic, para que la UI
+// del CRM pinte los duplicados igual que pinta los resultados de búsqueda.
+function _dupFormatear(c) {
+  const infoName = c?.info?.name || {};
+  const nombre   = infoName.first || c?.name?.first || c?.firstName || '';
+  const apellido = infoName.last  || c?.name?.last  || c?.lastName  || '';
+
+  const emails = _dupExtraerEmails(c);
+
+  const phonesArray = c?.info?.phones || c?.phones || [];
+  const phones = Array.isArray(phonesArray) ? phonesArray : [];
+  const telefono = phones[0]?.phone || phones[0] || c?.primaryPhone || '';
+
+  return {
+    contactId: c._id || c.id,
+    nombre: String(nombre).trim(),
+    apellido: String(apellido).trim(),
+    nombreCompleto: `${nombre} ${apellido}`.trim(),
+    email: String(emails[0] || '').trim(),
+    telefono: String(telefono).trim()
+  };
+}
+
+export const detectarDuplicadosCRM = webMethod(
+  Permissions.SiteMember,
+  async (payload) => {
+    const incluirNombres = !(payload && payload.incluirNombres === false);
+
+    console.log(TAG, `detectarDuplicadosCRM — incluirNombres=${incluirNombres}`);
+
+    try {
+      // ── 1. Cargar todos los contactos ──────────────────────────────
+      const queryFn = elevate(contacts.queryContacts);
+      const todos = [];
+      let skip = 0;
+      let hasMore = true;
+      let truncado = false;
+
+      while (hasMore) {
+        const result = await queryFn()
+          .skip(skip)
+          .limit(DUP_PAGE_SIZE)
+          .find({ suppressAuth: true });
+
+        const items = result?.items || [];
+        todos.push(...items);
+
+        if (items.length < DUP_PAGE_SIZE) {
+          hasMore = false;
+        } else {
+          skip += DUP_PAGE_SIZE;
+        }
+
+        if (skip >= DUP_TOPE_TOTAL) {
+          console.warn(TAG, `Tope de seguridad alcanzado (${DUP_TOPE_TOTAL})`);
+          truncado = true;
+          hasMore = false;
+        }
+      }
+
+      console.log(TAG, `Contactos leídos: ${todos.length}`);
+
+      // ── 2. Indexar ─────────────────────────────────────────────────
+      const porTelefono = new Map();
+      const porEmail    = new Map();
+      const porNombre   = new Map();
+
+      const ficha = new Map();   // contactId → objeto formateado
+
+      for (const c of todos) {
+        const id = c._id || c.id;
+        if (!id) continue;
+        if (!ficha.has(id)) ficha.set(id, _dupFormatear(c));
+
+        for (const tel of _dupExtraerTelefonos(c)) {
+          if (!porTelefono.has(tel)) porTelefono.set(tel, new Set());
+          porTelefono.get(tel).add(id);
+        }
+
+        for (const mail of _dupExtraerEmails(c)) {
+          if (!porEmail.has(mail)) porEmail.set(mail, new Set());
+          porEmail.get(mail).add(id);
+        }
+
+        if (incluirNombres) {
+          const f = _dupFormatear(c);
+          const nom = _dupNormalizarNombre(f.nombreCompleto);
+          // Un nombre de una sola letra no identifica a nadie.
+          if (nom && nom.length > 2) {
+            if (!porNombre.has(nom)) porNombre.set(nom, new Set());
+            porNombre.get(nom).add(id);
+          }
+        }
+      }
+
+      // ── 3. Construir grupos ────────────────────────────────────────
+      // Un mismo par de contactos puede coincidir por teléfono Y por
+      // email Y por nombre. Se emite una sola vez, con el criterio más
+      // fuerte: TELEFONO > EMAIL > NOMBRE. La huella es el conjunto de
+      // contactIds ordenado.
+      const grupos = [];
+      const huellasVistas = new Set();
+
+      const volcar = (mapa, criterio) => {
+        for (const [valor, setIds] of mapa.entries()) {
+          if (setIds.size < 2) continue;
+
+          const ids = [...setIds].sort();
+          const huella = ids.join('|');
+          if (huellasVistas.has(huella)) continue;
+          huellasVistas.add(huella);
+
+          grupos.push({
+            criterio,
+            valor,
+            total: ids.length,
+            contactos: ids.map(id => ficha.get(id)).filter(Boolean)
+          });
+        }
+      };
+
+      volcar(porTelefono, 'TELEFONO');
+      volcar(porEmail,    'EMAIL');
+      if (incluirNombres) volcar(porNombre, 'NOMBRE');
+
+      // Los más poblados primero; a igualdad, teléfono antes que email
+      // y email antes que nombre.
+      const peso = { TELEFONO: 0, EMAIL: 1, NOMBRE: 2 };
+      grupos.sort((a, b) =>
+        (peso[a.criterio] - peso[b.criterio]) || (b.total - a.total)
+      );
+
+      const resumen = {
+        telefono: grupos.filter(g => g.criterio === 'TELEFONO').length,
+        email:    grupos.filter(g => g.criterio === 'EMAIL').length,
+        nombre:   grupos.filter(g => g.criterio === 'NOMBRE').length
+      };
+
+      console.log(
+        TAG,
+        `Duplicados: ${grupos.length} grupos ` +
+        `(tel=${resumen.telefono}, email=${resumen.email}, nombre=${resumen.nombre}) ` +
+        `sobre ${todos.length} contactos`
+      );
+
+      return {
+        ok: true,
+        version: VERSION,
+        totalContactos: todos.length,
+        truncado,
+        resumen,
+        grupos
+      };
+
+    } catch (err) {
+      console.error(TAG, 'Error detectarDuplicadosCRM:', err.message);
+      return { ok: false, version: VERSION, error: err.message, grupos: [] };
+    }
+  }
+);
