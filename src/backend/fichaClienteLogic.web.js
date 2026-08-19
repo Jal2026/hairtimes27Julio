@@ -1,8 +1,38 @@
 // =====================================================
 // KAMISUITE - Backend Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.13
-// FECHA: 11 de agosto de 2026
+// VERSION: 1.9.14
+// FECHA: 19 de agosto de 2026
+//
+// v1.9.14 — BORRADO DE CONTACTO DESDE EL CRM.
+//   Dos webMethods NUEVOS al final del archivo. Ninguna función
+//   existente modificada: getFichaCliente, getHistorialCliente,
+//   actualizarContactoCRM, guardarNotaSalon, actualizarFotoCliente,
+//   sincronizarClientProfile, enviarMensajeInbox,
+//   getProximasCitasCliente y crearContactoCRM quedan intactos.
+//
+//     · auditarContactoParaBorrado({contactId}) — SOLO LECTURA.
+//       Devuelve { borrable, bloqueos[], avisos[], cascada{}, conserva{} }.
+//     · eliminarContactoCRM({contactId, confirmado:true}) — borra.
+//       REPITE la auditoría en servidor antes de destruir nada.
+//
+//   Regla de negocio (decisión Jal, 19-ago-2026): solo se conservan
+//   datos contables y por obligación fiscal. Cobros internos, cobros de
+//   externos, facturas/tickets y compras online NO se tocan. Todo lo
+//   demás que cuelgue del contacto se borra en cascada.
+//
+//   Bloquean el borrado: ser miembro del sitio, tener bono activo,
+//   PRIME activa o tarjeta en vigor (incluidas las de regalo). Solo
+//   avisa: citas futuras.
+//
+//   Añadidas dos constantes de colección que este archivo no usaba,
+//   copiadas literalmente de careProfileLogic.web.js:
+//   COLLECTION_CARE_VISIT ('CareVisitRecord') y COLLECTION_CARE_MEDIA
+//   ('CareMedia').
+//
+//   Detalle completo de la regla, del orden de borrado y de por qué el
+//   criterio de "tarjeta en vigor" NO coincide con el de
+//   leerTarjetasCliente: en la cabecera del bloque, al final del archivo.
 //
 // v1.9.13 — MIGRACIÓN DE TRES CANALES DE NOTAS A CMS.
 //   Color, Tratamientos y Notas internas del salón dejan de vivir en
@@ -234,7 +264,7 @@ import { members } from 'wix-members.v2';
 import { accounts } from 'wix-loyalty.v2';
 import { mediaManager } from 'wix-media-backend';
 
-const VERSION = '1.9.13';
+const VERSION = '1.9.14';
 const TAG = `[FichaCliente][${VERSION}]`;
 
 // Colecciones CMS
@@ -244,6 +274,15 @@ const COLLECTION_CARE_PROFILE         = 'ClientCareProfile';
 const COLLECTION_EXTERNAL_RECORDS     = 'SvExternalRecords';
 const COLLECTION_RESERVATIONS_V2      = 'KamisuiteReservations';
 const COLLECTION_MEMBERS_BADGES       = 'Members/Badges';
+
+// v1.9.14 — Colecciones del expediente de Cuidado y Salud. Este archivo
+// no las leía: las nombres están copiados literalmente de
+// careProfileLogic.web.js (COL_CARE_VISIT línea 41, COL_CARE_MEDIA
+// línea 42), que es quien las escribe. CareMedia se enlaza a la visita
+// por 'visitRecordId', NO por contactId — mismo vínculo que usa
+// deleteCareVisit para limpiar sus adjuntos.
+const COLLECTION_CARE_VISIT = 'CareVisitRecord';
+const COLLECTION_CARE_MEDIA = 'CareMedia';
 
 // v1.9.13 — Anotaciones del cliente (Color / Tratamiento / General).
 // Misma colección que usa la FICHA TÉCNICA de Recepción PRO.
@@ -2447,5 +2486,435 @@ export const crearContactoCRM = webMethod(Permissions.Anyone, async (payload) =>
     // El detalle queda en console.error para depuración.
     console.error(`${TAG} crearContactoCRM ERROR:`, e);
     return { ok: false, version: VERSION, error: { code: 'CREATE_FAILED' } };
+  }
+});
+
+// =====================================================
+// v1.9.14 — BORRADO DE CONTACTO DESDE EL CRM
+// =====================================================
+// Dos webMethods nuevos, ninguna función existente tocada:
+//   · auditarContactoParaBorrado — SOLO LECTURA. Dice si el contacto se
+//     puede borrar y qué desaparecería. Alimenta el modal de confirmación.
+//   · eliminarContactoCRM — borra. REPITE la auditoría en servidor antes
+//     de tocar nada: no se fía del resultado que llegue del navegador,
+//     porque entre abrir el modal y confirmar puede haberse vendido un
+//     bono a ese cliente.
+//
+// REGLA DE NEGOCIO (decisión Jal, 19-ago-2026):
+//   Solo se conservan datos contables y por obligación fiscal.
+//
+//   SE CONSERVA, INTACTO — este código NO los toca:
+//     · PaymentReservations  — cobros internos. Se cuentan solo para
+//       informar en el modal. Guardan nombreCliente, importeTotal,
+//       fechaPago, descripcion, staff, tipoPago... como campos propios:
+//       el cobro sigue siendo legible sin el contacto.
+//     · PagoreservasExternos — cobros de staff externo. Ni se consulta:
+//       esa colección NO tiene contactId en su schema (verificado en el
+//       insert de recepcionProLogic v1.0.48, comentario explícito).
+//       Guarda nombreCliente como texto. No hay nada que contar ni borrar.
+//     · Invoices / InvoiceCounters — facturas y tickets. Tampoco tienen
+//       contactId: guardan clientName, clientEmail, clientPhone,
+//       clientVatId y clientLegalName como campos propios (objeto
+//       `documento` de facturacionSalonLogic). Autosuficientes por diseño.
+//     · Compras online — pedidos nativos de Wix eCommerce, fuera del CMS.
+//
+//   SE BORRA EN CASCADA:
+//     · El contacto en Wix Contacts
+//     · ClientProfile, ClientCareProfile
+//     · CareVisitRecord + sus CareMedia
+//     · KamisuiteClientRecords (anotaciones de color, tratamientos y notas)
+//     · KamisuiteVouchers, KamisuitePrimeMemberships, KamisuitePromoCards
+//     · KamisuiteReservations
+//
+//   BLOQUEA EN SECO:
+//     · Es miembro del sitio. Wix rechaza deleteContact mientras exista
+//       el miembro asociado. Existe members.deleteMember() en
+//       wix-members.v2 para borrarlo primero, pero POR DECISIÓN DE
+//       PRODUCTO no se usa: este backend no borra miembros nunca.
+//     · Bono activo, PRIME activa o tarjeta en vigor.
+//
+//   SOLO AVISA, no impide: citas futuras en agenda.
+//
+// ⚠️ EL CRITERIO DE "TARJETA EN VIGOR" NO ES EL DE leerTarjetasCliente.
+//   Aquella función descarta las isGift===true, y hace bien: decide qué
+//   pintar en el área privada del comprador. Ésta decide si se destruye
+//   un registro. Una tarjeta regalo comprada y sin canjear es dinero
+//   cobrado y pendiente de servir, y bloquea igual que las demás.
+//   La diferencia es deliberada: no unificar estos dos criterios.
+//
+// ⚠️ ORDEN DE BORRADO: primero el contacto en Wix, después las filas CMS.
+//   Si deleteContact falla (miembro, permisos, contacto ya borrado), no
+//   se ha destruido todavía nada del CMS y el estado queda íntegro. Al
+//   revés, un fallo de Wix dejaría al cliente sin bonos ni expediente
+//   pero con su ficha viva.
+// =====================================================
+
+const BORRADO_LIMITE_FILAS = 500;
+
+const VOUCHER_STATUS_ACTIVO    = 'ACTIVO';
+const PRIME_STATUS_ACTIVA      = 'ACTIVA';
+const PROMOCARD_STATUS_EMITIDA = 'EMITIDA';
+
+// Caducidad: solo cuenta como caducado si HAY fecha y es pasada.
+// Sin fecha = sin caducidad = sigue vigente. Mismo criterio que usan
+// leerBonosCliente, leerTarjetasCliente y leerPrimeMembershipCliente.
+function estaCaducadoBorrado(v) {
+  if (!v) return false;
+  const t = new Date(v).getTime();
+  if (isNaN(t)) return false;
+  return t < Date.now();
+}
+
+// Lectura tolerante: si la colección no existe en este tenant (caso
+// SvExternalRecords fuera de Hair-Times, WDE0025) devuelve vacío y
+// marca existe=false, sin tumbar la auditoría. Mismo patrón defensivo
+// que ya usa este archivo en leerExternosDeCliente.
+async function leerFilasParaBorrado(coleccion, campo, valor) {
+  try {
+    const r = await wixData.query(coleccion)
+      .eq(campo, valor)
+      .limit(BORRADO_LIMITE_FILAS)
+      .find({ suppressAuth: true });
+
+    const items = r?.items || [];
+    const total = (typeof r?.totalCount === 'number') ? r.totalCount : items.length;
+    return { existe: true, items, total, truncado: total > items.length };
+  } catch (e) {
+    console.warn(`${TAG} leerFilasParaBorrado(${coleccion}) — omitida: ${e.message}`);
+    return { existe: false, items: [], total: 0, truncado: false };
+  }
+}
+
+// Borra fila a fila con wixData.remove — patrón del proyecto
+// (careProfileLogic.deleteCareVisit, akiraLogic, categoriasEditorLogic).
+// No se usa bulkRemove: no hay ni un precedente en el código.
+// Cada fallo individual se registra y no aborta el resto.
+async function borrarFilasCMS(coleccion, items) {
+  let borradas = 0;
+  let fallidas = 0;
+  for (const it of (items || [])) {
+    const id = it && it._id;
+    if (!id) continue;
+    try {
+      await wixData.remove(coleccion, id, { suppressAuth: true });
+      borradas++;
+    } catch (e) {
+      fallidas++;
+      console.warn(`${TAG} borrarFilasCMS(${coleccion}) fila ${id}: ${e.message}`);
+    }
+  }
+  return { borradas, fallidas };
+}
+
+// Auditoría compartida por los dos webMethods.
+// Devuelve SIEMPRE la misma estructura, la pinte el modal o la use el
+// propio borrado como último control antes de destruir.
+async function auditarBorradoInterno(contactId) {
+  const [
+    memberId,
+    bonos,
+    prime,
+    tarjetas,
+    reservas,
+    cobros,
+    clientProfile,
+    careProfile,
+    careVisitas,
+    anotaciones
+  ] = await Promise.all([
+    resolverMemberId(contactId),
+    leerFilasParaBorrado(COLLECTION_VOUCHERS,             'contactId',      contactId),
+    leerFilasParaBorrado(COLLECTION_PRIME_MEMB,           'contactId',      contactId),
+    // OJO: en KamisuitePromoCards el campo del cliente es buyerContactId.
+    leerFilasParaBorrado(COLLECTION_PROMOCARDS,           'buyerContactId', contactId),
+    leerFilasParaBorrado(COLLECTION_RESERVATIONS_V2,      'contactId',      contactId),
+    leerFilasParaBorrado(COLLECTION_PAYMENT_RESERVATIONS, 'contactId',      contactId),
+    leerFilasParaBorrado(COLLECTION_CLIENT_PROFILE,       'contactId',      contactId),
+    leerFilasParaBorrado(COLLECTION_CARE_PROFILE,         'contactId',      contactId),
+    leerFilasParaBorrado(COLLECTION_CARE_VISIT,           'contactId',      contactId),
+    leerFilasParaBorrado(COLLECTION_CLIENT_RECORDS,       REC_CONTACT_ID,   contactId)
+  ]);
+
+  // ── Vigencias ────────────────────────────────────────────────────
+  const bonosActivos = (bonos.items || []).filter(v =>
+    v.status === VOUCHER_STATUS_ACTIVO &&
+    Number(v.remainingUses || 0) > 0 &&
+    !estaCaducadoBorrado(v.expirationDate)
+  );
+
+  const primeActivas = (prime.items || []).filter(p =>
+    p.status === PRIME_STATUS_ACTIVA &&
+    !estaCaducadoBorrado(p.expirationDate)
+  );
+
+  // Sin filtro isGift a propósito — ver cabecera del bloque.
+  const tarjetasVigor = (tarjetas.items || []).filter(t =>
+    t.status === PROMOCARD_STATUS_EMITIDA &&
+    !estaCaducadoBorrado(t.expirationDate)
+  );
+
+  const ahora = new Date();
+  const citasFuturas = (reservas.items || []).filter(r => {
+    if (r.status === 'CANCELADA') return false;
+    if (!r.fechaReserva) return false;
+    const f = new Date(r.fechaReserva);
+    return !isNaN(f) && f.getTime() >= ahora.getTime();
+  });
+
+  // ── Bloqueos ─────────────────────────────────────────────────────
+  const bloqueos = [];
+
+  if (memberId) {
+    bloqueos.push({
+      code: 'ES_MIEMBRO',
+      detalle: 'Tiene cuenta de acceso al Área de Cliente.'
+    });
+  }
+  if (bonosActivos.length > 0) {
+    bloqueos.push({
+      code: 'BONOS_ACTIVOS',
+      cantidad: bonosActivos.length,
+      detalle: bonosActivos.map(v => ({
+        code: String(v.code || ''),
+        servicio: String(v.serviceLabel || ''),
+        usosRestantes: Number(v.remainingUses || 0),
+        caduca: normalizarFechaISOCorta(v.expirationDate)
+      }))
+    });
+  }
+  if (primeActivas.length > 0) {
+    bloqueos.push({
+      code: 'PRIME_ACTIVA',
+      cantidad: primeActivas.length,
+      detalle: primeActivas.map(p => ({
+        code: String(p.code || ''),
+        caduca: normalizarFechaISOCorta(p.expirationDate)
+      }))
+    });
+  }
+  if (tarjetasVigor.length > 0) {
+    bloqueos.push({
+      code: 'TARJETAS_VIGOR',
+      cantidad: tarjetasVigor.length,
+      detalle: tarjetasVigor.map(t => ({
+        code: String(t.code || ''),
+        esRegalo: t.isGift === true,
+        caduca: normalizarFechaISOCorta(t.expirationDate)
+      }))
+    });
+  }
+
+  // ── Avisos (no impiden) ──────────────────────────────────────────
+  const avisos = [];
+  if (citasFuturas.length > 0) {
+    avisos.push({
+      code: 'CITAS_FUTURAS',
+      cantidad: citasFuturas.length,
+      detalle: citasFuturas
+        .sort((a, b) => new Date(a.fechaReserva) - new Date(b.fechaReserva))
+        .slice(0, 10)
+        .map(r => ({
+          fecha: r.fechaReserva ? new Date(r.fechaReserva).toISOString() : '',
+          titulo: String(r.title || r.clientName || ''),
+          staff: String(r.staffName || '')
+        }))
+    });
+  }
+
+  return {
+    borrable: bloqueos.length === 0,
+    bloqueos,
+    avisos,
+    // Lo que desaparecerá si se confirma
+    cascada: {
+      clientProfile: clientProfile.total,
+      careProfile:   careProfile.total,
+      careVisitas:   careVisitas.total,
+      anotaciones:   anotaciones.total,
+      bonos:         bonos.total,
+      prime:         prime.total,
+      tarjetas:      tarjetas.total,
+      reservas:      reservas.total
+    },
+    // Lo que NO se toca — solo informativo para el modal
+    conserva: {
+      cobros: cobros.total
+    },
+    // Material para la fase de borrado, no para la UI
+    _filas: {
+      clientProfile: clientProfile.items,
+      careProfile:   careProfile.items,
+      careVisitas:   careVisitas.items,
+      anotaciones:   anotaciones.items,
+      bonos:         bonos.items,
+      prime:         prime.items,
+      tarjetas:      tarjetas.items,
+      reservas:      reservas.items
+    },
+    _truncado: [
+      clientProfile, careProfile, careVisitas, anotaciones,
+      bonos, prime, tarjetas, reservas
+    ].some(x => x.truncado)
+  };
+}
+
+// =====================================================
+// auditarContactoParaBorrado — SOLO LECTURA
+// Payload: { contactId }
+// =====================================================
+export const auditarContactoParaBorrado = webMethod(Permissions.Anyone, async (payload) => {
+  try {
+    const contactId = String(
+      (payload && (payload.contactId || payload.id || payload._id)) || ''
+    ).trim();
+
+    if (!contactId) {
+      return { ok: false, version: VERSION, error: { code: 'INVALID_INPUT' } };
+    }
+
+    console.log(`${TAG} auditarContactoParaBorrado — contactId: ${contactId}`);
+
+    const a = await auditarBorradoInterno(contactId);
+
+    console.log(
+      `${TAG} auditoría ${contactId} | borrable=${a.borrable} | ` +
+      `bloqueos=${a.bloqueos.map(b => b.code).join(',') || '-'} | ` +
+      `avisos=${a.avisos.map(v => v.code).join(',') || '-'} | ` +
+      `cascada=${JSON.stringify(a.cascada)} | cobrosConservados=${a.conserva.cobros}`
+    );
+
+    return {
+      ok: true,
+      version: VERSION,
+      contactId,
+      borrable: a.borrable,
+      bloqueos: a.bloqueos,
+      avisos: a.avisos,
+      cascada: a.cascada,
+      conserva: a.conserva,
+      truncado: a._truncado
+    };
+
+  } catch (e) {
+    console.error(`${TAG} auditarContactoParaBorrado ERROR:`, e);
+    return { ok: false, version: VERSION, error: { code: 'AUDIT_FAILED' } };
+  }
+});
+
+// =====================================================
+// eliminarContactoCRM — BORRA
+// Payload: { contactId, confirmado }
+// `confirmado` debe llegar en true: es el acuse del operador tras ver
+// el modal. No sustituye a la auditoría, que se repite aquí.
+// =====================================================
+export const eliminarContactoCRM = webMethod(Permissions.Anyone, async (payload) => {
+  try {
+    const contactId = String(
+      (payload && (payload.contactId || payload.id || payload._id)) || ''
+    ).trim();
+    const confirmado = payload && payload.confirmado === true;
+
+    if (!contactId) {
+      return { ok: false, version: VERSION, error: { code: 'INVALID_INPUT' } };
+    }
+    if (!confirmado) {
+      return { ok: false, version: VERSION, error: { code: 'NOT_CONFIRMED' } };
+    }
+
+    console.log(`${TAG} eliminarContactoCRM — contactId: ${contactId}`);
+
+    // ── 1. Auditoría en servidor. Último control antes de destruir. ──
+    const a = await auditarBorradoInterno(contactId);
+
+    if (!a.borrable) {
+      console.warn(
+        `${TAG} eliminarContactoCRM BLOQUEADO ${contactId} | ` +
+        `${a.bloqueos.map(b => b.code).join(',')}`
+      );
+      return {
+        ok: false,
+        version: VERSION,
+        error: { code: 'BLOQUEADO' },
+        bloqueos: a.bloqueos,
+        cascada: a.cascada,
+        conserva: a.conserva
+      };
+    }
+
+    // ── 2. Borrar el contacto en Wix PRIMERO ────────────────────────
+    // Si esto falla, el CMS queda intacto. Ver nota de orden arriba.
+    try {
+      const elevatedDelete = elevate(contacts.deleteContact);
+      await elevatedDelete(contactId, { suppressAuth: true });
+      console.log(`${TAG} ✅ Wix Contacts: contacto ${contactId} eliminado`);
+    } catch (delErr) {
+      const appErr = delErr && delErr.details && delErr.details.applicationError;
+      console.error(
+        `${TAG} ❌ deleteContact falló ${contactId} · code="${(appErr && appErr.code) || '-'}" · ` +
+        `raw="${String(delErr && delErr.message || '')}"`
+      );
+      // Sin texto Wix crudo hacia la UI: el widget pinta su propio mensaje.
+      return { ok: false, version: VERSION, error: { code: 'DELETE_FAILED' } };
+    }
+
+    // ── 3. Cascada CMS. Cada colección es independiente: un fallo no
+    //      aborta las demás, solo se contabiliza. ─────────────────────
+    const resumen = {};
+
+    // CareMedia va ANTES que las visitas: se enlaza por visitRecordId,
+    // no por contactId. Mismo orden que careProfileLogic.deleteCareVisit.
+    let mediaBorradas = 0;
+    let mediaFallidas = 0;
+    for (const visita of (a._filas.careVisitas || [])) {
+      if (!visita || !visita._id) continue;
+      const media = await leerFilasParaBorrado(COLLECTION_CARE_MEDIA, 'visitRecordId', visita._id);
+      if (media.items.length > 0) {
+        const rm = await borrarFilasCMS(COLLECTION_CARE_MEDIA, media.items);
+        mediaBorradas += rm.borradas;
+        mediaFallidas += rm.fallidas;
+      }
+    }
+    resumen.careMedia = { borradas: mediaBorradas, fallidas: mediaFallidas };
+
+    resumen.careVisitas   = await borrarFilasCMS(COLLECTION_CARE_VISIT,     a._filas.careVisitas);
+    resumen.careProfile   = await borrarFilasCMS(COLLECTION_CARE_PROFILE,   a._filas.careProfile);
+    resumen.clientProfile = await borrarFilasCMS(COLLECTION_CLIENT_PROFILE, a._filas.clientProfile);
+    resumen.anotaciones   = await borrarFilasCMS(COLLECTION_CLIENT_RECORDS, a._filas.anotaciones);
+    resumen.bonos         = await borrarFilasCMS(COLLECTION_VOUCHERS,       a._filas.bonos);
+    resumen.prime         = await borrarFilasCMS(COLLECTION_PRIME_MEMB,     a._filas.prime);
+    resumen.tarjetas      = await borrarFilasCMS(COLLECTION_PROMOCARDS,     a._filas.tarjetas);
+    resumen.reservas      = await borrarFilasCMS(COLLECTION_RESERVATIONS_V2, a._filas.reservas);
+
+    const totalBorradas = Object.values(resumen).reduce((s, r) => s + r.borradas, 0);
+    const totalFallidas = Object.values(resumen).reduce((s, r) => s + r.fallidas, 0);
+
+    console.log(
+      `${TAG} ✅ eliminarContactoCRM COMPLETADO ${contactId} | ` +
+      `filas borradas=${totalBorradas} | fallidas=${totalFallidas} | ` +
+      `cobros conservados=${a.conserva.cobros} | detalle=${JSON.stringify(resumen)}`
+    );
+
+    if (a._truncado) {
+      console.warn(
+        `${TAG} ⚠️ ${contactId} superaba ${BORRADO_LIMITE_FILAS} filas en alguna ` +
+        `colección: puede quedar remanente. Repetir el borrado no es posible ` +
+        `(el contacto ya no existe); limpiar desde el CMS si aparece.`
+      );
+    }
+
+    return {
+      ok: true,
+      version: VERSION,
+      contactId,
+      resumen,
+      totalBorradas,
+      totalFallidas,
+      conserva: a.conserva,
+      truncado: a._truncado
+    };
+
+  } catch (e) {
+    console.error(`${TAG} eliminarContactoCRM ERROR:`, e);
+    return { ok: false, version: VERSION, error: { code: 'DELETE_FAILED' } };
   }
 });
