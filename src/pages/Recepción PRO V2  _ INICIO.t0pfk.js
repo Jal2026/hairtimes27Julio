@@ -1,8 +1,28 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.47
+// VERSION: 1.0.48
 // FECHA: 19 de agosto de 2026
+//
+// v1.0.48: Marca de PRODUCTO ACTIVO en el buscador de clientes.
+//          Segunda insignia, junto a la de ficha técnica de v1.0.47.
+//
+//          EL PROBLEMA QUE RESUELVE. Si un bono se vende sobre una
+//          ficha y la cita se crea sobre su duplicada, el bono no
+//          aparece: la lectura filtra por contactId exacto. El fallo es
+//          silencioso y se descubre con el cliente delante diciendo que
+//          tiene sesiones pagadas. Pasa en las dos direcciones: venta
+//          online sobre el contacto de miembro y cita creada en
+//          recepción sobre el otro, o al revés.
+//
+//          · NEW import listarContactosConProductoActivo
+//            (productosKamisuiteLogic.web v1.0.5).
+//          · cargarCacheClientes la llama en el mismo Promise.all y
+//            añade a cada contacto `tieneProducto` y `productoTexto`.
+//            El texto se compone AQUÍ, no en el widget: es el tooltip.
+//          · Igual que la de ficha, va envuelta en su propio catch: si
+//            falla, la base de clientes se carga sin marcas.
+//          · Los tres handlers de búsqueda siguen sin tocarse.
 //
 // v1.0.47: Marca de FICHA TÉCNICA en el buscador de clientes.
 //          El salón tiene contactos duplicados y está metiendo la ficha
@@ -556,6 +576,8 @@ import { listarProductos, venderProductosDesdeAgenda } from 'backend/tiendaProdu
 import { cargarTodosContactos, crearContacto, editarContacto } from 'backend/recepcionLogic.web';
 // v1.0.47 — marca de ficha técnica en el buscador de clientes.
 import { listarContactosConFicha } from 'backend/clientRecordsLogic.web';
+// v1.0.48 — marca de producto activo (bono / PRIME / tarjeta).
+import { listarContactosConProductoActivo } from 'backend/productosKamisuiteLogic.web';
 
 // v1.0.31 — ESPECIALES: venta manual de PRIME / Bonos / Tarjetas.
 import { emitirBonoManual, emitirPrimeManual, emitirTarjetaManual } from 'backend/especialesVentaLogic.web';
@@ -638,7 +660,7 @@ import {
   desactivarFichaClienteRecord
 } from 'backend/clientRecordsLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.47]';
+const TAG = '[RecepcionProCMS v1.0.48]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1283,25 +1305,48 @@ async function cargarCacheClientes() {
     // v1.0.47 — las dos lecturas van en paralelo: la de fichas no añade
     // espera. Va envuelta aparte para que un fallo suyo NUNCA impida
     // cargar la base de clientes, que es lo único imprescindible aquí.
-    const [result, fichas] = await Promise.all([
+    const [result, fichas, productos] = await Promise.all([
       cargarTodosContactos(),
       listarContactosConFicha().catch(e => {
         console.warn(`${TAG} ⚠️ listarContactosConFicha falló: ${e && e.message}`);
         return { contactIds: [] };
+      }),
+      listarContactosConProductoActivo().catch(e => {
+        console.warn(`${TAG} ⚠️ listarContactosConProductoActivo falló: ${e && e.message}`);
+        return { contactIds: [], detalle: {} };
       })
     ]);
 
     if (result.ok) {
       const setFicha = new Set(fichas?.contactIds || []);
+      const detProd  = productos?.detalle || {};
       // Se marca la CACHÉ, no cada búsqueda: los tres buscadores
       // (aside, ESPECIALES y FICHA TÉCNICA) filtran sobre estos mismos
-      // objetos y heredan la marca sin tocar sus handlers.
-      cacheContactos = (result.clientes || []).map(c => ({
-        ...c,
-        tieneFicha: setFicha.has(c.contactId)
-      }));
+      // objetos y heredan las marcas sin tocar sus handlers.
+      cacheContactos = (result.clientes || []).map(c => {
+        const d = detProd[c.contactId];
+        // El texto del tooltip se compone aquí para que el widget solo
+        // tenga que pintarlo.
+        let productoTexto = '';
+        if (d) {
+          const partes = [];
+          if (d.bono)    partes.push('bono activo');
+          if (d.prime)   partes.push('PRIME');
+          if (d.tarjeta) partes.push('tarjeta en vigor');
+          productoTexto = 'Tiene ' + partes.join(' · ');
+        }
+        return {
+          ...c,
+          tieneFicha: setFicha.has(c.contactId),
+          tieneProducto: !!d,
+          productoTexto
+        };
+      });
       cacheReady = true;
-      console.log(`${TAG} Caché: ${cacheContactos.length} clientes · ${setFicha.size} con ficha técnica`);
+      console.log(
+        `${TAG} Caché: ${cacheContactos.length} clientes · ${setFicha.size} con ficha técnica · ` +
+        `${Object.keys(detProd).length} con producto activo`
+      );
       sendResponse('clientesReady', { total: cacheContactos.length });
     } else {
       sendResponse('error', { message: 'Error cargando base de clientes' });
