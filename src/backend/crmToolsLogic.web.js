@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  crmToolsLogic.web.js — Herramientas CRM                      ║
-// ║  KAMISUITE · v1.1.0                                            ║
+// ║  KAMISUITE · v1.1.1                                            ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: Herramientas de mantenimiento y enriquecimiento del CRM.
@@ -16,6 +16,15 @@
 //   - Anthropic Claude API (secret KAMISUITE)
 //
 // CHANGELOG:
+//   v1.1.1 (19-Ago-2026) — Marca de FICHA TÉCNICA en los duplicados.
+//     - detectarDuplicadosCRM devuelve `tieneFicha` por contacto y
+//       `resumen.conFicha`. Sirve para localizar de un vistazo cuál de
+//       los duplicados es el que tiene las anotaciones, que es donde el
+//       salón las está metiendo.
+//     - Una sola query paginada a KamisuiteClientRecords, fuera del
+//       bucle de contactos. No añade una consulta por contacto.
+//     - NEW import wixData ('wix-data'): este archivo no lo usaba.
+//     - Sin cambios en contarContactosSinSexo ni clasificarBatchSexo.
 //   v1.1.0 (19-Ago-2026) — Detector de contactos duplicados.
 //     - NEW detectarDuplicadosCRM: recorre TODOS los contactos y los
 //       agrupa por teléfono, por email y por nombre completo.
@@ -31,12 +40,13 @@
 
 import { Permissions, webMethod } from 'wix-web-module';
 import { contacts } from 'wix-crm-backend';
+import wixData from 'wix-data';   // v1.1.1 — lectura de KamisuiteClientRecords
 import { elevate } from 'wix-auth';
 import { fetch } from 'wix-fetch';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.1.0';
-const TAG = '[CrmTools v1.1.0]';
+const VERSION = '1.1.1';
+const TAG = '[CrmTools v1.1.1]';
 
 // ═══════════════════════════════════════════════════════════════════
 // contarContactosSinSexo
@@ -401,6 +411,77 @@ function _dupFormatear(c) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// v1.1.1 — Contactos CON FICHA TÉCNICA
+// ═══════════════════════════════════════════════════════════════════
+// La FICHA TÉCNICA vive en KamisuiteClientRecords: una fila por
+// anotación, con su tipo (COLOR / TRATAMIENTO / GENERAL). La escriben
+// tanto Recepción PRO como el CRM.
+//
+// Field IDs copiados literalmente de clientRecordsLogic.web.js
+// (F_CONTACT_ID, F_RECORD_TEXT, F_ACTIVE), que es quien crea las filas.
+//
+// UNA sola query paginada para toda la base, no una por contacto: el
+// detector recorre miles de contactos y una consulta por cada uno sería
+// inviable.
+//
+// El filtro de `active` va EN MEMORIA, igual que en fichaClienteLogic y
+// clientRecordsLogic: una fila sin ese campo informado no debe
+// desaparecer por un .eq(active, true).
+//
+// ⚠️ ALCANCE: marca los contactos con anotaciones en el CMS. NO mira
+// las notas públicas ni la nota del cliente, que siguen viviendo en
+// campos personalizados de Wix Contacts. Si hiciera falta incluirlas,
+// es otra entrega y hay que resolver antes la clave real del campo.
+const DUP_COL_RECORDS   = 'KamisuiteClientRecords';
+const DUP_REC_CONTACTID = 'contactId';
+const DUP_REC_TEXT      = 'recordText';
+const DUP_REC_ACTIVE    = 'active';
+const DUP_REC_PAGE      = 1000;
+const DUP_REC_MAX_PAGES = 20;
+
+async function _dupContactosConFicha() {
+  const conFicha = new Set();
+
+  try {
+    let result = await wixData.query(DUP_COL_RECORDS)
+      .limit(DUP_REC_PAGE)
+      .find({ suppressAuth: true });
+
+    let paginas = 0;
+    let filas = 0;
+
+    while (true) {
+      for (const it of (result?.items || [])) {
+        filas++;
+        if (!it) continue;
+        if (it[DUP_REC_ACTIVE] === false) continue;
+        const texto = String(it[DUP_REC_TEXT] || '').trim();
+        if (!texto) continue;
+        const cid = String(it[DUP_REC_CONTACTID] || '').trim();
+        if (cid) conFicha.add(cid);
+      }
+
+      paginas++;
+      if (paginas >= DUP_REC_MAX_PAGES) {
+        console.warn(TAG, `Ficha técnica: tope de ${DUP_REC_MAX_PAGES} páginas alcanzado`);
+        break;
+      }
+      if (!result.hasNext()) break;
+      result = await result.next();
+    }
+
+    console.log(TAG, `Ficha técnica: ${filas} filas leídas, ${conFicha.size} contactos con anotaciones`);
+
+  } catch (err) {
+    // Colección inexistente en una tenant nueva (WDE0025) o cualquier
+    // otro fallo: el detector sigue funcionando, solo que sin la marca.
+    console.warn(TAG, `Ficha técnica no disponible: ${err.message}`);
+  }
+
+  return conFicha;
+}
+
 export const detectarDuplicadosCRM = webMethod(
   Permissions.SiteMember,
   async (payload) => {
@@ -409,6 +490,9 @@ export const detectarDuplicadosCRM = webMethod(
     console.log(TAG, `detectarDuplicadosCRM — incluirNombres=${incluirNombres}`);
 
     try {
+      // ── 0. Contactos con ficha técnica (una sola query) ────────────
+      const conFicha = await _dupContactosConFicha();
+
       // ── 1. Cargar todos los contactos ──────────────────────────────
       const queryFn = elevate(contacts.queryContacts);
       const todos = [];
@@ -450,7 +534,13 @@ export const detectarDuplicadosCRM = webMethod(
       for (const c of todos) {
         const id = c._id || c.id;
         if (!id) continue;
-        if (!ficha.has(id)) ficha.set(id, _dupFormatear(c));
+        if (!ficha.has(id)) {
+          const fc = _dupFormatear(c);
+          // v1.1.1 — marca de FICHA TÉCNICA para localizar de un vistazo
+          // en cuál de los duplicados están las anotaciones.
+          fc.tieneFicha = conFicha.has(id);
+          ficha.set(id, fc);
+        }
 
         for (const tel of _dupExtraerTelefonos(c)) {
           if (!porTelefono.has(tel)) porTelefono.set(tel, new Set());
@@ -510,17 +600,27 @@ export const detectarDuplicadosCRM = webMethod(
         (peso[a.criterio] - peso[b.criterio]) || (b.total - a.total)
       );
 
+      // v1.1.1 — conFicha cuenta los contactos marcados que además
+      // aparecen en algún grupo de duplicados, no los de toda la base.
+      const idsEnGrupos = new Set();
+      for (const g of grupos) {
+        for (const c of (g.contactos || [])) {
+          if (c && c.contactId) idsEnGrupos.add(c.contactId);
+        }
+      }
+
       const resumen = {
         telefono: grupos.filter(g => g.criterio === 'TELEFONO').length,
         email:    grupos.filter(g => g.criterio === 'EMAIL').length,
-        nombre:   grupos.filter(g => g.criterio === 'NOMBRE').length
+        nombre:   grupos.filter(g => g.criterio === 'NOMBRE').length,
+        conFicha: [...idsEnGrupos].filter(id => conFicha.has(id)).length
       };
 
       console.log(
         TAG,
         `Duplicados: ${grupos.length} grupos ` +
         `(tel=${resumen.telefono}, email=${resumen.email}, nombre=${resumen.nombre}) ` +
-        `sobre ${todos.length} contactos`
+        `sobre ${todos.length} contactos | con ficha técnica en grupos: ${resumen.conFicha}`
       );
 
       return {
