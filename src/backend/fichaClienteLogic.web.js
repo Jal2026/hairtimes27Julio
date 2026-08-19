@@ -1,8 +1,43 @@
 // =====================================================
 // KAMISUITE - Backend Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.14
+// VERSION: 1.9.15
 // FECHA: 19 de agosto de 2026
+//
+// v1.9.15 — LA AUDITORÍA DE BORRADO DEVUELVE CONTENIDO, NO SOLO CIFRAS.
+//   Cambia UNA función interna (auditarBorradoInterno) y el shape de
+//   auditarContactoParaBorrado, que gana la clave `contenido`. Todo lo
+//   demás intacto, incluidos eliminarContactoCRM y los nueve webMethods
+//   anteriores. `bloqueos`, `avisos`, `cascada` y `conserva` siguen
+//   devolviéndose igual: quien ya los leía no se entera del cambio.
+//
+//   MOTIVO (decisión Jal, 19-ago-2026): un contador no informa. Saber
+//   que hay "3 anotaciones" no permite decidir si se borra; leer que
+//   una de ellas dice "alérgica a X", sí. El modal tiene que enseñar
+//   el TEXTO, no el número.
+//
+//   ⚠️ NO se busca ninguna palabra clave. No hay detector de alergias
+//   ni lista de términos peligrosos: eso daría por limpia una ficha
+//   que dijera "no tolera el amoniaco" y es justo el fallo que no
+//   podemos permitirnos. Se devuelve el contenido y decide la persona.
+//
+//   Jerarquía pedida, y en este orden se sirve: cobros, bonos, ficha
+//   del cliente, citas.
+//
+//   NUEVO en `contenido`:
+//     · cobros  — total e importe acumulado.
+//     · bonos   — total, activos y ya consumidos o caducados.
+//     · ficha   — anotaciones desglosadas por tipo (COLOR, TRATAMIENTO,
+//                 GENERAL) con el TEXTO de la más reciente de cada una,
+//                 expediente de Cuidado y Salud, número de visitas, y
+//                 las notas públicas y la nota del cliente leídas del
+//                 contacto de Wix (desaparecen con él).
+//     · citas   — total, futuras, y fechas de la primera y la última.
+//
+//   Dos helpers nuevos: leerNotasContactoParaBorrado (una lectura más
+//   del contacto, en el mismo Promise.all, sin latencia añadida) y
+//   desglosarAnotacionesParaBorrado (trabaja sobre las filas que la
+//   auditoría YA había leído: cero queries extra).
 //
 // v1.9.14 — BORRADO DE CONTACTO DESDE EL CRM.
 //   Dos webMethods NUEVOS al final del archivo. Ninguna función
@@ -264,7 +299,7 @@ import { members } from 'wix-members.v2';
 import { accounts } from 'wix-loyalty.v2';
 import { mediaManager } from 'wix-media-backend';
 
-const VERSION = '1.9.14';
+const VERSION = '1.9.15';
 const TAG = `[FichaCliente][${VERSION}]`;
 
 // Colecciones CMS
@@ -2606,6 +2641,71 @@ async function borrarFilasCMS(coleccion, items) {
   return { borradas, fallidas };
 }
 
+// v1.9.15 — Lectura del contacto para el modal de borrado.
+// Las notas públicas y la nota que el cliente escribió desde su Área
+// viven en campos personalizados de Wix Contacts, NO en el CMS: se van
+// con el contacto y no dejan rastro. Por eso hay que enseñarlas antes.
+// Si el contacto no se puede leer, devuelve vacío y la auditoría sigue:
+// el bloqueo y la cascada no dependen de esto.
+async function leerNotasContactoParaBorrado(contactId) {
+  const vacio = { notasPublicas: '', notasCliente: '' };
+  if (!contactId || !isGuid(contactId)) return vacio;
+  try {
+    const elevatedGet = elevate(contacts.getContact);
+    const contact = await elevatedGet(contactId);
+    const ef = contact?.info?.extendedFields || {};
+    return {
+      notasPublicas: String(leerCampoCRM(ef, 'notasPublicas').value || '').trim(),
+      // La clave correcta en CRM_FIELD_DEFS es 'notasClienteSalon'.
+      notasCliente:  String(leerCampoCRM(ef, 'notasClienteSalon').value || '').trim()
+    };
+  } catch (e) {
+    console.warn(`${TAG} leerNotasContactoParaBorrado: ${e.message}`);
+    return vacio;
+  }
+}
+
+// v1.9.15 — Desglose de anotaciones por tipo, con el TEXTO de la más
+// reciente de cada uno. Trabaja sobre las filas que auditarBorradoInterno
+// ya leyó: no lanza ninguna query.
+//
+// El filtro de `active` va en memoria, igual que en leerAnotacionesCliente:
+// una fila sin ese campo informado no debe desaparecer.
+// El texto se recorta a 400 caracteres para el modal; el propósito es que
+// el operador reconozca lo que hay, no leer el expediente entero.
+function desglosarAnotacionesParaBorrado(items) {
+  const RECORTE = 400;
+  const out = {
+    color:       { total: 0, ultimo: '' },
+    tratamiento: { total: 0, ultimo: '' },
+    general:     { total: 0, ultimo: '' }
+  };
+
+  const activas = (items || [])
+    .filter(it => it && it[REC_ACTIVE] !== false)
+    .slice()
+    .sort((a, b) =>
+      new Date(b[REC_RECORD_DATE] || b._createdDate || 0) -
+      new Date(a[REC_RECORD_DATE] || a._createdDate || 0)
+    );
+
+  for (const it of activas) {
+    const tipo  = String(it[REC_RECORD_TYPE] || '').trim().toUpperCase();
+    const texto = String(it[REC_RECORD_TEXT] || '').trim();
+
+    const destino = (tipo === REC_TIPO_COLOR)       ? out.color
+                  : (tipo === REC_TIPO_TRATAMIENTO) ? out.tratamiento
+                  : out.general;
+
+    destino.total++;
+    if (!destino.ultimo && texto) {
+      destino.ultimo = texto.length > RECORTE ? texto.slice(0, RECORTE) + '…' : texto;
+    }
+  }
+
+  return out;
+}
+
 // Auditoría compartida por los dos webMethods.
 // Devuelve SIEMPRE la misma estructura, la pinte el modal o la use el
 // propio borrado como último control antes de destruir.
@@ -2620,7 +2720,8 @@ async function auditarBorradoInterno(contactId) {
     clientProfile,
     careProfile,
     careVisitas,
-    anotaciones
+    anotaciones,
+    notasContacto
   ] = await Promise.all([
     resolverMemberId(contactId),
     leerFilasParaBorrado(COLLECTION_VOUCHERS,             'contactId',      contactId),
@@ -2632,7 +2733,9 @@ async function auditarBorradoInterno(contactId) {
     leerFilasParaBorrado(COLLECTION_CLIENT_PROFILE,       'contactId',      contactId),
     leerFilasParaBorrado(COLLECTION_CARE_PROFILE,         'contactId',      contactId),
     leerFilasParaBorrado(COLLECTION_CARE_VISIT,           'contactId',      contactId),
-    leerFilasParaBorrado(COLLECTION_CLIENT_RECORDS,       REC_CONTACT_ID,   contactId)
+    leerFilasParaBorrado(COLLECTION_CLIENT_RECORDS,       REC_CONTACT_ID,   contactId),
+    // v1.9.15 — una lectura más dentro del mismo Promise.all: sin latencia extra.
+    leerNotasContactoParaBorrado(contactId)
   ]);
 
   // ── Vigencias ────────────────────────────────────────────────────
@@ -2721,10 +2824,58 @@ async function auditarBorradoInterno(contactId) {
     });
   }
 
+  // ── v1.9.15 — Contenido para el modal ────────────────────────────
+  // Orden de gravedad fijado por Jal: cobros, bonos, ficha, citas.
+  const importeCobros = (cobros.items || []).reduce((sum, p) => {
+    const n = Number(p && p.importeTotal);
+    return sum + (isNaN(n) ? 0 : n);
+  }, 0);
+
+  const fechasCitas = (reservas.items || [])
+    .filter(r => r && r.status !== 'CANCELADA' && r.fechaReserva)
+    .map(r => new Date(r.fechaReserva).getTime())
+    .filter(t => !isNaN(t))
+    .sort((a, b) => a - b);
+
+  const anotacionesDesglose = desglosarAnotacionesParaBorrado(anotaciones.items);
+
+  const contenido = {
+    // 1 — COBROS. No se borran, pero se quedan sin ficha a la que volver.
+    cobros: {
+      total: cobros.total,
+      importe: Math.round(importeCobros * 100) / 100
+    },
+    // 2 — BONOS. Los activos ya han bloqueado más arriba; aquí importan
+    // los que sí se van: comprados y ya consumidos o caducados.
+    bonos: {
+      total: bonos.total,
+      activos: bonosActivos.length,
+      consumidosOCaducados: Math.max(0, bonos.total - bonosActivos.length)
+    },
+    // 3 — FICHA DEL CLIENTE. Con TEXTO, no solo contadores.
+    ficha: {
+      color:           anotacionesDesglose.color,
+      tratamiento:     anotacionesDesglose.tratamiento,
+      general:         anotacionesDesglose.general,
+      notasPublicas:   notasContacto.notasPublicas,
+      notasCliente:    notasContacto.notasCliente,
+      tieneExpediente: careProfile.total > 0,
+      careVisitas:     careVisitas.total
+    },
+    // 4 — CITAS.
+    citas: {
+      total: reservas.total,
+      futuras: citasFuturas.length,
+      primera: fechasCitas.length ? new Date(fechasCitas[0]).toISOString() : '',
+      ultima:  fechasCitas.length ? new Date(fechasCitas[fechasCitas.length - 1]).toISOString() : ''
+    }
+  };
+
   return {
     borrable: bloqueos.length === 0,
     bloqueos,
     avisos,
+    contenido,
     // Lo que desaparecerá si se confirma
     cascada: {
       clientProfile: clientProfile.total,
@@ -2787,12 +2938,13 @@ export const auditarContactoParaBorrado = webMethod(Permissions.Anyone, async (p
       ok: true,
       version: VERSION,
       contactId,
-      borrable: a.borrable,
-      bloqueos: a.bloqueos,
-      avisos: a.avisos,
-      cascada: a.cascada,
-      conserva: a.conserva,
-      truncado: a._truncado
+      borrable:  a.borrable,
+      bloqueos:  a.bloqueos,
+      avisos:    a.avisos,
+      contenido: a.contenido,
+      cascada:   a.cascada,
+      conserva:  a.conserva,
+      truncado:  a._truncado
     };
 
   } catch (e) {
