@@ -1,8 +1,26 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.46
-// FECHA: 11 de agosto de 2026
+// VERSION: 1.0.47
+// FECHA: 19 de agosto de 2026
+//
+// v1.0.47: Marca de FICHA TÉCNICA en el buscador de clientes.
+//          El salón tiene contactos duplicados y está metiendo la ficha
+//          en uno solo de ellos; sin marca visible, la recepcionista
+//          tiene que abrirlos uno por uno para saber en cuál está.
+//
+//          · NEW import listarContactosConFicha
+//            (clientRecordsLogic.web v1.0.2).
+//          · cargarCacheClientes la llama EN PARALELO con
+//            cargarTodosContactos y marca cada contacto de la caché con
+//            `tieneFicha`. Una sola llamada al arrancar.
+//          · Se marca LA CACHÉ, no cada handler de búsqueda: así los
+//            tres buscadores —el del aside, el de ESPECIALES y el de
+//            FICHA TÉCNICA— heredan la marca sin tocar ninguno de ellos.
+//          · Si la llamada falla, la caché se carga igual y sin marcas.
+//            La búsqueda de clientes NUNCA depende de esto.
+//          · handleBuscarCliente, handleEspBuscarCliente y
+//            handleFtBuscarCliente: SIN CAMBIOS.
 //
 // v1.0.46: 🩹 FIX handleGuardarFichaCliente — guardaba una sola
 //          anotación por pulsación. El modal de FICHA TÉCNICA tiene
@@ -536,6 +554,8 @@ import { listarProductos, venderProductosDesdeAgenda } from 'backend/tiendaProdu
 
 // Clientes: reutiliza el backend que ya usa la agenda legacy (CRM en memoria).
 import { cargarTodosContactos, crearContacto, editarContacto } from 'backend/recepcionLogic.web';
+// v1.0.47 — marca de ficha técnica en el buscador de clientes.
+import { listarContactosConFicha } from 'backend/clientRecordsLogic.web';
 
 // v1.0.31 — ESPECIALES: venta manual de PRIME / Bonos / Tarjetas.
 import { emitirBonoManual, emitirPrimeManual, emitirTarjetaManual } from 'backend/especialesVentaLogic.web';
@@ -618,7 +638,7 @@ import {
   desactivarFichaClienteRecord
 } from 'backend/clientRecordsLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.46]';
+const TAG = '[RecepcionProCMS v1.0.47]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1260,10 +1280,28 @@ async function handleActualizarBloqueo(msg) {
 async function cargarCacheClientes() {
   sendResponse('clientesLoading', { message: 'Cargando base de clientes…' });
   try {
-    const result = await cargarTodosContactos();
+    // v1.0.47 — las dos lecturas van en paralelo: la de fichas no añade
+    // espera. Va envuelta aparte para que un fallo suyo NUNCA impida
+    // cargar la base de clientes, que es lo único imprescindible aquí.
+    const [result, fichas] = await Promise.all([
+      cargarTodosContactos(),
+      listarContactosConFicha().catch(e => {
+        console.warn(`${TAG} ⚠️ listarContactosConFicha falló: ${e && e.message}`);
+        return { contactIds: [] };
+      })
+    ]);
+
     if (result.ok) {
-      cacheContactos = result.clientes || [];
+      const setFicha = new Set(fichas?.contactIds || []);
+      // Se marca la CACHÉ, no cada búsqueda: los tres buscadores
+      // (aside, ESPECIALES y FICHA TÉCNICA) filtran sobre estos mismos
+      // objetos y heredan la marca sin tocar sus handlers.
+      cacheContactos = (result.clientes || []).map(c => ({
+        ...c,
+        tieneFicha: setFicha.has(c.contactId)
+      }));
       cacheReady = true;
+      console.log(`${TAG} Caché: ${cacheContactos.length} clientes · ${setFicha.size} con ficha técnica`);
       sendResponse('clientesReady', { total: cacheContactos.length });
     } else {
       sendResponse('error', { message: 'Error cargando base de clientes' });
