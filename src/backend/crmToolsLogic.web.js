@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  crmToolsLogic.web.js — Herramientas CRM                      ║
-// ║  KAMISUITE · v1.1.1                                            ║
+// ║  KAMISUITE · v1.1.2                                            ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: Herramientas de mantenimiento y enriquecimiento del CRM.
@@ -16,6 +16,18 @@
 //   - Anthropic Claude API (secret KAMISUITE)
 //
 // CHANGELOG:
+//   v1.1.2 (19-Ago-2026) — Marca de PRODUCTO ACTIVO en los duplicados.
+//     - Cada contacto devuelve además `tieneProducto` y `productoTexto`:
+//       bono activo, PRIME activa o tarjeta en vigor.
+//     - Es el dato que decide cuál de dos duplicados NO se puede tocar.
+//     - Criterio idéntico al del bloqueo de borrado
+//       (fichaClienteLogic v1.9.15) y al de productosKamisuiteLogic
+//       v1.0.5. Tres implementaciones, un solo criterio: si divergen,
+//       el sistema se contradice.
+//     - NO se importa productosKamisuiteLogic: las queries van locales.
+//       Es la lección ya documentada en el proyecto — los imports entre
+//       backends han devuelto listas vacías EN SILENCIO más de una vez,
+//       y una insignia que no aparece es un fallo que nadie diagnostica.
 //   v1.1.1 (19-Ago-2026) — Marca de FICHA TÉCNICA en los duplicados.
 //     - detectarDuplicadosCRM devuelve `tieneFicha` por contacto y
 //       `resumen.conFicha`. Sirve para localizar de un vistazo cuál de
@@ -45,8 +57,8 @@ import { elevate } from 'wix-auth';
 import { fetch } from 'wix-fetch';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.1.1';
-const TAG = '[CrmTools v1.1.1]';
+const VERSION = '1.1.2';
+const TAG = '[CrmTools v1.1.2]';
 
 // ═══════════════════════════════════════════════════════════════════
 // contarContactosSinSexo
@@ -412,6 +424,105 @@ function _dupFormatear(c) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// v1.1.2 — Contactos CON PRODUCTO ACTIVO
+// ═══════════════════════════════════════════════════════════════════
+// Bono activo, PRIME activa o tarjeta en vigor. Criterio idéntico al
+// del bloqueo de borrado: bono con status ACTIVO, usos restantes y sin
+// caducar; PRIME con status ACTIVA sin caducar; tarjeta EMITIDA sin
+// caducar, incluidas las de regalo.
+//
+// OJO: en KamisuitePromoCards el campo del cliente es `buyerContactId`,
+// NO `contactId`.
+//
+// Sin fecha de caducidad = vigente. Una consulta por colección para
+// toda la base, nunca una por contacto.
+const DUP_COL_VOUCHERS   = 'KamisuiteVouchers';
+const DUP_COL_PRIME      = 'KamisuitePrimeMemberships';
+const DUP_COL_PROMOCARDS = 'KamisuitePromoCards';
+
+function _dupCaducado(v) {
+  if (!v) return false;
+  const t = new Date(v).getTime();
+  if (isNaN(t)) return false;
+  return t < Date.now();
+}
+
+async function _dupRecorrerColeccion(coleccion, campoContacto, esVigente) {
+  const ids = new Set();
+  try {
+    let result = await wixData.query(coleccion)
+      .limit(DUP_REC_PAGE)
+      .find({ suppressAuth: true });
+
+    let paginas = 0;
+    while (true) {
+      for (const it of (result?.items || [])) {
+        if (!it || !esVigente(it)) continue;
+        const cid = String(it[campoContacto] || '').trim();
+        if (cid) ids.add(cid);
+      }
+      paginas++;
+      if (paginas >= DUP_REC_MAX_PAGES) {
+        console.warn(TAG, `${coleccion}: tope de páginas alcanzado`);
+        break;
+      }
+      if (!result.hasNext()) break;
+      result = await result.next();
+    }
+  } catch (err) {
+    console.warn(TAG, `${coleccion} no disponible: ${err.message}`);
+  }
+  return ids;
+}
+
+async function _dupContactosConProducto() {
+  const detalle = {};
+  try {
+    const [bonos, prime, tarjetas] = await Promise.all([
+      _dupRecorrerColeccion(DUP_COL_VOUCHERS, 'contactId', it =>
+        it.status === 'ACTIVO' &&
+        Number(it.remainingUses || 0) > 0 &&
+        !_dupCaducado(it.expirationDate)
+      ),
+      _dupRecorrerColeccion(DUP_COL_PRIME, 'contactId', it =>
+        it.status === 'ACTIVA' && !_dupCaducado(it.expirationDate)
+      ),
+      _dupRecorrerColeccion(DUP_COL_PROMOCARDS, 'buyerContactId', it =>
+        it.status === 'EMITIDA' && !_dupCaducado(it.expirationDate)
+      )
+    ]);
+
+    const marcar = (set, clave) => {
+      for (const cid of set) {
+        if (!detalle[cid]) detalle[cid] = { bono: false, prime: false, tarjeta: false };
+        detalle[cid][clave] = true;
+      }
+    };
+    marcar(bonos, 'bono');
+    marcar(prime, 'prime');
+    marcar(tarjetas, 'tarjeta');
+
+    console.log(
+      TAG,
+      `Producto activo: ${Object.keys(detalle).length} contactos ` +
+      `(bonos=${bonos.size}, prime=${prime.size}, tarjetas=${tarjetas.size})`
+    );
+  } catch (err) {
+    console.warn(TAG, `Producto activo no disponible: ${err.message}`);
+  }
+  return detalle;
+}
+
+function _dupTextoProducto(d) {
+  if (!d) return '';
+  const partes = [];
+  if (d.bono)    partes.push('bono activo');
+  if (d.prime)   partes.push('PRIME');
+  if (d.tarjeta) partes.push('tarjeta en vigor');
+  return partes.length ? 'Tiene ' + partes.join(' · ') : '';
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // v1.1.1 — Contactos CON FICHA TÉCNICA
 // ═══════════════════════════════════════════════════════════════════
 // La FICHA TÉCNICA vive en KamisuiteClientRecords: una fila por
@@ -490,8 +601,12 @@ export const detectarDuplicadosCRM = webMethod(
     console.log(TAG, `detectarDuplicadosCRM — incluirNombres=${incluirNombres}`);
 
     try {
-      // ── 0. Contactos con ficha técnica (una sola query) ────────────
-      const conFicha = await _dupContactosConFicha();
+      // ── 0. Marcas: ficha técnica y producto activo ─────────────────
+      // Las dos lecturas en paralelo, fuera del bucle de contactos.
+      const [conFicha, detProducto] = await Promise.all([
+        _dupContactosConFicha(),
+        _dupContactosConProducto()
+      ]);
 
       // ── 1. Cargar todos los contactos ──────────────────────────────
       const queryFn = elevate(contacts.queryContacts);
@@ -539,6 +654,10 @@ export const detectarDuplicadosCRM = webMethod(
           // v1.1.1 — marca de FICHA TÉCNICA para localizar de un vistazo
           // en cuál de los duplicados están las anotaciones.
           fc.tieneFicha = conFicha.has(id);
+          // v1.1.2 — un duplicado con producto activo NO se puede borrar.
+          const dp = detProducto[id];
+          fc.tieneProducto = !!dp;
+          fc.productoTexto = _dupTextoProducto(dp);
           ficha.set(id, fc);
         }
 
@@ -613,14 +732,15 @@ export const detectarDuplicadosCRM = webMethod(
         telefono: grupos.filter(g => g.criterio === 'TELEFONO').length,
         email:    grupos.filter(g => g.criterio === 'EMAIL').length,
         nombre:   grupos.filter(g => g.criterio === 'NOMBRE').length,
-        conFicha: [...idsEnGrupos].filter(id => conFicha.has(id)).length
+        conFicha: [...idsEnGrupos].filter(id => conFicha.has(id)).length,
+        conProducto: [...idsEnGrupos].filter(id => !!detProducto[id]).length
       };
 
       console.log(
         TAG,
         `Duplicados: ${grupos.length} grupos ` +
         `(tel=${resumen.telefono}, email=${resumen.email}, nombre=${resumen.nombre}) ` +
-        `sobre ${todos.length} contactos | con ficha técnica en grupos: ${resumen.conFicha}`
+        `sobre ${todos.length} contactos | ficha=${resumen.conFicha} producto=${resumen.conProducto}`
       );
 
       return {
