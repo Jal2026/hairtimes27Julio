@@ -1,8 +1,29 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA TTS Backend (Wix Velo)
  * Archivo:  backend/akiraTTS.web.js
- * VERSION:  1.0.1
- * FECHA:    17 Julio 2026
+ * VERSION:  1.1.0
+ * FECHA:    19 Agosto 2026
+ *
+ * CAMBIOS v1.0.1 → v1.1.0 — PRONUNCIACIÓN DESDE EL CMS.
+ *   La voz deletreaba "KAMISUITE" y leía mal marcas y extranjerismos. Existía
+ *   solución en el proyecto, pero SOLO en kamisuiteMobile.js (constante
+ *   PRONUNCIACION, línea 97): un mapa hardcodeado con términos de Hair-Times.
+ *   AKIRA nunca la tuvo.
+ *
+ *   No se replica ese mapa en código. "Kamisuit" vale para los treinta
+ *   salones, pero "Kerastás" es de Hair-Times: un salón con Redken, L'Oréal o
+ *   Olaplex necesita los suyos y no puede depender de un despliegue.
+ *
+ *   El mapa vive ahora en la colección AkiraPronunciacion y se aplica aquí,
+ *   en el único punto por el que pasa TODO el texto antes de ir a Google. Así
+ *   cubre AKIRA entera —chat, ayuda y asesor— sin tocar el widget.
+ *
+ *   Caché de 5 minutos, mismo patrón que _getVoiceConfig. Si la colección no
+ *   existe, el mapa queda vacío y la voz suena como hasta ahora: nunca falla
+ *   por esto.
+ *
+ *   ⚠️ kamisuiteMobile.js conserva su constante. Son dos circuitos de voz
+ *   distintos y NO se han unificado en esta entrega.
  *
  * CAMBIOS v1.0.0 → v1.0.1 — FIX: EL BOTÓN "ESCUCHAR" SE APAGABA SIN AUDIO.
  *   akiraSynthesize era webMethod con Permissions.SiteMember. http-functions
@@ -100,6 +121,8 @@ const MAX_TEXT       = 5000;
 
 const C_SALON = 'SalonConfig';
 const C_LOG   = 'AkiraLog';
+// v1.1.0 — Mapa de pronunciación editable por el salón.
+const C_PRON  = 'AkiraPronunciacion';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CATÁLOGO DE VOCES (copia literal de egaelTTS v1.3.0)
@@ -142,6 +165,12 @@ let _tokenCache = { token: null, expiresAt: 0 };
 let _voiceCache = null;
 let _voiceCacheTs = 0;
 const VOICE_CACHE_TTL = 5 * 60 * 1000;
+
+// v1.1.0 — Caché del mapa de pronunciación. Mismo TTL que la voz.
+let _pronCache = null;
+let _pronCacheTs = 0;
+const PRON_CACHE_TTL = 5 * 60 * 1000;
+const PRON_MAX_FILAS = 200;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -225,7 +254,11 @@ export async function akiraSynthesizeCore({ texto, voiceName, speakingRate, pitc
 
       // 3. Construir payload — Chirp 3 HD NO acepta speakingRate ni pitch
       //    (Google los RECHAZA si se envían). Se ignoran en silencio.
-      const cleanText = _sanitizeText(texto);
+      // v1.1.0 — primero se limpia el markdown, después se corrige la
+      // pronunciación. En este orden: si al revés, un término entre
+      // asteriscos no coincidiría por los caracteres pegados.
+      const mapaPron = await _getPronunciacion();
+      const cleanText = _aplicarPronunciacion(_sanitizeText(texto), mapaPron);
       const audioConfig = { audioEncoding: 'MP3' };
       if (family === 'neural2') {
         audioConfig.speakingRate = rate;
@@ -426,6 +459,89 @@ function _sanitizeText(text) {
   t = t.replace(/^-{3,}$/gm, '');
   t = t.replace(/\*(.+?)\*/g, '$1');
   t = t.replace(/\n{3,}/g, '\n\n').trim();
+  return t;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRONUNCIACIÓN — v1.1.0
+// ═══════════════════════════════════════════════════════════════════════════
+// La voz deletreaba "KAMISUITE" y leía marcas y extranjerismos como si fueran
+// español. Se corrige sustituyendo el término por su grafía fonética ANTES de
+// mandar el texto a Google.
+//
+// El mapa NO está en este archivo: vive en la colección AkiraPronunciacion y
+// lo edita cada salón. Campos (IDs, no nombres de columna):
+//   termino  · Texto   — la palabra tal y como aparece escrita
+//   fonetica · Texto   — cómo debe sonar
+//   activo   · Booleano
+//
+// Ejemplos: KAMISUITE→Kamisuit · Kerastase→Kerastás · Bizum→Bísum ·
+//           staff→estaf · check-in→chekin
+//
+// DECISIONES:
+//   · Coincidencia SIN distinguir mayúsculas. Así "KAMISUITE", "Kamisuite" y
+//     "kamisuite" se resuelven con UNA fila y no con tres. A la voz le da
+//     igual la caja del resultado.
+//   · Se sustituye por PALABRAS COMPLETAS (\b). "staff" no debe convertir
+//     "staffing", ni "prime" la palabra "primera".
+//   · Términos ordenados de más largo a más corto: si hay "tinte vegetal" y
+//     "tinte", el largo se aplica primero y el corto no lo parte.
+//   · El término se escapa antes de construir la expresión regular: un salón
+//     puede escribir "L'Oréal" o "check-in" y no debe romper nada.
+//
+// Si la colección no existe o falla, el mapa queda vacío y la voz suena igual
+// que hasta ahora. Esto NUNCA impide reproducir audio.
+
+function _escaparRegex(s) {
+  return String(s).replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+async function _getPronunciacion() {
+  const now = Date.now();
+  if (_pronCache && (now - _pronCacheTs) < PRON_CACHE_TTL) return _pronCache;
+
+  try {
+    const res = await wixData.query(C_PRON)
+      .limit(PRON_MAX_FILAS)
+      .find(AUTH);
+
+    const items = (res.items || [])
+      .filter(r => r && r.activo !== false)
+      .map(r => ({
+        termino:  String(r.termino  || '').trim(),
+        fonetica: String(r.fonetica || '').trim()
+      }))
+      .filter(r => r.termino && r.fonetica)
+      .sort((a, b) => b.termino.length - a.termino.length);
+
+    _pronCache = items;
+    _pronCacheTs = now;
+    console.log(`[${V}] pronunciación: ${items.length} términos cargados`);
+    return _pronCache;
+
+  } catch (e) {
+    console.warn(`[${V}] no se pudo leer ${C_PRON}: ${e.message}`);
+    _pronCache = [];
+    _pronCacheTs = now;
+    return _pronCache;
+  }
+}
+
+function _aplicarPronunciacion(text, mapa) {
+  let t = String(text || '');
+  if (!t || !mapa || !mapa.length) return t;
+
+  let sustituciones = 0;
+  for (const { termino, fonetica } of mapa) {
+    const re = new RegExp('\\b' + _escaparRegex(termino) + '\\b', 'gi');
+    if (re.test(t)) {
+      t = t.replace(re, fonetica);
+      sustituciones++;
+    }
+  }
+  if (sustituciones > 0) {
+    console.log(`[${V}] pronunciación aplicada a ${sustituciones} término(s)`);
+  }
   return t;
 }
 
