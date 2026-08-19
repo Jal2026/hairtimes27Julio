@@ -1,8 +1,33 @@
 // =====================================================
 // KAMISUITE - Editor de Productos Custom Backend
 // =====================================================
-// VERSION: 1.0.4
-// FECHA: 22 de junio de 2026 (v1.0.4: 11 de agosto de 2026)
+// VERSION: 1.0.5
+// FECHA: 22 de junio de 2026 (v1.0.5: 19 de agosto de 2026)
+//
+// v1.0.5 (19-Ago-2026) — NEW listarContactosConProductoActivo.
+//   Devuelve qué contactos tienen HOY un bono activo, una PRIME activa
+//   o una tarjeta en vigor. Solo eso: ni códigos, ni importes, ni
+//   fechas. Aditivo puro, ningún webMethod anterior tocado.
+//
+//   PARA QUÉ. El salón tiene contactos duplicados. Si un bono se vende
+//   sobre una ficha y la cita se crea sobre la otra, el bono no
+//   aparece: la lectura de bonos en la cita filtra por contactId
+//   exacto, sin resolución por nombre ni teléfono. El error es
+//   silencioso y se descubre con el cliente delante. Con esta lista, el
+//   buscador de clientes de Recepción PRO puede marcar esas fichas y la
+//   recepcionista elige sabiendo.
+//
+//   ⚠️ EL CRITERIO DE "ACTIVO" ES EL MISMO QUE USA EL BLOQUEO DE
+//   BORRADO EN fichaClienteLogic v1.9.15. No puede divergir: si el
+//   modal de borrado dice que un contacto tiene un bono activo y el
+//   buscador no lo marca, el sistema se contradice y deja de ser
+//   creíble. Bono: status ACTIVO, usos restantes > 0 y sin caducar.
+//   PRIME: status ACTIVA y sin caducar. Tarjeta: status EMITIDA y sin
+//   caducar, INCLUIDAS las de regalo.
+//
+//   Tres queries paginadas para toda la base, no una por contacto. El
+//   page code la llama UNA vez al arrancar, en paralelo con la carga de
+//   contactos, y filtra en memoria a partir de ahí.
 //
 // MÓDULO: PRIME + Bonos + Tarjetas Promocionales.
 // PANTALLA: /gestorbonosypromociones (interna, backoffice).
@@ -105,7 +130,7 @@ import wixData from 'wix-data';
 import { cargarTodosContactos } from 'backend/recepcionLogic.web'; // v1.0.3 — resolver tel/email para el aviso
 import { getSalonConfig } from 'backend/salonConfigLogic.web';      // v1.0.3 — leer textVoucherAlert/textPrimeAlert/textCardAlert
 
-const TAG = '[ProductosKamisuite][1.0.4]';
+const TAG = '[ProductosKamisuite][1.0.5]';
 
 const CMS_CONFIG = 'KamisuiteProductsConfig';
 const CMS_CAMPAIGNS = 'KamisuitePromoCampaigns';
@@ -1083,6 +1108,131 @@ export const revocarPromoCard = webMethod(
     } catch (error) {
       console.error(`${TAG} ❌ revocarPromoCard:`, error);
       return { success: false, error: error.message };
+    }
+  }
+);
+
+
+// =====================================================
+// listarContactosConProductoActivo — v1.0.5
+// =====================================================
+// Devuelve:
+//   { ok, version, contactIds[], detalle{cid:{bono,prime,tarjeta}},
+//     total, truncado }
+//
+// `detalle` permite que quien lo pinte diga QUÉ tiene el contacto sin
+// volver a preguntar. `contactIds` es la lista plana, para montar un Set.
+//
+// OJO CON EL CAMPO: en KamisuitePromoCards el cliente es
+// `buyerContactId`, NO `contactId`. En bonos y PRIME sí es `contactId`.
+//
+// Caducidad: solo cuenta como caducado si HAY fecha y es pasada. Sin
+// fecha = sin caducidad = vigente. Mismo criterio que leerBonosCliente,
+// leerTarjetasCliente y leerPrimeMembershipCliente.
+//
+// Ante colección inexistente devuelve lo que haya podido leer de las
+// otras dos, con ok:true. Quien lo consuma pinta menos marcas, no falla.
+// =====================================================
+
+const PROD_PAGE_SIZE  = 1000;
+const PROD_MAX_PAGES  = 20;
+
+const PROD_STATUS_VOUCHER   = 'ACTIVO';
+const PROD_STATUS_PRIME     = 'ACTIVA';
+const PROD_STATUS_PROMOCARD = 'EMITIDA';
+
+function _prodCaducado(v) {
+  if (!v) return false;
+  const t = new Date(v).getTime();
+  if (isNaN(t)) return false;
+  return t < Date.now();
+}
+
+// Recorre una colección entera aplicando `esVigente` a cada fila y
+// devolviendo el valor de `campoContacto` de las que pasan el filtro.
+async function _prodRecorrer(coleccion, campoContacto, esVigente) {
+  const ids = new Set();
+  let truncado = false;
+
+  try {
+    let result = await wixData.query(coleccion)
+      .limit(PROD_PAGE_SIZE)
+      .find({ suppressAuth: true });
+
+    let paginas = 0;
+
+    while (true) {
+      for (const it of (result?.items || [])) {
+        if (!it || !esVigente(it)) continue;
+        const cid = String(it[campoContacto] || '').trim();
+        if (cid) ids.add(cid);
+      }
+
+      paginas++;
+      if (paginas >= PROD_MAX_PAGES) {
+        console.warn(TAG, `${coleccion}: tope de ${PROD_MAX_PAGES} páginas alcanzado`);
+        truncado = true;
+        break;
+      }
+      if (!result.hasNext()) break;
+      result = await result.next();
+    }
+
+  } catch (err) {
+    console.warn(TAG, `${coleccion} no disponible: ${err.message}`);
+  }
+
+  return { ids, truncado };
+}
+
+export const listarContactosConProductoActivo = webMethod(
+  Permissions.Anyone,
+  async () => {
+    try {
+      const [bonos, prime, tarjetas] = await Promise.all([
+        _prodRecorrer(CMS_VOUCHERS, 'contactId', it =>
+          it.status === PROD_STATUS_VOUCHER &&
+          Number(it.remainingUses || 0) > 0 &&
+          !_prodCaducado(it.expirationDate)
+        ),
+        _prodRecorrer(CMS_PRIME, 'contactId', it =>
+          it.status === PROD_STATUS_PRIME &&
+          !_prodCaducado(it.expirationDate)
+        ),
+        // Sin filtro isGift: una tarjeta regalo comprada y sin canjear
+        // es un compromiso vivo del salón igual que las demás.
+        _prodRecorrer(CMS_PROMOCARDS, 'buyerContactId', it =>
+          it.status === PROD_STATUS_PROMOCARD &&
+          !_prodCaducado(it.expirationDate)
+        )
+      ]);
+
+      const detalle = {};
+      const marcar = (set, clave) => {
+        for (const cid of set) {
+          if (!detalle[cid]) detalle[cid] = { bono: false, prime: false, tarjeta: false };
+          detalle[cid][clave] = true;
+        }
+      };
+      marcar(bonos.ids,    'bono');
+      marcar(prime.ids,    'prime');
+      marcar(tarjetas.ids, 'tarjeta');
+
+      const contactIds = Object.keys(detalle);
+      const truncado = bonos.truncado || prime.truncado || tarjetas.truncado;
+
+      console.log(
+        TAG,
+        `listarContactosConProductoActivo: ${contactIds.length} contactos ` +
+        `(bonos=${bonos.ids.size}, prime=${prime.ids.size}, tarjetas=${tarjetas.ids.size})` +
+        `${truncado ? ' — TRUNCADO' : ''}`
+      );
+
+      return { ok: true, version: '1.0.5', contactIds, detalle, total: contactIds.length, truncado };
+
+    } catch (err) {
+      console.error(TAG, 'Error listarContactosConProductoActivo:', err.message);
+      return { ok: true, version: '1.0.5', contactIds: [], detalle: {}, total: 0, truncado: false };
     }
   }
 );
