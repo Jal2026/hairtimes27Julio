@@ -1,11 +1,29 @@
 // =====================================================
 // KAMISUITE — Backend: FICHAS DE CLIENTE (CMS-first)
 // =====================================================
-// VERSION: 1.0.1
-// FECHA:   10 de agosto de 2026
+// VERSION: 1.0.2
+// FECHA:   19 de agosto de 2026
 // ARCHIVO: backend/clientRecordsLogic.web.js
 //
 // CHANGELOG
+//   v1.0.2 (19-Ago-2026) — NEW `listarContactosConFicha`.
+//     Devuelve la lista de contactId que tienen al menos una anotación
+//     activa con texto. Nada más: ni el texto, ni el tipo, ni la fecha.
+//
+//     PARA QUÉ: el salón tiene contactos duplicados y está metiendo la
+//     ficha técnica en uno solo de ellos. Sin una marca visible, la
+//     recepcionista tiene que abrir uno por uno para saber en cuál
+//     está. Con esto, el buscador de clientes de Recepción PRO puede
+//     pintar una insignia junto al nombre.
+//
+//     UNA sola query paginada para toda la base, no una por contacto:
+//     el buscador maneja miles de contactos en memoria y consultar por
+//     cada uno sería inviable. El page code la llama UNA vez al
+//     arrancar, en paralelo con la carga de contactos, y a partir de
+//     ahí filtra en memoria sin volver al backend.
+//
+//     Aditivo puro. No toca getFichaClienteRecords,
+//     guardarFichaClienteRecord ni desactivarFichaClienteRecord.
 //   v1.0.1 (10-Ago-2026) — El MENSAJE QUE EL CLIENTE DEJA AL RESERVAR
 //     ONLINE viaja a la ficha. Vive en `KamisuiteReservations.notes`:
 //     lo escribe el widget público (`state.nota` → `notas` →
@@ -93,7 +111,7 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const TAG = `[ClientRecords][${VERSION}]`;
 
 // =====================================================
@@ -742,6 +760,81 @@ export const desactivarFichaClienteRecord = webMethod(
     } catch (e) {
       console.error(`${TAG} ❌ desactivarFichaClienteRecord:`, e);
       return { ok: false, version: VERSION, error: safeErr(e) };
+    }
+  }
+);
+
+
+// =====================================================
+// listarContactosConFicha — v1.0.2
+// =====================================================
+// Devuelve { ok, version, contactIds[], total, truncado }.
+//
+// Criterio de "tiene ficha": al menos una fila en KamisuiteClientRecords
+// con texto y que no esté desactivada. Da igual el tipo (COLOR,
+// TRATAMIENTO o GENERAL) y da igual el origen (RECEPCION, CRM o
+// CLIENTE): la ficha del cliente es una sola.
+//
+// El filtro de `active` va EN MEMORIA a propósito, igual que en el
+// resto del archivo: una fila sin ese campo informado no debe
+// desaparecer por un .eq(active, true).
+//
+// Ante colección inexistente (tenant nueva, WDE0025) devuelve lista
+// vacía con ok:true. Quien lo consuma pinta cero insignias, no falla.
+// =====================================================
+
+const FICHA_PAGE_SIZE  = 1000;
+const FICHA_MAX_PAGES   = 20;
+
+export const listarContactosConFicha = webMethod(
+  Permissions.Anyone,
+  async () => {
+    try {
+      const conFicha = new Set();
+      let filas = 0;
+      let paginas = 0;
+      let truncado = false;
+
+      let result = await wixData.query(COL_RECORDS)
+        .limit(FICHA_PAGE_SIZE)
+        .find({ suppressAuth: true });
+
+      while (true) {
+        for (const it of (result?.items || [])) {
+          filas++;
+          if (!it) continue;
+          if (it[F_ACTIVE] === false) continue;
+          if (!String(it[F_RECORD_TEXT] || '').trim()) continue;
+          const cid = String(it[F_CONTACT_ID] || '').trim();
+          if (cid) conFicha.add(cid);
+        }
+
+        paginas++;
+        if (paginas >= FICHA_MAX_PAGES) {
+          console.warn(`${TAG} listarContactosConFicha: tope de ${FICHA_MAX_PAGES} páginas`);
+          truncado = true;
+          break;
+        }
+        if (!result.hasNext()) break;
+        result = await result.next();
+      }
+
+      console.log(
+        `${TAG} listarContactosConFicha: ${filas} filas leídas, ` +
+        `${conFicha.size} contactos con ficha${truncado ? ' (truncado)' : ''}`
+      );
+
+      return {
+        ok: true,
+        version: VERSION,
+        contactIds: [...conFicha],
+        total: conFicha.size,
+        truncado
+      };
+
+    } catch (e) {
+      console.warn(`${TAG} listarContactosConFicha no disponible: ${e.message}`);
+      return { ok: true, version: VERSION, contactIds: [], total: 0, truncado: false };
     }
   }
 );
