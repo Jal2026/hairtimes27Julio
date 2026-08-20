@@ -1,8 +1,20 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.4
+// VERSION: 0.9.5
 // FECHA: 20 de agosto de 2026
+//
+// v0.9.5: 🔗 SLUG CODIFICADO EN URL.
+//    El CMS puede guardar el enlace de la categoría con los acentos
+//    codificados ("/servicios/depilaci%C3%B3n-laser") mientras el navegador
+//    entrega el slug ya descodificado ("depilación-laser"). No es el caso
+//    NFC/NFD de v0.9.2: son dos representaciones distintas del mismo texto.
+//    Confirmado en el log de Hair-Times el 20-ago, con la lista de slugs
+//    disponibles que añadió v0.9.2:
+//      Disponibles: [depilaci%C3%B3n-laser | moldeados | spa-capilar | …]
+//    Ahora slugNFC y slugPlano descodifican antes de comparar
+//    (decodeSeguro: decodeURIComponent con red por si la cadena tiene un
+//    porcentaje que no forma una secuencia válida).
 //
 // v0.9.4: 🩹 EL FILTRO DE CATÁLOGO DEJA DE SER LITERAL.
 //    getServiciosCategoria filtraba en la propia consulta con
@@ -654,7 +666,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.4';
+const VERSION = '0.9.5';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -705,12 +717,27 @@ function extraerSlug(linkPath) {
   return String(linkPath).split('/').filter(Boolean).pop() || '';
 }
 
+// v0.9.5 — El CMS puede guardar el enlace con la tilde CODIFICADA en URL
+// ("depilaci%C3%B3n-laser") mientras el navegador entrega el slug ya
+// descodificado ("depilación-laser"). Se descodifica siempre antes de
+// comparar. Si la cadena no es un porcentaje válido, decodeURIComponent
+// lanza: se devuelve tal cual.
+function decodeSeguro(s) {
+  const str = String(s || '');
+  if (!str.includes('%')) return str;
+  try {
+    return decodeURIComponent(str);
+  } catch (e) {
+    return str;
+  }
+}
+
 // v0.9.2 — Normalización de slug para comparar.
 // La misma letra acentuada puede llegar en dos codificaciones distintas que
 // se imprimen igual: NFC (un carácter) o NFD (letra + tilde combinante). Sin
 // normalizar, "depilación-laser" !== "depilación-laser".
 function slugNFC(s) {
-  return String(s || '').trim().normalize('NFC');
+  return decodeSeguro(s).trim().normalize('NFC');
 }
 
 // v0.9.2 — Clave de comparación para nombres de grupo/categoría: sin
@@ -734,7 +761,7 @@ function claveGrupo(s) {
 // normalize('NFD') separa la tilde de la letra y el rango \u0300-\u036f la
 // elimina.
 function slugPlano(s) {
-  return String(s || '')
+  return decodeSeguro(s)
     .trim()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
