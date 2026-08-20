@@ -3,8 +3,79 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.0.18 (bundle)
- * FECHA:     3 de agosto de 2026
+ * VERSION:   2.0.19 (bundle)
+ * FECHA:     20 de agosto de 2026
+ *
+ * v2.0.19 — "A VALORAR" PASA A DEPENDER DEL TOTAL, NO DEL PRECIO BASE.
+ *   Backend pareja: widgetPublicoLogic v0.9.5 (SIN CAMBIOS — el backend
+ *   no se toca en esta entrega).
+ *
+ *   PROBLEMA. Servicios cuyo precio vive íntegramente en los
+ *   complementos (caso real: DEPILACIÓN LASER de Hair-Times, con cinco
+ *   zonas — GRANDE, INTERMEDIA, MEDIANA, MINI, PEQUEÑA — donde ninguna
+ *   es "base" y todas son combinables) se configuran con PRECIO = 0 en
+ *   el servicio principal. El adapter del backend (widgetPublicoLogic
+ *   v0.9.5 línea 1115) convierte precio 0 en `basePrice: null`, y el
+ *   bundle interpretaba ese null como "precio desconocido" → `tbd`
+ *   encendido de forma permanente. Resultado: el cliente marcaba
+ *   MEDIANA (+45€) y MINI (+15€), el widget sumaba internamente 60€ en
+ *   `price`… y seguía mostrando "A valorar" / "Se confirma en salón" en
+ *   el resumen, el bloque de precio y el botón primario. El importe
+ *   grabado en la reserva SÍ era correcto (crearPackReserva suma
+ *   principal + complementos): el fallo era solo de presentación.
+ *
+ *   CAUSA RAÍZ. `basePrice == null` estaba sirviendo para dos cosas
+ *   incompatibles: "no sé cuánto cuesta" y "el base cuesta 0". Sólo la
+ *   primera justifica "A valorar". Además `toNum()` del backend
+ *   devuelve SIEMPRE número, nunca null, de modo que los complementos
+ *   jamás llegan con `price: null` y las dos ramas de `_calc` que
+ *   encendían `tbd` desde complementos son código muerto en el
+ *   pipeline real (se conservan por si el contrato cambia).
+ *
+ *   REGLA NUEVA (decisión del arquitecto, 20-Ago-2026):
+ *     "A valorar" se muestra cuando el TOTAL es cero, no cuando el
+ *     precio base es cero.
+ *   Cubre dos escenarios de golpe: el servicio sin base cuyo precio lo
+ *   ponen las zonas-complemento, y el salón que decide regalar el
+ *   servicio base y vivir de los complementos.
+ *
+ *   CAMBIOS (todos dentro de `_calc`, un único punto del bundle):
+ *   · `basePrice == null` deja de marcar `tbd` y pasa a aportar 0 al
+ *     acumulado. La incógnita real se registra ahora en `unknown`.
+ *   · `tbd` se calcula AL FINAL, sobre el resultado: verdadero si hay
+ *     algún componente de precio desconocido O si el total acumulado
+ *     es 0. Antes se calculaba al principio y ya no podía apagarse.
+ *   · La rama de variante del principal (v2.0.15) pasa de `tbd = false`
+ *     a `unknown = false`: la variante aporta precio conocido, pero si
+ *     vale 0€ y no hay complementos el total sigue siendo 0 y "A
+ *     valorar" debe mantenerse.
+ *   · BLINDAJE DEL DESCUENTO PROMOCIONAL. Al apagar `tbd` se destapaba
+ *     un efecto colateral: `promo` quedaba > 0 mientras `promoBase`
+ *     seguía siendo 0 (el descuento sólo muerde sobre basePrice, regla
+ *     v2.0.10 intacta) y por tanto `saved` = 0. Eso habría pintado un
+ *     descuento fantasma: precio tachado idéntico al precio final en
+ *     `_renderSummary` (kr-total__was) y en `_renderHoursHead`
+ *     (kr-priceblock__was), más un badge "−X%" junto al nombre del
+ *     servicio. Ahora `promo` se publica sólo si el ahorro real es
+ *     apreciable.
+ *
+ *   COMPORTAMIENTO PRESERVADO EXPRESAMENTE (decisión del arquitecto):
+ *   mientras el cliente no marque ningún complemento, el total es 0 y
+ *   por tanto SIGUE saliendo "A valorar" — en la card del grid, en la
+ *   cabecera del servicio y en el bloque de precio. NO se implementa el
+ *   "desde X€" calculado sobre el complemento más barato.
+ *
+ *   ADEMÁS: se corrige el desfase del bloque VERSION interno del custom
+ *   element, que declaraba 2.0.16 mientras la cabecera del bundle iba
+ *   por 2.0.18. Ambos quedan en 2.0.19.
+ *
+ *   CERO CAMBIOS EN: adapter del backend, grid de servicios, cabecera
+ *   del servicio, render de complementos (bool/choice/exclusive),
+ *   variantes del principal, segundo profesional para complementos
+ *   (v2.0.17/v2.0.18 intactas), durationMin en el payload (v2.0.16),
+ *   días/horas, datos del cliente, consentimientos legales, gating de
+ *   RESERVAR, `_submit`, pago online, confirmación. Cero clases CSS
+ *   nuevas.
  *
  * v2.0.18 — DESTACAR el bloque "Profesional para los complementos".
  *   Solo estética, cero cambios funcionales sobre v2.0.17.
@@ -950,9 +1021,14 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.0.16
-   FECHA:   5 de julio de 2026
+   VERSION: 2.0.19
+   FECHA:   20 de agosto de 2026
 
+   v2.0.19 — "A valorar" depende del TOTAL, no del precio base.
+             (Este bloque declaraba 2.0.16 mientras la cabecera del
+             bundle iba por 2.0.18. Desfase corregido.)
+   v2.0.18 — Destacar el bloque "Profesional para los complementos".
+   v2.0.17 — Segundo profesional para los complementos.
    v2.0.16 — durationMin (duración total) en el payload de reserva, para
              que el backend resuelva 'Cualquiera' comprobando el bloque
              continuo completo.
@@ -1815,7 +1891,21 @@ window.KR_applySkin = function (el, name) {
     _calc() {
       const cfg = this._service;
       let price = 0, dur = cfg.baseDuration;
-      let tbd = (cfg.basePrice == null);
+
+      // v2.0.19 — `unknown` sustituye al antiguo `tbd` de arranque.
+      // ANTES: `tbd = (cfg.basePrice == null)` y ya nunca se apagaba,
+      // porque los complementos sólo podían encenderlo. Eso hacía que
+      // un servicio con PRECIO 0 en el catálogo (DEPILACIÓN LASER, cuyo
+      // precio lo ponen íntegramente las zonas-complemento) mostrase
+      // "A valorar" para siempre, aun con 60€ ya acumulados.
+      //
+      // AHORA: `basePrice == null` significa únicamente "el base no
+      // aporta importe" y suma 0. `unknown` queda reservado para el
+      // caso de un componente con precio realmente desconocido, que
+      // hoy el backend no puede emitir (widgetPublicoLogic v0.9.5:
+      // `toNum` devuelve siempre número, nunca null) pero cuyas ramas
+      // se conservan por si el contrato cambia.
+      let unknown = false;
       if (cfg.basePrice != null) price += cfg.basePrice;
 
       // v2.0.15 — VARIANTE del principal (Corte Mujer M/L/XL). Si el
@@ -1835,7 +1925,12 @@ window.KR_applySkin = function (el, name) {
           const vDur = (vDurRaw != null) ? Number(vDurRaw) : NaN;
           if (!isNaN(vPrice)) {
             price = vPrice;                 // sustituye base
-            tbd = false;
+            // v2.0.19 — antes era `tbd = false`. La variante elegida
+            // aporta un precio conocido, así que lo que apaga es la
+            // incógnita, no el estado "a valorar" final: si esa
+            // variante vale 0€ y no hay complementos marcados, el
+            // total sigue siendo 0 y "A valorar" debe mantenerse.
+            unknown = false;
           }
           if (!isNaN(vDur) && vDur > 0) {
             dur = vDur;                     // sustituye base
@@ -1843,16 +1938,27 @@ window.KR_applySkin = function (el, name) {
         }
       }
 
+      // v2.0.19 — mismas dos ramas de siempre; lo único que cambia es
+      // que un precio null marca `unknown` en vez de `tbd`. Suma de
+      // importes y duraciones idéntica a v2.0.18, sin tocar nada.
       cfg.complements && cfg.complements.forEach(c => {
         const v = this.state.comp[c.id];
         if (c.type === "bool") {
-          if (v) { if (c.price == null) tbd = true; else price += c.price; dur += c.duration; }
+          if (v) { if (c.price == null) unknown = true; else price += c.price; dur += c.duration; }
         } else {
           const o = c.options.find(o => o.id === v) || c.options[0];
-          if (o.price == null) tbd = true; else price += o.price;
+          if (o.price == null) unknown = true; else price += o.price;
           dur += o.duration;
         }
       });
+
+      // v2.0.19 — REGLA NUEVA: "A valorar" cuando el TOTAL es cero (o
+      // cuando hay algún componente de precio desconocido), NO cuando
+      // el precio base es cero. En cuanto el cliente marca una zona de
+      // depilación con importe, `price` deja de ser 0 y el widget pasa
+      // a mostrar la cifra real en resumen, bloque de precio, botón
+      // primario y confirmación.
+      const tbd = unknown || price <= 0;
       // v2.0.10 — El descuento promocional se aplica SOLO al precio base
       // del servicio principal, NO a los complementos. Paridad estricta
       // con Recepción Pro V2 (recepcionProLogic v1.0.19): el campo
@@ -1861,9 +1967,21 @@ window.KR_applySkin = function (el, name) {
       // completo en el salón. `subtotal` sigue siendo la suma total sin
       // descontar nada (para que el render del tachado refleje el precio
       // "público"); `saved` es el ahorro real (solo sobre base).
-      const promo = (tbd || !cfg.promoPct) ? 0 : cfg.promoPct;
-      const promoBase = (promo && cfg.basePrice != null) ? cfg.basePrice : 0;
-      const saved = promo ? Math.round(promoBase * (promo / 100) * 100) / 100 : 0;
+      //
+      // v2.0.19 — BLINDAJE. `promoRaw` es lo que antes se llamaba
+      // `promo`. Al dejar de estar `tbd` permanentemente encendido en
+      // los servicios con base 0, un salón que además tuviera descuento
+      // promocional activo en ese servicio vería `promoRaw` > 0 con
+      // `promoBase` = 0 (el descuento sólo muerde sobre basePrice) y
+      // por tanto `saved` = 0. Los renders que consultan `calc.promo`
+      // habrían pintado un descuento inexistente: precio tachado igual
+      // al precio final en el resumen y en la cabecera de horas, más un
+      // badge "−X%" junto al nombre. Se publica `promo` sólo si el
+      // ahorro real es apreciable; si no, 0 y ningún render lo pinta.
+      const promoRaw = (tbd || !cfg.promoPct) ? 0 : cfg.promoPct;
+      const promoBase = (promoRaw && cfg.basePrice != null) ? cfg.basePrice : 0;
+      const saved = promoRaw ? Math.round(promoBase * (promoRaw / 100) * 100) / 100 : 0;
+      const promo = (saved > 0.005) ? promoRaw : 0;
       const total = Math.round((price - saved) * 100) / 100;
       return { subtotal: price, total, saved, promo, duration: dur, tbd };
     }
