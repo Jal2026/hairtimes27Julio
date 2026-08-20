@@ -24,9 +24,16 @@
 //    lista los slugs disponibles para poder diagnosticarlo de un vistazo
 //    en vez de a ciegas.
 //
-//    Alcance: solo la resolución del slug. No se toca el filtrado por
-//    group, ni USOS_PUBLICOS, ni TIPOS_PRINCIPALES, ni adaptarServicio, ni
-//    ninguna otra función del backend.
+//    + El group del servicio y el groupCatalog de la categoría se comparan
+//    también por clave normalizada (sin tildes, sin dobles espacios, sin
+//    distinguir mayúsculas): se teclean en dos pantallas distintas y un
+//    espacio de más dejaba la categoría vacía sin dejar rastro. Y si el
+//    grupo SÍ tiene servicios pero ninguno con rol principal/ambos, el log
+//    lo dice con nombre y rol de cada uno.
+//
+//    Alcance: resolución del slug y emparejado de grupos. No se toca
+//    USOS_PUBLICOS, TIPOS_PRINCIPALES, adaptarServicio, ni ninguna otra
+//    función del backend.
 //
 // v0.9.1: 📨 COMPLEMENTOS Y SU PROFESIONAL EN LA CONFIRMACIÓN AL CLIENTE.
 //    Hasta ahora el mensaje decía solo el servicio principal y el
@@ -672,6 +679,23 @@ function slugNFC(s) {
   return String(s || '').trim().normalize('NFC');
 }
 
+// v0.9.2 — Clave de comparación para nombres de grupo/categoría: sin
+// espacios sobrantes ni dobles, sin tildes y en minúsculas. Los guiones
+// bajos y los guiones cuentan como espacio, porque en el CMS conviven las
+// dos costumbres para los nombres compuestos ("SPA CAPILAR" con espacio,
+// "TRATAMIENTO_FACIALES" con guion bajo) y un servicio y su categoría
+// pueden haberse tecleado con distinto criterio. "DEPILACION LASER ",
+// "Depilación Laser" y "DEPILACION_LASER" dan la misma clave.
+function claveGrupo(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[_\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 // Misma cadena en minúsculas y sin diacríticos: última red de seguridad.
 // normalize('NFD') separa la tilde de la letra y el rango \u0300-\u036f la
 // elimina.
@@ -1209,6 +1233,12 @@ export const getServiciosCategoria = webMethod(
       // 2. Split por coma (N:1 — Depilacion, Corte Mujer, Hombre…)
       const groups = String(gc).split(',').map(s => s.trim()).filter(Boolean);
 
+      // v0.9.2 — El group del servicio y el groupCatalog de la categoría los
+      // teclean personas en dos pantallas distintas. Un espacio de más, una
+      // tilde o una mayúscula bastaban para dejar la categoría vacía sin
+      // ninguna pista. Se comparan por clave normalizada.
+      const clavesGrupo = new Set(groups.map(claveGrupo));
+
       // 3. Cargar TODOS los servicios públicos activos
       const r2 = await wixData.query(CMS_CATALOGO)
         .eq('active', true)
@@ -1221,10 +1251,23 @@ export const getServiciosCategoria = webMethod(
       for (const it of all) if (it.setupUid) porSetupUid[it.setupUid] = it;
 
       // 4. Filtrar principales del/los group(s) y adaptar
-      const servicios = all
-        .filter(it => groups.includes(it.group) && TIPOS_PRINCIPALES.includes(it.tipo))
+      const delGrupo = all.filter(it => clavesGrupo.has(claveGrupo(it.group)));
+
+      const servicios = delGrupo
+        .filter(it => TIPOS_PRINCIPALES.includes(String(it.tipo || '').trim().toLowerCase()))
         .sort((a, b) => toNum(a.order) - toNum(b.order))
         .map(it => adaptarServicio(it, porSetupUid));
+
+      // v0.9.2 — Diagnóstico: si el grupo tiene servicios pero ninguno es
+      // principal, decirlo con nombre y rol. Es la causa más habitual de
+      // "categoría vacía" y antes no dejaba rastro en el log.
+      if (servicios.length === 0 && delGrupo.length > 0) {
+        const detalle = delGrupo.map(it => `${it.label}(rol=${it.tipo || '∅'})`).join(' | ');
+        console.warn(`${TAG} ⚠️ groups=[${groups.join(',')}] tiene ${delGrupo.length} servicio(s) pero ninguno con rol principal/ambos: ${detalle}`);
+      }
+      if (delGrupo.length === 0) {
+        console.warn(`${TAG} ⚠️ Ningún servicio activo y público con group=[${groups.join(',')}]`);
+      }
 
       console.log(`${TAG} ✅ getServiciosCategoria slug=${slug || '∅'} groups=[${groups.join(',')}]: ${servicios.length} servicios. ${((Date.now()-t0)/1000).toFixed(2)}s`);
       return { ok: true, version: VERSION, servicios, groupsAplicados: groups, categoria };
