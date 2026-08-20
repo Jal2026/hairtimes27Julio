@@ -9,10 +9,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.14.12
+       KAMISUITE — Edición Servicios Widget v1.15.0
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.15.0: ⏳ BONOS: plazo MÁXIMO por uso, campo nuevo que CONVIVE con
+         la espera mínima. "Plazo máximo por uso (días)"
+         (fBonoMaxIntervaloDias -> bonusMaxIntervalDays). Cada uso tiene su
+         ventana contada desde la EMISIÓN; la que vence sin consumirse,
+         se pierde. El campo anterior pasa a llamarse en pantalla "Espera
+         mínima entre usos (días)" — mismo field ID, misma semántica, solo
+         se aclara qué hace. Dos validaciones al guardar: mínimo < máximo, y
+         caducidad >= usos x máximo. 0/vacío = sin regla en ambos.
+         Requiere serviciosEdicionLogic v1.13.0, voucherPublicLogic v1.4.0 y
+         recepcionProLogic v1.0.52.
        v1.14.12: 🩹 FIX del fix. v1.14.11 dejaba el desplegable de
          categorías ILEGIBLE al abrirlo: fondo claro con texto claro.
          Causa: .filter-select.is-fase declaraba
@@ -703,7 +713,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.14.12</span>
+    <span class="header-version"> v1.15.0</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -853,9 +863,19 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
                 <input type="number" class="form-input" id="fBonoValidezDias" min="1" step="1" placeholder="Global si vacío">
               </div>
               <div class="form-group">
-                <label class="form-label">Días entre usos</label>
-                <input type="number" class="form-input" id="fBonoIntervaloDias" min="0" step="1" placeholder="0 = libre">
+                <label class="form-label">Espera mínima entre usos (días)</label>
+                <input type="number" class="form-input" id="fBonoIntervaloDias" min="0" step="1" placeholder="0 = sin regla">
+                <p class="form-hint">Impide usarlo antes de tiempo. No quita sesiones: vuelve otro día y sigue ahí.</p>
               </div>
+            </div>
+            <!-- v1.15.0 — plazo MÁXIMO por uso (ventanas desde la emisión) -->
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Plazo máximo por uso (días)</label>
+                <input type="number" class="form-input" id="fBonoMaxIntervaloDias" min="0" step="1" placeholder="0 = sin regla">
+                <p class="form-hint">Cada uso tiene su plazo, contado desde la compra. La sesión cuyo plazo vence SE PIERDE. La caducidad debe ser al menos usos × este plazo.</p>
+              </div>
+              <div class="form-group"></div>
             </div>
 
             <div class="form-group">
@@ -1145,7 +1165,8 @@ const el = {
   fBonoNumero: document.getElementById('fBonoNumero'),
   fBonoDescuento: document.getElementById('fBonoDescuento'),
   fBonoValidezDias: document.getElementById('fBonoValidezDias'),
-  fBonoIntervaloDias: document.getElementById('fBonoIntervaloDias')
+  fBonoIntervaloDias: document.getElementById('fBonoIntervaloDias'),
+  fBonoMaxIntervaloDias: document.getElementById('fBonoMaxIntervaloDias')
 };
 
 // v1.14.10 — Normalizador de nombre de categoría. Copia literal del patrón
@@ -2041,6 +2062,7 @@ function openEditModal(catalogId) {
   if (el.fBonoDescuento) el.fBonoDescuento.value = (typeof s.bonoDescuento === 'number') ? s.bonoDescuento : '';
   if (el.fBonoValidezDias) el.fBonoValidezDias.value = (typeof s.bonusValidityDays === 'number') ? s.bonusValidityDays : '';
   if (el.fBonoIntervaloDias) el.fBonoIntervaloDias.value = (typeof s.bonusUseIntervalDays === 'number') ? s.bonusUseIntervalDays : '';
+  if (el.fBonoMaxIntervaloDias) el.fBonoMaxIntervaloDias.value = (typeof s.bonusMaxIntervalDays === 'number') ? s.bonusMaxIntervalDays : '';
   aplicarTipologia();
   el.btnSave.disabled = false;
   el.modal.classList.add('open');
@@ -2086,6 +2108,7 @@ function openNuevoModal() {
   if (el.fBonoDescuento) el.fBonoDescuento.value = '';
   if (el.fBonoValidezDias) el.fBonoValidezDias.value = '';
   if (el.fBonoIntervaloDias) el.fBonoIntervaloDias.value = '';
+  if (el.fBonoMaxIntervaloDias) el.fBonoMaxIntervaloDias.value = '';
   aplicarTipologia();
   el.btnSave.disabled = false;
   el.modal.classList.add('open');
@@ -2168,6 +2191,8 @@ function buildPayloadComun() {
   const bonusValidityDays = (bvdRaw === '' || bvdRaw === null) ? null : (parseInt(bvdRaw, 10) || 0);
   const bidRaw = el.fBonoIntervaloDias ? el.fBonoIntervaloDias.value : '';
   const bonusUseIntervalDays = (bidRaw === '' || bidRaw === null) ? null : (parseInt(bidRaw, 10) || 0);
+  const bmaxRaw = el.fBonoMaxIntervaloDias ? el.fBonoMaxIntervaloDias.value : '';
+  const bonusMaxIntervalDays = (bmaxRaw === '' || bmaxRaw === null) ? null : (parseInt(bmaxRaw, 10) || 0);
 
   return {
     nombre: el.fNombre.value.trim(),
@@ -2198,7 +2223,8 @@ function buildPayloadComun() {
     bonoNumero,
     bonoDescuento,
     bonusValidityDays,
-    bonusUseIntervalDays
+    bonusUseIntervalDays,
+    bonusMaxIntervalDays
   };
 }
 
@@ -2206,6 +2232,22 @@ function saveModal() {
   const comun = buildPayloadComun();
   if (!comun.nombre) {
     showToast('El nombre es obligatorio', 'error');
+    return;
+  }
+  // v1.15.0 — coherencia de las dos reglas temporales del bono.
+  // Se validan AQUÍ y no en el backend porque es donde el usuario puede
+  // corregirlas en el momento. Ninguna de las dos bloquea si el campo va
+  // vacío o a 0: eso significa "sin regla".
+  const _min  = comun.bonusUseIntervalDays || 0;
+  const _max  = comun.bonusMaxIntervalDays || 0;
+  const _usos = comun.bonoNumero || 0;
+  const _cad  = comun.bonusValidityDays || 0;
+  if (_min > 0 && _max > 0 && _min >= _max) {
+    showToast('La espera mínima (' + _min + ' d) debe ser menor que el plazo máximo por uso (' + _max + ' d).', 'error');
+    return;
+  }
+  if (_max > 0 && _usos > 0 && _cad > 0 && _cad < _usos * _max) {
+    showToast('Caducidad insuficiente: con ' + _usos + ' usos y ' + _max + ' días por uso hacen falta al menos ' + (_usos * _max) + ' días. Las últimas sesiones no llegarían a poder usarse.', 'error');
     return;
   }
   el.btnSave.disabled = true;
@@ -2240,7 +2282,8 @@ function saveModal() {
       bonoNumero: comun.bonoNumero,
       bonoDescuento: comun.bonoDescuento,
       bonusValidityDays: comun.bonusValidityDays,
-      bonusUseIntervalDays: comun.bonusUseIntervalDays
+      bonusUseIntervalDays: comun.bonusUseIntervalDays,
+      bonusMaxIntervalDays: comun.bonusMaxIntervalDays
     };
     if (fImageBase64) {
       payload.base64Data = fImageBase64;
@@ -2474,6 +2517,7 @@ window.addEventListener('message', (event) => {
         if (sv.bonoDescuento !== undefined) x.bonoDescuento = sv.bonoDescuento;
         if (sv.bonusValidityDays !== undefined) x.bonusValidityDays = sv.bonusValidityDays;
         if (sv.bonusUseIntervalDays !== undefined) x.bonusUseIntervalDays = sv.bonusUseIntervalDays;
+        if (sv.bonusMaxIntervalDays !== undefined) x.bonusMaxIntervalDays = sv.bonusMaxIntervalDays;
       }
       recomputeTaxonomias(); // v1.14.6 — refrescar listas derivadas (allGroups, allFamilies)
       applyFilters();
