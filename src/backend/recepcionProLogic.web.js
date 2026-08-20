@@ -1,9 +1,71 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.51
+// VERSION: 1.0.52
 // FECHA: 20 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.52: ⏳ PLAZO MÁXIMO POR USO — CAMPO NUEVO QUE CONVIVE CON EL MÍNIMO.
+//          Hasta ahora el bono solo sabía frenar: bonusUseIntervalDays era
+//          una espera MÍNIMA y bloqueaba el canje si la clienta volvía antes
+//          de tiempo. Faltaba la palanca contraria, la que incentiva la
+//          frecuencia. Se añade como CAMPO INDEPENDIENTE, no sustituyendo al
+//          anterior:
+//
+//            bonusUseIntervalDays  → espera MÍNIMA entre usos. BLOQUEA el
+//              canje si vuelve antes. No quita nada: vuelve otro día y su
+//              sesión sigue ahí. SIN CAMBIOS respecto a v1.0.42.
+//
+//            bonusMaxIntervalDays  → plazo MÁXIMO por uso, en ventanas
+//              CORRELATIVAS desde la EMISIÓN. NUEVO. Ventana que vence sin
+//              consumirse, sesión que SE PIERDE.
+//
+//          Un bono de 4 usos con máximo 15 reparte cuatro ventanas fijas:
+//            uso 1 → 0-15 · uso 2 → 15-30 · uso 3 → 30-45 · uso 4 → 45-60
+//          Las ventanas NO se desplazan: adelantarse no corre los plazos
+//          siguientes.
+//            ventanasVencidas = floor(díasDesdeEmisión / máximo)
+//            perdidas         = ventanasVencidas − canjesRealizados  (mín 0)
+//          Ejemplo (Jal): 4 usos, 15 días, usa el primero en plazo y vuelve
+//          el día 35 → 2 vencidas − 1 canje = pierde 1, le quedan 2, y con
+//          una de ellas paga la visita de hoy.
+//          La pérdida PUEDE SER MAYOR QUE 1: quien aparece el día 65 con una
+//          sola sesión gastada pierde tres.
+//
+//          POR QUÉ CAMPO NUEVO Y NO UN MODO SOBRE EL EXISTENTE (Jal,
+//          20-ago-2026): los bonos ya vendidos congelaron
+//          bonusUseIntervalDays con semántica de MÍNIMO. Un campo nuevo nace
+//          vacío, así que todo lo emitido hasta hoy sigue comportándose
+//          exactamente como el día que se pagó — sin valor por defecto que
+//          interpretar ni migración. La regla nueva solo afecta a bonos
+//          nuevos, que era el requisito.
+//
+//          Los dos valores se leen del BONO (snapshot congelado por
+//          voucherPublicLogic v1.4.0 al emitir), NUNCA del catálogo:
+//          reconfigurar el servicio no puede cambiarle las reglas a alguien
+//          que ya pagó.
+//
+//          Orden de evaluación: primero si puede canjear HOY (mínimo),
+//          después cuántas ha perdido por el camino (máximo). Si las
+//          pérdidas se comen todo lo que queda, el canje se RECHAZA y el
+//          bono queda AGOTADO, con mensaje explícito para recepción.
+//          Días naturales, calendario Madrid. 0/vacío = sin regla, en ambos.
+//          Ledger o issueDate ilegibles → NO se penaliza (fail-open: jamás
+//          quitar una sesión por un error de lectura).
+//
+//          DOS PUNTOS DE CÁLCULO, misma regla: aplicarCanjeProducto (previo,
+//          expone `sesionesPerdidas` y `avisoFrecuencia` para que la UI avise
+//          antes de confirmar) y confirmarCanjeProducto (que RECALCULA y no
+//          se fía de lo que mande el cliente).
+//
+//          ⚠️ REGLA DE DISEÑO NO VALIDADA AQUÍ: la caducidad total del bono
+//          debe ser AL MENOS usos × máximo (60 días en el ejemplo). Con
+//          menos, las últimas ventanas no llegan a abrirse y esas sesiones
+//          son invendibles. Se avisa en el Editor de Servicios v1.15.0.
+//
+//          REQUIERE: campo bonusMaxIntervalDays en ServiceCatalog y en
+//          KamisuiteVouchers · voucherPublicLogic v1.4.0 ·
+//          serviciosEdicionLogic v1.13.0 · widget Edición de Servicios v1.15.0
 //
 // v1.0.51: 🧾 SEGREGACIÓN FISCAL — LA VERDAD PASA A SER *STAFF ASIGNADO*.
 //          La guardia de v1.0.50 decidía si un servicio era "de externa"
@@ -1151,7 +1213,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.51';
+const VERSION = '1.0.52';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -4414,12 +4476,32 @@ export const aplicarCanjeProducto = webMethod(
           }
         }
 
-        // v1.0.42 — FRECUENCIA MÍNIMA ENTRE USOS.
-        // El bono puede exigir un intervalo mínimo en días naturales entre
-        // canjes, congelado al emitir en bono.bonusUseIntervalDays
-        // (0/vacío = LIBRE). Se mide por día natural (calendario Madrid)
-        // contra el redeemDate más reciente del bono en el ledger. El
-        // primer uso (sin canjes previos) siempre pasa.
+        // ── v1.0.52 — DOS REGLAS TEMPORALES INDEPENDIENTES ──────────────
+        // Ambas se leen del BONO (snapshot congelado al emitir), nunca del
+        // catálogo: cambiar la configuración del servicio no puede alterar
+        // las reglas de un bono ya vendido y pagado.
+        //
+        //   bonusUseIntervalDays → ESPERA MÍNIMA entre usos. Si la clienta
+        //     vuelve antes, se BLOQUEA el canje. No quita nada: vuelve otro
+        //     día y su sesión sigue ahí. Es la regla que ya existía desde
+        //     v1.0.42 y NO cambia de comportamiento.
+        //
+        //   bonusMaxIntervalDays → PLAZO MÁXIMO por uso, en ventanas
+        //     CORRELATIVAS desde la EMISIÓN. Campo NUEVO en v1.0.52.
+        //     Ventana que vence sin consumirse, sesión que SE PIERDE.
+        //
+        // Convivencia: mínimo 42 + máximo 70 describe la banda de una tanda
+        // con espaciado técnico. Cada campo a 0/vacío = sin regla. Como el
+        // máximo es campo nuevo, TODO lo emitido antes de esta versión lo
+        // tiene vacío y se comporta exactamente igual que siempre.
+        //
+        // Orden: primero si puede canjear HOY (mínimo), después cuántas ha
+        // perdido por el camino (máximo).
+        // ─────────────────────────────────────────────────────────────────
+
+        // ── REGLA 1: ESPERA MÍNIMA (v1.0.42, sin cambios) ──
+        // Días naturales (calendario Madrid) contra el redeemDate más
+        // reciente del bono en el ledger. El primer uso siempre pasa.
         const intervaloDias = (typeof bono.bonusUseIntervalDays === 'number' && bono.bonusUseIntervalDays > 0)
           ? Math.floor(bono.bonusUseIntervalDays)
           : 0;
@@ -4458,6 +4540,68 @@ export const aplicarCanjeProducto = webMethod(
                   message: `Este bono admite un uso cada ${intervaloDias} días. Último uso: ${fmt(ultimoDia)}. Disponible desde: ${fmt(disponibleMs)}.`
                 }
               };
+            }
+          }
+        }
+
+        // ── REGLA 2: PLAZO MÁXIMO POR USO (ventanas desde la emisión) ──
+        // Un bono de 4 usos con máximo 15 reparte cuatro ventanas fijas:
+        //   uso 1 → días 0-15 · uso 2 → 15-30 · uso 3 → 30-45 · uso 4 → 45-60
+        // Las ventanas NO se desplazan: adelantarse en un uso no corre los
+        // plazos siguientes.
+        //
+        //   ventanasVencidas = floor(díasDesdeEmisión / máximo)
+        //   perdidas         = ventanasVencidas − canjesRealizados  (mín 0)
+        //
+        // Se compara lo que DEBERÍA llevar consumido con lo que consumió; la
+        // diferencia se evapora. La pérdida PUEDE SER MAYOR QUE 1: quien
+        // aparece el día 65 con una sola sesión gastada pierde tres.
+        //
+        // ⚠️ REGLA DE DISEÑO NO VALIDADA AQUÍ: la caducidad total debe ser al
+        // menos usos × máximo. Con menos, las últimas ventanas no llegan a
+        // abrirse. Se avisa en el Editor de Servicios.
+        //
+        // Fail-open: si el ledger o issueDate no se pueden leer, NO se
+        // penaliza. Jamás quitar una sesión por un error de lectura.
+        const maxDias = (typeof bono.bonusMaxIntervalDays === 'number' && bono.bonusMaxIntervalDays > 0)
+          ? Math.floor(bono.bonusMaxIntervalDays)
+          : 0;
+        let sesionesPerdidas = 0;
+        let diasDesdeEmision = null;
+        if (maxDias > 0 && bono.issueDate) {
+          const emisionMs = new Date(bono.issueDate).getTime();
+          if (Number.isFinite(emisionMs)) {
+            let canjesRealizados = null;
+            try {
+              const redMax = await wixData.query(CMS_VOUCHER_REDEMPTIONS)
+                .eq('voucherId', bono._id)
+                .limit(1000)
+                .find({ suppressAuth: true });
+              canjesRealizados = (redMax.items || []).length;
+            } catch (e) {
+              canjesRealizados = null;
+              console.warn(`${TAG} ⚠️ plazo máximo bono ${safeCode}: query ledger falló (${e.message}) — no se penaliza`);
+            }
+            if (canjesRealizados !== null) {
+              const DIA_MS = 86400000;
+              const madridDayMs = (ms) => {
+                const s = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+                const p = s.split('-');
+                return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+              };
+              diasDesdeEmision = Math.round((madridDayMs(ahora.getTime()) - madridDayMs(emisionMs)) / DIA_MS);
+              const ventanasVencidas = Math.floor(diasDesdeEmision / maxDias);
+              sesionesPerdidas = Math.max(0, ventanasVencidas - canjesRealizados);
+              if (sesionesPerdidas > remaining) sesionesPerdidas = remaining;
+              if (sesionesPerdidas > 0 && sesionesPerdidas >= remaining) {
+                return {
+                  ok: false,
+                  version: VERSION,
+                  error: {
+                    message: `Este bono admite un uso cada ${maxDias} días como máximo y han pasado ${diasDesdeEmision} desde su compra. Las ${remaining} sesión(es) pendiente(s) se pierden por demora y el bono queda agotado.`
+                  }
+                };
+              }
             }
           }
         }
@@ -4533,7 +4677,16 @@ export const aplicarCanjeProducto = webMethod(
           nuevoImporte,
           descripcionToken: `Bono ${bono.code} cubre ${labelActual} (-${ahorro.toFixed(2)}€)`,
           usesBefore: remaining,
-          usesAfter: remaining - 1
+          usesAfter: remaining - sesionesPerdidas - 1,
+          // v1.0.52 — la UI avisa ANTES de confirmar: con ventanas vencidas
+          // este canje resta la sesión usada MÁS las evaporadas.
+          frecuenciaMinDias: intervaloDias,
+          frecuenciaMaxDias: maxDias,
+          frecuenciaDiasDesdeEmision: diasDesdeEmision,
+          sesionesPerdidas,
+          avisoFrecuencia: sesionesPerdidas > 0
+            ? `Han pasado ${diasDesdeEmision} días desde la compra con un plazo de ${maxDias} por uso: se pierde(n) ${sesionesPerdidas} sesión(es) por demora.`
+            : ''
         };
       }
 
@@ -4777,9 +4930,54 @@ export const confirmarCanjeProducto = webMethod(
           // amountSaved=0 como fallback (la trazabilidad fina vive en PaymentReservations.descripcion)
         }
 
+        // v1.0.52 — SESIONES EVAPORADAS POR VENTANA VENCIDA.
+        // Se RECALCULA aquí, no se confía en lo que mandó la UI: confirmar es
+        // el punto que escribe, y aplicarCanjeProducto pudo ejecutarse hace
+        // rato (o no ejecutarse). Misma regla exacta que allí: ventanas
+        // absolutas desde issueDate, perdidas = vencidas − canjes previos.
+        // Fail-open si el ledger o issueDate no se pueden leer.
+        let sesionesPerdidas = 0;
+        {
+          const maxDias = (typeof bono.bonusMaxIntervalDays === 'number' && bono.bonusMaxIntervalDays > 0)
+            ? Math.floor(bono.bonusMaxIntervalDays)
+            : 0;
+          if (maxDias > 0 && bono.issueDate) {
+            const emisionMs = new Date(bono.issueDate).getTime();
+            if (Number.isFinite(emisionMs)) {
+              let canjesRealizados = null;
+              try {
+                const redPrev = await wixData.query(CMS_VOUCHER_REDEMPTIONS)
+                  .eq('voucherId', bono._id)
+                  .limit(1000)
+                  .find({ suppressAuth: true });
+                canjesRealizados = (redPrev.items || []).length;
+              } catch (e) {
+                canjesRealizados = null;
+                console.warn(`${TAG} ⚠️ frecuencia bono ${safeCode}: ledger ilegible (${e.message}) — no se penaliza`);
+              }
+              if (canjesRealizados !== null) {
+                const DIA_MS = 86400000;
+                const madridDayMs = (ms) => {
+                  const s = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+                  const p = s.split('-');
+                  return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+                };
+                const dias = Math.round((madridDayMs(ahora.getTime()) - madridDayMs(emisionMs)) / DIA_MS);
+                const ventanasVencidas = Math.floor(dias / maxDias);
+                sesionesPerdidas = Math.max(0, ventanasVencidas - canjesRealizados);
+                const vivas = Number(bono.remainingUses) || 0;
+                if (sesionesPerdidas > vivas) sesionesPerdidas = vivas;
+                if (sesionesPerdidas > 0) {
+                  console.log(`${TAG} ⏳ Bono ${safeCode}: ${dias}d desde emisión, plazo ${maxDias}d/uso, ${ventanasVencidas} ventana(s) vencida(s) y ${canjesRealizados} canje(s) → pierde ${sesionesPerdidas} sesión(es)`);
+                }
+              }
+            }
+          }
+        }
+
         // READ-MERGE-UPDATE bono: decrementar usos + estado AGOTADO si llega a 0
         const usesBefore = Number(bono.remainingUses) || 0;
-        const usesAfter = Math.max(0, usesBefore - 1);
+        const usesAfter = Math.max(0, usesBefore - 1 - sesionesPerdidas);
         bono.remainingUses = usesAfter;
         if (usesAfter === 0) {
           bono.status = STATUS_VOUCHER_AGOTADO;
@@ -4802,7 +5000,7 @@ export const confirmarCanjeProducto = webMethod(
         };
         await wixData.insert(CMS_VOUCHER_REDEMPTIONS, redemption, { suppressAuth: true });
 
-        console.log(`${TAG} ✅ Bono ${safeCode} canjeado | reserva ${safeRes} | usos ${usesBefore}→${usesAfter} | ahorro ${amountSaved}€${usesAfter === 0 ? ' | AGOTADO' : ''}`);
+        console.log(`${TAG} ✅ Bono ${safeCode} canjeado | reserva ${safeRes} | usos ${usesBefore}→${usesAfter}${sesionesPerdidas ? ` (+${sesionesPerdidas} perdida(s) por demora)` : ''} | ahorro ${amountSaved}€${usesAfter === 0 ? ' | AGOTADO' : ''}`);
         return {
           ok: true,
           version: VERSION,
