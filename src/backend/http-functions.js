@@ -7,10 +7,18 @@
 //   https://www.hair-times.com/_functions/descargarPdf?desde=2026-01-01&hasta=2026-01-31
 //   https://www.hair-times.com/_functions/whatsappWebhook  (GET=verificación, POST=mensajes entrantes)
 //   https://www.hair-times.com/_functions/akiraAsk         (POST=pregunta a AKIRA)
+//   https://www.hair-times.com/_functions/akiraNuevaSesion (POST=abre sesión AKIRA)
 //   https://www.hair-times.com/_functions/akiraTts         (POST=voz de AKIRA)
 //
 // CHANGELOG
 // ---------
+// v1.4.0 (20-Ago-2026)
+//   - Añadido POST post_akiraNuevaSesion() — abre la sesión ANTES de la
+//     pregunta, para que el widget tenga sessionId con el que arrancar el
+//     polling de recuperación del 504. Ver akiraLogic v1.9.0.
+//   - Añadido import de crearSesionCore desde backend/akiraLogic.web
+//   - Aditivo: akiraAsk, akiraTts, Excel, PDF y WhatsApp intactos
+//
 // v1.3.0 (17-Jul-2026)
 //   - Añadido POST post_akiraTts() — voz de AKIRA (Google Cloud TTS)
 //   - Añadido import de akiraSynthesize desde backend/akiraTTS.web
@@ -34,7 +42,7 @@ import wixData from 'wix-data';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import { getSecret } from 'wix-secrets-backend';
-import { askAkiraCore } from 'backend/akiraLogic.web';
+import { askAkiraCore, crearSesionCore } from 'backend/akiraLogic.web';
 // Función PURA, no el webMethod: http-functions corre SIN sesión de miembro
 // y un webMethod con SiteMember rechazaría la llamada.
 import { akiraSynthesizeCore } from 'backend/akiraTTS.web';
@@ -110,6 +118,56 @@ export async function post_akiraAsk(request) {
 
     } catch (error) {
         console.error(TAG_AKIRA, 'post_akiraAsk EXCEPTION:', error.message);
+        return serverError({
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ok: false, error: error.message || 'error interno' })
+        });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AKIRA — Abrir sesión (POST)       ◄── NUEVO v1.4.0
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /_functions/akiraNuevaSesion
+// Body:      { userId, userName, query }
+// Respuesta: { ok, sessionId, error? }
+//
+// PARA QUÉ EXISTE — ES LA PIEZA QUE ARREGLA EL 504 DE LA PRIMERA PREGUNTA:
+//   El widget solo aprendía el sessionId del CUERPO de la respuesta de
+//   akiraAsk. Un 504 no trae cuerpo. Resultado: en la primera pregunta de un
+//   chat nuevo el widget no tenía sessionId, no podía arrancar el polling y
+//   enseñaba el error del gateway aunque la respuesta ya estuviera guardada
+//   en AkiraMessages. Y cada "Reintentar" creaba OTRA sesión y pagaba OTRO
+//   análisis completo.
+//
+//   Llamando aquí primero, el widget tiene sessionId antes de lanzar la
+//   pregunta pesada. Es un insert en AkiraSessions: milisegundos. El techo de
+//   14s no entra en juego en ESTA llamada — entra en akiraAsk, que es la que
+//   el polling ya sabe recuperar.
+//
+// `query` solo se usa para titular la conversación (60 primeros caracteres,
+// igual que hacía askAkiraCore). No dispara ningún análisis ni consume tokens
+// de Anthropic.
+//
+// SEGURIDAD: mismo modelo que akiraAsk — endpoint público. El daño posible es
+// crear filas vacías en AkiraSessions, no leer ni escribir datos del salón.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export async function post_akiraNuevaSesion(request) {
+    try {
+        const body = await request.body.json();
+        const { userId, userName, query } = body || {};
+
+        const result = await crearSesionCore({ userId, userName, query });
+
+        return ok({
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(result)
+        });
+
+    } catch (error) {
+        console.error(TAG_AKIRA, 'post_akiraNuevaSesion EXCEPTION:', error.message);
         return serverError({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ok: false, error: error.message || 'error interno' })
