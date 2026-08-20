@@ -1,8 +1,21 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.2
+// VERSION: 0.9.3
 // FECHA: 20 de agosto de 2026
+//
+// v0.9.3: 🔎 DIAGNÓSTICO DE CATEGORÍA VACÍA.
+//    Cuando getServiciosCategoria resuelve el grupo pero no encuentra
+//    ningún servicio, el log lista ahora TODOS los valores de group que
+//    han entrado en la consulta (los de servicios con active=true y uso
+//    público/ambos). Sirve para distinguir sin ambigüedad dos causas que
+//    hasta ahora daban el mismo síntoma:
+//      · el grupo buscado NO aparece en la lista → el servicio queda fuera
+//        de la consulta (inactivo o uso no público).
+//      · el grupo buscado SÍ aparece → el servicio entra en la consulta y
+//        el fallo está en el emparejado del valor del campo.
+//    Solo añade líneas de log. Cero cambios de comportamiento respecto a
+//    v0.9.2.
 //
 // v0.9.2: 🔤 SLUG DE CATEGORÍA A PRUEBA DE TILDES.
 //    getServiciosCategoria comparaba el slug de la URL con el del CMS con
@@ -620,7 +633,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.2';
+const VERSION = '0.9.3';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -1266,7 +1279,14 @@ export const getServiciosCategoria = webMethod(
         console.warn(`${TAG} ⚠️ groups=[${groups.join(',')}] tiene ${delGrupo.length} servicio(s) pero ninguno con rol principal/ambos: ${detalle}`);
       }
       if (delGrupo.length === 0) {
+        // v0.9.2 — Distinguir sin ambigüedad entre "el servicio existe pero
+        // está fuera de la consulta (active/uso)" y "el servicio entra en la
+        // consulta pero su group no casa". Se listan los grupos que SÍ han
+        // entrado: si SPA CAPILAR no aparece, el servicio está inactivo o no
+        // es público; si aparece, el problema es el valor del campo.
+        const gruposVivos = [...new Set(all.map(it => String(it.group || '∅')))].sort();
         console.warn(`${TAG} ⚠️ Ningún servicio activo y público con group=[${groups.join(',')}]`);
+        console.warn(`${TAG} 🔎 Grupos presentes entre los ${all.length} servicios activos y públicos: [${gruposVivos.join(' | ')}]`);
       }
 
       console.log(`${TAG} ✅ getServiciosCategoria slug=${slug || '∅'} groups=[${groups.join(',')}]: ${servicios.length} servicios. ${((Date.now()-t0)/1000).toFixed(2)}s`);
