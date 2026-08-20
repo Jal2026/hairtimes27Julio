@@ -2,8 +2,40 @@
  * KAMISUITE — AKIRA Console (Wix Custom Element)
  * Archivo:  public/custom-elements/akiraConsole.js
  * Tag name: akira-console
- * VERSION:  1.1.0
- * FECHA:    15 Agosto 2026
+ * VERSION:  1.2.0
+ * FECHA:    20 Agosto 2026
+ *
+ * CAMBIOS v1.1.0 → v1.2.0 — SESIÓN ANTES DE PREGUNTAR.
+ *   Arregla el 504 visible en la PRIMERA pregunta de cada conversación.
+ *
+ *   EL FALLO: `_handleResponse` solo arranca el polling de recuperación si
+ *   hay `_sessionId` (la condición `if (this._sessionId && this._lastQuery)`).
+ *   Pero el widget aprendía el sessionId del CUERPO de la respuesta de
+ *   akiraAsk — y un 504 no trae cuerpo. En un chat nuevo la condición era
+ *   falsa, se saltaba la red de seguridad y pintaba el error del gateway
+ *   aunque la respuesta ya estuviera guardada en AkiraMessages.
+ *
+ *   La red funcionaba bien de la segunda pregunta en adelante. Nunca protegió
+ *   la primera, que es donde vive la pregunta pesada de análisis.
+ *
+ *   AGRAVANTE: `_sendQuery` no fija `_sessionId`, así que cada "Reintentar"
+ *   salía otra vez sin él y el backend creaba OTRA sesión, con OTRA llamada
+ *   completa a Anthropic. Caso real (20-Ago): 3 pulsaciones = 3 sesiones
+ *   huérfanas y 3 análisis de ~43s pagados, ninguno en pantalla.
+ *
+ *   EL ARREGLO: `_ensureSession()`. Si no hay `_sessionId`, el widget lo pide
+ *   a POST /_functions/akiraNuevaSesion ANTES del fetch pesado. Es un insert:
+ *   milisegundos. Con el sessionId ya en mano el polling cubre también la
+ *   primera pregunta, y el reintento reutiliza la sesión en vez de duplicarla.
+ *
+ *   DEGRADA SIN ROMPER: si esa llamada falla, `_sessionId` sigue null y el
+ *   comportamiento es exactamente el de v1.1.0. No bloquea la pregunta.
+ *
+ *   Requiere akiraLogic v1.9.0 + http-functions v1.4.0.
+ *
+ *   ADEMÁS — corregido el desfase de VERSION documentado como bug abierto:
+ *   la cabecera decía 1.1.0 y la constante de runtime seguía en '1.0.4', con
+ *   lo que TODOS los logs de consola mentían sobre la versión desplegada.
  *
  * CAMBIOS v1.0.4 → v1.1.0 — SELECTOR DE PLANO (chips ASESOR / AYUDA).
  *   El plano de utilidad deja de ser una decisión global del salón fijada al
@@ -154,7 +186,7 @@
     return;
   }
 
-  const VERSION = '1.0.4';
+  const VERSION = '1.2.0';
   const TAG = `[AKIRA v${VERSION}]`;
 
   const LS_SIDEBAR = 'akira-sidebar-open';
@@ -746,8 +778,54 @@
      * v1.6.1 hacerlo a la vez que el fetch provocó DOBLE llamada a Anthropic
      * y doble coste. Ruta única. (v1.6.2)
      */
+    /**
+     * Abre la sesión ANTES de preguntar, si aún no hay ninguna. (v1.2.0)
+     *
+     * Es la pieza que hace que el polling de recuperación del 504 funcione
+     * también en la PRIMERA pregunta de una conversación: sin sessionId,
+     * _handleResponse no puede arrancarlo y el usuario ve el error del
+     * gateway aunque la respuesta esté ya guardada en AkiraMessages.
+     *
+     * NO bloquea: si la llamada falla, se sigue adelante con _sessionId null
+     * y el comportamiento es el de v1.1.0. Peor que ahora no se puede quedar.
+     */
+    async _ensureSession(query) {
+      if (this._sessionId) return;
+      try {
+        const res = await fetch('/_functions/akiraNuevaSesion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: this._userId,
+            userName: this._userName,
+            query: query
+          })
+        });
+        if (!res.ok) {
+          console.warn(`${TAG} akiraNuevaSesion HTTP ${res.status} — se pregunta sin sessionId`);
+          return;
+        }
+        const data = await res.json();
+        if (data && data.ok && data.sessionId) {
+          this._sessionId = data.sessionId;
+          console.log(`${TAG} sesión abierta antes de preguntar: ${this._sessionId}`);
+          // Que la conversación aparezca ya en la barra lateral: si la
+          // respuesta llega por polling, _applyHistory no refresca la lista.
+          this._emit('akira-load-chats', {});
+        } else {
+          console.warn(`${TAG} akiraNuevaSesion sin sessionId — se pregunta sin él`);
+        }
+      } catch (err) {
+        console.warn(`${TAG} akiraNuevaSesion falló:`, err.message || err);
+      }
+    }
+
     async _fetchAkiraAsk(query, messageId) {
       try {
+        // v1.2.0 — sessionId primero. Un insert, milisegundos: no acerca esta
+        // petición al techo de 14s, y da al polling con qué recuperar.
+        await this._ensureSession(query);
+
         const res = await fetch('/_functions/akiraAsk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
