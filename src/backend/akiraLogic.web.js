@@ -1,8 +1,49 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.8.0
- * FECHA:    15 Agosto 2026
+ * VERSION:  1.9.0
+ * FECHA:    20 Agosto 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.8.0 → v1.9.0 — SESIÓN ANTES DE PREGUNTAR (arregla el 504 de la
+ *                            PRIMERA pregunta de cada chat)
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   EL FALLO (medido en producción Hair-Times, 20-Ago-2026):
+ *
+ *   El widget solo aprendía el sessionId del CUERPO de la respuesta de
+ *   akiraAsk (`data.sessionId`). Un 504 del gateway NO trae cuerpo. Por eso,
+ *   en la PRIMERA pregunta de un chat nuevo el widget se quedaba sin
+ *   sessionId y la condición de arranque del polling de recuperación
+ *   (`if (this._sessionId && this._lastQuery)`) era falsa: enseñaba el error
+ *   del gateway aunque la respuesta ya estuviera guardada en AkiraMessages.
+ *
+ *   La red de polling NUNCA protegió la primera pregunta de una conversación
+ *   — justo donde vive la pregunta analítica pesada. A partir de la segunda
+ *   funcionaba correctamente.
+ *
+ *   AGRAVANTE: `_sendQuery` no fija `_sessionId`, así que cada "Reintentar"
+ *   volvía a salir con sessionId null y askAkiraCore creaba OTRA sesión
+ *   (línea del `if (!sessionId) _crearSesion(...)`). Caso real: 3 pulsaciones
+ *   → 3 sesiones huérfanas → 3 análisis completos de ~43s facturados a
+ *   Anthropic, con la respuesta guardada las 3 veces y ninguna en pantalla.
+ *
+ *   Traza del caso: prepMs=204 · apiMs=43020 · consultas=4 · cache hit=26331
+ *   La lectura del CMS costó 0,2s de 43. El techo se pasó por las 4 tool
+ *   calls, no por el barrido de datos.
+ *
+ *   EL ARREGLO: `crearSesionCore` — el widget pide el sessionId ANTES de
+ *   lanzar la pregunta pesada. Es un insert, milisegundos, muy por debajo del
+ *   techo de 14s. Con el sessionId ya en mano, el polling cubre SIEMPRE, y
+ *   askAkiraCore recibe una sesión existente → se acaban las duplicadas por
+ *   reintento.
+ *
+ *   ADITIVO. `askAkiraCore` NO se toca: sigue creando la sesión por su cuenta
+ *   si le llega sin sessionId (llamadas desde webMethod, WhatsApp futuro, o
+ *   un widget viejo). El camino antiguo sigue vivo.
+ *
+ *   Requiere http-functions.js v1.4.0 (endpoint POST /_functions/
+ *   akiraNuevaSesion) y akiraConsole.js v1.2.0.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.7.0 → v1.8.0 — EL SALUDO SALE DEL CMS, NO DEL CÓDIGO
@@ -435,7 +476,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -2242,6 +2283,35 @@ async function _crearSesion(userId, userName, primeraQuery) {
   registro.usuarioNombre = userName || '';
   const res = await wixData.insert(C_SESSIONS, registro, AUTH);
   return res._id;
+}
+
+/**
+ * Crea la sesión y devuelve su _id. NUEVO v1.9.0.
+ *
+ * Función PURA, no webMethod: la llama http-functions.js, que corre SIN
+ * sesión de miembro (mismo motivo por el que askAkiraCore es pura).
+ *
+ * PARA QUÉ EXISTE:
+ *   Para que el widget tenga sessionId ANTES de lanzar la pregunta pesada.
+ *   Sin él no puede arrancar el polling de recuperación del 504, porque el
+ *   504 no trae cuerpo del que sacarlo. Ver el bloque de cabecera v1.9.0.
+ *
+ *   Coste: un insert. Milisegundos. El techo de 14s ni se acerca.
+ *
+ * NO valida nada más: la sesión vacía es inofensiva. Si el usuario cierra la
+ * pestaña antes de que llegue la respuesta, queda una sesión con título y sin
+ * mensajes — el mismo residuo que ya dejaba askAkiraCore cuando Anthropic
+ * fallaba después de _crearSesion.
+ */
+export async function crearSesionCore({ userId, userName, query } = {}) {
+  try {
+    const sessionId = await _crearSesion(userId, userName, query);
+    console.log(`${TAG} crearSesionCore OK sessionId=${sessionId}`);
+    return { ok: true, sessionId };
+  } catch (err) {
+    console.error(`${TAG} crearSesionCore EXCEPTION:`, err.message || err);
+    return { ok: false, error: err.message || 'No he podido abrir la conversación.' };
+  }
 }
 
 async function _getHistorial(sessionId) {
