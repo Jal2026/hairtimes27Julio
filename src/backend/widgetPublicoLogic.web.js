@@ -1,8 +1,29 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.3
+// VERSION: 0.9.4
 // FECHA: 20 de agosto de 2026
+//
+// v0.9.4: 🩹 EL FILTRO DE CATÁLOGO DEJA DE SER LITERAL.
+//    getServiciosCategoria filtraba en la propia consulta con
+//    .eq('active', true) y .hasSome('uso', USOS_PUBLICOS). Eso exige el
+//    dato perfecto: una fila con `active` VACÍO (no false: vacío) o con
+//    `uso` escrito "Ambos" o "ambos " quedaba fuera de la consulta y el
+//    servicio desaparecía de la web pública, aunque en el editor se viera
+//    correcto y activo. Sin ningún rastro.
+//
+//    CASO REAL (Hair-Times, 20-ago): el grupo SPA CAPILAR no aparecía
+//    siquiera entre los grupos devueltos por la consulta, pese a existir
+//    el servicio, estar activo y tener rol principal.
+//
+//    AHORA se carga el catálogo y se filtra en código: activo salvo que
+//    esté explícitamente en false, y uso comparado sin espacios ni
+//    mayúsculas. Las filas admitidas por esta tolerancia se listan en el
+//    log (con su active y su uso) para poder sanear el dato con calma.
+//
+//    + Si aun así el grupo sale vacío, el log busca el grupo en el
+//    catálogo COMPLETO y dice campo por campo por qué quedó fuera cada
+//    servicio.
 //
 // v0.9.3: 🔎 DIAGNÓSTICO DE CATEGORÍA VACÍA.
 //    Cuando getServiciosCategoria resuelve el grupo pero no encuentra
@@ -633,7 +654,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.3';
+const VERSION = '0.9.4';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -1252,14 +1273,32 @@ export const getServiciosCategoria = webMethod(
       // ninguna pista. Se comparan por clave normalizada.
       const clavesGrupo = new Set(groups.map(claveGrupo));
 
-      // 3. Cargar TODOS los servicios públicos activos
+      // 3. Cargar el catálogo y filtrar EN CÓDIGO.
+      // v0.9.4 — Antes el filtro iba en la consulta: .eq('active', true) y
+      // .hasSome('uso', USOS_PUBLICOS). Eso es literal: una fila con `active`
+      // vacío (no false, vacío) o con `uso` escrito como "Ambos" o con un
+      // espacio detrás quedaba fuera de la consulta y el servicio desaparecía
+      // de la web sin dejar rastro, aunque en el editor se viera correcto.
       const r2 = await wixData.query(CMS_CATALOGO)
-        .eq('active', true)
-        .hasSome('uso', USOS_PUBLICOS)
         .limit(1000)
         .find({ suppressAuth: true });
 
-      const all = r2.items || [];
+      const todos = r2.items || [];
+
+      // Activo salvo que esté explícitamente desactivado.
+      const esActivo = (it) => it.active !== false;
+      // Uso público comparado sin espacios ni mayúsculas.
+      const esPublico = (it) => USOS_PUBLICOS.includes(String(it.uso || '').trim().toLowerCase());
+
+      const all = todos.filter(it => esActivo(it) && esPublico(it));
+
+      // Dejar constancia de las filas que el criterio literal anterior habría
+      // tirado, para poder corregir el dato en el CMS con calma.
+      const rescatados = all.filter(it => it.active !== true || !USOS_PUBLICOS.includes(it.uso));
+      if (rescatados.length) {
+        console.warn(`${TAG} 🩹 ${rescatados.length} servicio(s) con el dato flojo (active/uso) admitidos igualmente: ${rescatados.map(it => `${it.label}(active=${JSON.stringify(it.active)}, uso=${JSON.stringify(it.uso)})`).join(' | ')}`);
+      }
+
       const porSetupUid = {};
       for (const it of all) if (it.setupUid) porSetupUid[it.setupUid] = it;
 
@@ -1279,14 +1318,23 @@ export const getServiciosCategoria = webMethod(
         console.warn(`${TAG} ⚠️ groups=[${groups.join(',')}] tiene ${delGrupo.length} servicio(s) pero ninguno con rol principal/ambos: ${detalle}`);
       }
       if (delGrupo.length === 0) {
-        // v0.9.2 — Distinguir sin ambigüedad entre "el servicio existe pero
-        // está fuera de la consulta (active/uso)" y "el servicio entra en la
-        // consulta pero su group no casa". Se listan los grupos que SÍ han
-        // entrado: si SPA CAPILAR no aparece, el servicio está inactivo o no
-        // es público; si aparece, el problema es el valor del campo.
+        // v0.9.4 — Si el grupo no aparece entre los admitidos, buscarlo en el
+        // catálogo COMPLETO y decir por qué quedó fuera. Cierra el diagnóstico
+        // en una sola línea en vez de a base de recargas.
         const gruposVivos = [...new Set(all.map(it => String(it.group || '∅')))].sort();
-        console.warn(`${TAG} ⚠️ Ningún servicio activo y público con group=[${groups.join(',')}]`);
-        console.warn(`${TAG} 🔎 Grupos presentes entre los ${all.length} servicios activos y públicos: [${gruposVivos.join(' | ')}]`);
+        console.warn(`${TAG} ⚠️ Ningún servicio del grupo [${groups.join(',')}] llega al filtro`);
+        console.warn(`${TAG} 🔎 Grupos admitidos (${all.length} de ${todos.length} servicios): [${gruposVivos.join(' | ')}]`);
+
+        const enCrudo = todos.filter(it => clavesGrupo.has(claveGrupo(it.group)));
+        if (enCrudo.length) {
+          const detalle = enCrudo.map(it =>
+            `${it.label}(active=${JSON.stringify(it.active)}, uso=${JSON.stringify(it.uso)}, rol=${JSON.stringify(it.tipo)})`
+          ).join(' | ');
+          console.warn(`${TAG} 🔎 En el catálogo SÍ hay ${enCrudo.length} con ese grupo, excluidos por sus campos: ${detalle}`);
+        } else {
+          const clavesReales = [...new Set(todos.map(it => claveGrupo(it.group)))].sort();
+          console.warn(`${TAG} 🔎 Ni en el catálogo completo hay group que case. Claves reales: [${clavesReales.join(' | ')}]`);
+        }
       }
 
       console.log(`${TAG} ✅ getServiciosCategoria slug=${slug || '∅'} groups=[${groups.join(',')}]: ${servicios.length} servicios. ${((Date.now()-t0)/1000).toFixed(2)}s`);
