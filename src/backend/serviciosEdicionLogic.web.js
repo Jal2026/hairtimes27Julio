@@ -539,7 +539,6 @@ export const actualizarServicio = webMethod(
       // v1.12.0 — caducidad (días) + frecuencia mínima entre usos (días)
       bonusValidityDays,
       bonusUseIntervalDays,
-      bonusMaxIntervalDays,
       // v1.13.0 — plazo MÁXIMO por uso
       bonusMaxIntervalDays
     } = payload;
@@ -778,6 +777,8 @@ export const crearServicioCatalogo = webMethod(
       // v1.12.0 — caducidad (días) + frecuencia mínima entre usos (días)
       bonusValidityDays,
       bonusUseIntervalDays,
+      // v1.13.0 — plazo MÁXIMO por uso
+      bonusMaxIntervalDays,
       base64Data,
       fileName,
       mimeType
