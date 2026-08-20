@@ -1,8 +1,8 @@
 // =====================================================
 // KAMISUITE - Backend: Gestión de Personal (Staff Config)
 // =====================================================
-// VERSION: 1.3.5
-// FECHA: 6 de julio de 2026
+// VERSION: 1.3.7
+// FECHA: 20 de agosto de 2026
 //
 // ARCHIVO: backend/staffConfigLogic.web.js
 //
@@ -37,11 +37,55 @@
 //     locationName          (Text)
 //     active                (Boolean)
 //     commissionPercentage  (Number)
-//     workingHoursSessionIds (Text)   ← JSON array
+//     workingHoursSessionIds (Text)   ← JSON V2: {"items":[{dow,open,from,to}]}
 //     notes                 (Text)
 //     profileImage          (Text)    ← URL wix:image:// o https://
 //
 // CHANGELOG:
+//   v1.3.7 - 20/08/2026 - 🔧 AUTORREPARACIÓN DEL HORARIO V1 → V2. Las filas de
+//                         StaffConfig que quedaron con el campo
+//                         workingHoursSessionIds en formato V1 (array de session
+//                         IDs) NO necesitan que nadie vuelva a teclear el horario:
+//                         getStaffCompleto detecta las filas sin JSON V2, lee las
+//                         sesiones WORKING_HOURS que ese empleado YA tiene en Wix
+//                         Bookings (queryWorkingHoursSessions), las traduce con
+//                         parsearSesionesAHorario y reescribe el campo en formato
+//                         V2. Basta con abrir la pantalla de Gestión de Personal
+//                         una vez. Idempotente: en cargas posteriores no encuentra
+//                         nada que reparar y no hace ninguna llamada extra.
+//                         Si un empleado no tiene sesiones en Bookings, se deja
+//                         intacto y se avisa por log (no se inventa horario).
+//                         Sin cambios en la forma de respuesta de getStaffCompleto
+//                         salvo el campo informativo horariosReparados.
+//   v1.3.6 - 20/08/2026 - 🔴 FIX CRÍTICO: updateStaffHorario escribía en
+//                         StaffConfig.workingHoursSessionIds un array plano de
+//                         session IDs de Wix Bookings (formato V1). El motor V2
+//                         (widgetPublicoLogic.leerHorarioStaffEnDia y su copia en
+//                         este backend) espera el JSON V2:
+//                           {"items":[{"dow":N,"open":bool,"from":"HH:mm","to":"HH:mm"}]}
+//                         Consecuencia: todo empleado cuyo horario se guardase
+//                         desde esta pantalla quedaba SIN DISPONIBILIDAD PÚBLICA
+//                         (todos los huecos 'cerrado') y sus bloqueos por rango
+//                         se omitían con "libra" los 7 días de la semana.
+//                         AHORA: updateStaffHorario construye y guarda el JSON V2
+//                         a partir de horarioSemanal. Los session IDs de Bookings
+//                         ya NO se guardan en el campo (el borrado del horario
+//                         anterior se apoya en queryWorkingHoursSessions, que es
+//                         la vía real y ya funcionaba); el fallback de borrado
+//                         tolera los dos formatos para no romper filas antiguas.
+//                         + getStaffHorario prioriza el JSON V2 del CMS para
+//                         poblar la pestaña Horario; si no lo hay, cae al parseo
+//                         de sesiones de Bookings (comportamiento previo).
+//                         + getStaffBloqueos / eliminarStaffBloqueo /
+//                         getCierresSalon / eliminarCierreSalon MIGRADAS a
+//                         KamisuiteReservations (family:'BLOQUEO'): cierra el
+//                         pendiente nº1 de la sesión del 06/07. Las listas
+//                         "Bloqueos activos" y "Cierres" ya muestran lo que se
+//                         crea (antes leían Wix Bookings y salían siempre vacías).
+//                         El borrado delega en eliminarBloqueo() de
+//                         recepcionProLogic, que valida family==='BLOQUEO' antes
+//                         de borrar (guard contra borrar una cita real).
+//                         Formas de respuesta de las 4 funciones sin cambios.
 //   v1.3.5 - 06/07/2026 - 🚫 BLOQUEOS Y CIERRES MIGRADOS A KamisuiteReservations (V2).
 //                         ANTES: crearStaffBloqueo y crearCierreSalon escribían en
 //                         Wix Bookings (sessions.createSession, tags:['Blocked']).
@@ -92,14 +136,22 @@ import { mediaManager } from 'wix-media-backend';
 // backend→backend que usa clienteAreaLogic.web (import { cancelarReserva }
 // from 'backend/recepcionProLogic.web'). Sin dependencia circular:
 // recepcionProLogic NO importa nada de staffConfigLogic.
-import { crearBloqueo as crearBloqueoV2 } from 'backend/recepcionProLogic.web';
+// v1.3.6 — eliminarBloqueo se importa igual: valida family==='BLOQUEO' antes de
+// borrar la fila, así que el borrado desde esta pantalla nunca puede tocar una
+// cita real aunque llegase un id equivocado.
+import {
+  crearBloqueo    as crearBloqueoV2,
+  eliminarBloqueo as eliminarBloqueoV2
+} from 'backend/recepcionProLogic.web';
 
-const VERSION = '1.3.5';
+const VERSION = '1.3.7';
 const TAG = `[StaffConfig][${VERSION}]`;
 
 // ─── CMS ───────────────────────────────────────────
 const CMS_STAFF            = 'StaffConfig';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
+// v1.3.6 — Bloqueos y cierres viven aquí (family:'BLOQUEO'), no en Wix Bookings.
+const CMS_RESERVAS         = 'KamisuiteReservations';
 
 // Tags de Wix Bookings — NO modificar
 const TAG_STAFF    = 'staff';
@@ -107,6 +159,21 @@ const TAG_BUSINESS = 'business';
 
 // Recursos internos que el widget NO debe mostrar al usuario
 const CANONICAL_HIDDEN = ['CUALQUIERA', 'PROCESO'];
+
+// v1.3.6 — Día → dow (0=domingo … 6=sábado), el mismo índice que devuelve
+// Date.getDay() y que usa el motor V2 (leerHorarioStaffEnDia busca por dow).
+const DOW_DAYS = {
+  domingo:   0,
+  lunes:     1,
+  martes:    2,
+  miercoles: 3,
+  jueves:    4,
+  viernes:   5,
+  sabado:    6
+};
+
+// v1.3.6 — dow → nombre de día, para reconstruir horarioSemanal desde el JSON V2.
+const DOW_TO_DIA = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
 
 // Días de la semana para RRULE
 const RRULE_DAYS = {
@@ -125,6 +192,138 @@ const RRULE_DAYS = {
 
 function safeErr(e) {
   return { message: e?.message || String(e) };
+}
+
+/**
+ * v1.3.6 — Construye el JSON V2 de horario a partir de horarioSemanal.
+ *
+ *   horarioSemanal: [{ dia:'lunes', inicio:'10:00', fin:'20:00' }, ...]
+ *   → '{"items":[{"dow":0,"open":false,"from":"","to":""}, ...7 entradas...]}'
+ *
+ * Se emiten SIEMPRE los 7 días (los que no trabaja con open:false), que es la
+ * forma que ya consume widgetPublicoLogic.leerHorarioStaffEnDia en producción.
+ * Si por lo que sea llegaran dos tramos del mismo día, se funden en uno solo
+ * (from = el más temprano, to = el más tardío) en vez de perder el segundo.
+ */
+function construirHorarioV2(horarioSemanal) {
+  const porDow = {};
+
+  for (const tramo of (horarioSemanal || [])) {
+    const dow = DOW_DAYS[String(tramo?.dia || '').toLowerCase()];
+    if (dow === undefined) continue;
+    const mIni = parseHHMM(tramo?.inicio);
+    const mFin = parseHHMM(tramo?.fin);
+    if (mIni == null || mFin == null || mFin <= mIni) continue;
+
+    if (!porDow[dow]) {
+      porDow[dow] = { from: mIni, to: mFin };
+    } else {
+      // Dos tramos el mismo día → fusionar extremos (no se descarta nada).
+      porDow[dow].from = Math.min(porDow[dow].from, mIni);
+      porDow[dow].to   = Math.max(porDow[dow].to,   mFin);
+      console.warn(`${TAG} ⚠️ ${tramo.dia}: dos tramos el mismo día, fusionados`);
+    }
+  }
+
+  const items = [];
+  for (let dow = 0; dow <= 6; dow++) {
+    const d = porDow[dow];
+    items.push(d
+      ? { dow, open: true,  from: minToHHMM(d.from), to: minToHHMM(d.to) }
+      : { dow, open: false, from: '',                to: ''              });
+  }
+
+  return JSON.stringify({ items });
+}
+
+/**
+ * v1.3.7 — Autorreparación V1 → V2 del horario.
+ *
+ * Reconstruye StaffConfig.workingHoursSessionIds en formato V2 para las filas
+ * que aún estén en formato V1 (array plano de session IDs) o vacías, SIN pedir
+ * a nadie que vuelva a teclear el horario: la fuente es lo que ese empleado ya
+ * tiene creado en Wix Bookings como sesiones WORKING_HOURS, que es exactamente
+ * lo que updateStaffHorario venía creando correctamente.
+ *
+ * Reglas:
+ *  · Si la fila ya tiene JSON V2 → no se toca, ni se consulta Bookings.
+ *  · Si no hay wixScheduleId o no hay sesiones → se deja intacta y se avisa.
+ *    NUNCA se inventa un horario.
+ *  · READ-MERGE-UPDATE: se relee la fila antes de escribir (wixData.update
+ *    reemplaza el documento entero).
+ *
+ * Devuelve el listado de nombres reparados (vacío si no había nada que hacer).
+ */
+async function repararHorariosV1(filas) {
+  const reparados = [];
+
+  for (const s of (filas || [])) {
+    if (leerItemsHorarioV2(s).length > 0) continue;          // ya está en V2
+    const nombre = s.displayName || s.canonicalName || s._id;
+
+    if (!s.wixScheduleId) {
+      console.warn(`${TAG} ⚠️ ${nombre}: horario en formato antiguo y sin wixScheduleId → no reparable automáticamente`);
+      continue;
+    }
+
+    try {
+      const sesiones = await queryWorkingHoursSessions(s.wixScheduleId);
+      if (!sesiones.length) {
+        console.warn(`${TAG} ⚠️ ${nombre}: sin sesiones WORKING_HOURS en Bookings → hay que guardar el horario a mano`);
+        continue;
+      }
+
+      const tramos = parsearSesionesAHorario(sesiones);
+      if (!tramos.length) {
+        console.warn(`${TAG} ⚠️ ${nombre}: ${sesiones.length} sesiones no parseables → sin reparar`);
+        continue;
+      }
+
+      const json = construirHorarioV2(tramos);
+
+      const fresh = await wixData.get(CMS_STAFF, s._id, { suppressAuth: true });
+      if (!fresh) continue;
+
+      await wixData.update(CMS_STAFF, {
+        ...fresh,
+        workingHoursSessionIds: json
+      }, { suppressAuth: true });
+
+      // Refrescar el objeto en memoria para que esta misma respuesta ya salga bien.
+      s.workingHoursSessionIds = json;
+
+      reparados.push(nombre);
+      console.log(`${TAG} 🔧 Horario reparado V1→V2: ${nombre} (${tramos.length} días)`);
+
+    } catch (e) {
+      console.error(`${TAG} ❌ Reparando horario de ${nombre}: ${e.message}`);
+    }
+  }
+
+  if (reparados.length) {
+    console.log(`${TAG} 🔧 Autorreparación completada: ${reparados.length} horarios migrados a V2`);
+  }
+
+  return reparados;
+}
+
+/**
+ * v1.3.6 — Lee el JSON V2 del CMS y lo devuelve como array de items.
+ * Devuelve [] si el campo está vacío, no parsea, o está en formato V1
+ * (array plano de session IDs de Wix Bookings).
+ */
+function leerItemsHorarioV2(staffRecord) {
+  const raw = staffRecord?.workingHoursSessionIds;
+  if (!raw) return [];
+  try {
+    const obj = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+    const items = Array.isArray(obj?.items) ? obj.items : [];
+    // Formato V1 (["id1","id2"]) → items vacío, no hay horario V2 que leer.
+    return items.filter(it => it && typeof it === 'object' && it.dow !== undefined);
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ workingHoursSessionIds no parseable (${staffRecord?.canonicalName || staffRecord?._id}): ${e.message}`);
+    return [];
+  }
 }
 
 /**
@@ -366,6 +565,12 @@ export const getStaffCompleto = webMethod(
 
       let staffItems = cmsResult.items || [];
 
+      // v1.3.7 — Autorreparación del horario V1 → V2. Se pasa sobre TODAS las
+      // filas (también las ocultas tipo CUALQUIERA), antes de filtrar y de
+      // mapear, para que la respuesta ya salga con el campo correcto. Si no hay
+      // nada que reparar, no hace ninguna llamada adicional.
+      const horariosReparados = await repararHorariosV1(cmsResult.items || []);
+
       if (!incluirOcultos) {
         staffItems = staffItems.filter(s =>
           !CANONICAL_HIDDEN.some(h => (s.canonicalName || '').toUpperCase().includes(h.toUpperCase()))
@@ -435,7 +640,7 @@ export const getStaffCompleto = webMethod(
       });
 
       console.log(`${TAG} ✅ ${staff.length} miembros cargados`);
-      return { ok: true, staff };
+      return { ok: true, staff, horariosReparados };
 
     } catch (e) {
       console.error(`${TAG} ❌ getStaffCompleto:`, e.message);
@@ -478,23 +683,41 @@ export const getStaffHorario = webMethod(
 
       const sesiones = await queryWorkingHoursSessions(scheduleId);
       const sessionIds = sesiones.map(s => s._id || s.id).filter(Boolean);
-      const horario    = parsearSesionesAHorario(sesiones);
 
-      console.log(`${TAG} ✅ ${sesiones.length} sesiones → ${horario.length} tramos parseados`);
+      // v1.3.6 — La fuente de verdad del horario V2 es el JSON del CMS, que es
+      // lo que leen el motor de huecos público y los bloqueos por rango. Si la
+      // fila ya lo tiene, la pestaña Horario muestra ESO (así el usuario ve lo
+      // mismo que decide la disponibilidad). Si no lo tiene todavía (fila
+      // antigua en formato V1), se cae al parseo de sesiones de Bookings, que
+      // es el comportamiento previo.
+      const itemsV2 = leerItemsHorarioV2(staffRecord);
+      let horario;
+      let origenHorario;
 
-      let storedIds = [];
-      try {
-        storedIds = JSON.parse(staffRecord.workingHoursSessionIds || '[]');
-      } catch (_) {
-        storedIds = [];
+      if (itemsV2.length > 0) {
+        horario = itemsV2
+          .filter(it => it.open && it.from && it.to)
+          .map(it => ({
+            dia:    DOW_TO_DIA[Number(it.dow)] || '',
+            inicio: it.from,
+            fin:    it.to
+          }))
+          .filter(t => t.dia);
+        origenHorario = 'CMS_V2';
+      } else {
+        horario = parsearSesionesAHorario(sesiones);
+        origenHorario = 'BOOKINGS_LEGADO';
       }
+
+      console.log(`${TAG} ✅ ${sesiones.length} sesiones | horario desde ${origenHorario} → ${horario.length} tramos`);
 
       return {
         ok: true,
         scheduleId,
         sessionIds,
         horario,   // [{ dia, inicio, fin }] listo para el widget
-        workingHoursSessionIdsEnCMS: storedIds,
+        origenHorario,
+        formatoV2: itemsV2.length > 0,
         displayName: staffRecord.displayName || staffRecord.canonicalName
       };
 
@@ -675,12 +898,18 @@ export const updateStaffHorario = webMethod(
       const sesionesActuales = await queryWorkingHoursSessions(scheduleId);
       let sessionIdsAEliminar = sesionesActuales.map(s => s._id || s.id).filter(Boolean);
       if (sessionIdsAEliminar.length === 0) {
+        // v1.3.6 — El campo ya no guarda session IDs (guarda el JSON V2 de
+        // horario). Este fallback solo sirve para filas antiguas que aún
+        // conserven el array plano V1; con el JSON V2 devuelve [] sin romper.
         try {
-          sessionIdsAEliminar = JSON.parse(staffRecord.workingHoursSessionIds || '[]');
+          const parsed = JSON.parse(staffRecord.workingHoursSessionIds || '[]');
+          sessionIdsAEliminar = Array.isArray(parsed)
+            ? parsed.filter(x => typeof x === 'string' && x)
+            : [];
         } catch (_) {
           sessionIdsAEliminar = [];
         }
-        console.log(`${TAG} 📋 Usando IDs de CMS: ${sessionIdsAEliminar.length}`);
+        console.log(`${TAG} 📋 Usando IDs de CMS (legado V1): ${sessionIdsAEliminar.length}`);
       }
 
       const elevatedDelete = elevate(sessions.deleteSession);
@@ -752,13 +981,32 @@ export const updateStaffHorario = webMethod(
         }
       }
 
+      // ── v1.3.6 · EL CAMBIO CRÍTICO ────────────────────────────────────
+      // Antes aquí se guardaba JSON.stringify(nuevasSessionIds): un array de
+      // session IDs de Wix Bookings (formato V1). El motor V2 lee este mismo
+      // campo esperando {"items":[{dow,open,from,to}]} y, al no encontrarlo,
+      // daba al empleado por CERRADO todos los días: sin disponibilidad en el
+      // widget público y con los bloqueos por rango omitidos como "libra".
+      // Ahora se guarda el JSON V2 construido desde horarioSemanal.
+      const horarioV2 = construirHorarioV2(tramos);
+
+      // READ-MERGE-UPDATE: wixData.update reemplaza el documento entero.
+      // staffRecord se leyó al principio de la función y se propaga completo.
       await wixData.update(CMS_STAFF, {
         ...staffRecord,
-        workingHoursSessionIds: JSON.stringify(nuevasSessionIds)
+        workingHoursSessionIds: horarioV2
       }, { suppressAuth: true });
 
-      console.log(`${TAG} ✅ Horario: ${nuevasSessionIds.length} sesiones creadas`);
-      return { ok: true, eliminadas, creadas: nuevasSessionIds.length, sessionIds: nuevasSessionIds };
+      const diasAbiertos = JSON.parse(horarioV2).items.filter(i => i.open).length;
+      console.log(`${TAG} ✅ Horario: ${nuevasSessionIds.length} sesiones creadas | JSON V2 guardado (${diasAbiertos} días abiertos)`);
+      return {
+        ok: true,
+        eliminadas,
+        creadas: nuevasSessionIds.length,
+        sessionIds: nuevasSessionIds,
+        horarioV2,
+        diasAbiertos
+      };
 
     } catch (e) {
       console.error(`${TAG} ❌ updateStaffHorario:`, e.message);
@@ -1111,7 +1359,70 @@ function dowDeFecha(fechaISO) {
   return new Date(y, mo - 1, d).getDay();
 }
 
+// ─── HELPERS DE FORMATO MADRID (v1.3.6) ──────────────
+// Un bloqueo en KamisuiteReservations guarda fechaReserva (Date, instante UTC)
+// y duracionTotal (minutos). La lista del widget necesita fecha 'YYYY-MM-DD' y
+// horas 'HH:MM' en hora de Madrid.
+function fechaMadridISO(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleDateString('es-ES', {
+    timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).split('/').reverse().join('-');
+}
+
+function horaMadrid(d) {
+  if (!d) return '';
+  return new Date(d).toLocaleTimeString('es-ES', {
+    timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit'
+  });
+}
+
+// Motivo legible de una fila BLOQUEO. crearBloqueo guarda title = motivo y
+// clientName = 'BLOQUEO:' + motivo. Se prefiere title; el prefijo se limpia
+// por si la fila viniera con clientName solamente.
+function motivoDeBloqueo(reg) {
+  const t = String(reg?.title || '').trim();
+  if (t) return t;
+  return String(reg?.clientName || '').replace(/^BLOQUEO:\s*/i, '').trim();
+}
+
+// Lee filas BLOQUEO futuras (desde el inicio del día de hoy hasta +6 meses),
+// opcionalmente filtradas por staffId (wixResourceId). Pagina para no quedarse
+// en el límite silencioso de 1.000 registros de wixData.
+async function queryBloqueosV2({ staffId = null, desde = null, hasta = null } = {}) {
+  const ini = desde || (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+  const fin = hasta || (() => { const d = new Date(ini); d.setMonth(d.getMonth() + 6); return d; })();
+
+  const out = [];
+  let skip = 0;
+  const PAGE = 500;
+
+  while (true) {
+    let q = wixData.query(CMS_RESERVAS)
+      .eq('family', 'BLOQUEO')
+      .ge('fechaReserva', ini)
+      .lt('fechaReserva', fin)
+      .ascending('fechaReserva')
+      .limit(PAGE)
+      .skip(skip);
+
+    if (staffId) q = q.eq('staffId', staffId);
+
+    const res = await q.find({ suppressAuth: true });
+    const items = res?.items || [];
+    out.push(...items);
+    if (items.length < PAGE) break;
+    skip += PAGE;
+    if (skip > 5000) break; // tope de seguridad
+  }
+
+  return out;
+}
+
 // ── Leer bloqueos de un empleado ────────────────────
+// v1.3.6 — Lee de KamisuiteReservations (family:'BLOQUEO', staffId =
+// wixResourceId), que es donde crearStaffBloqueo escribe desde v1.3.5.
+// Antes leía Wix Bookings y por eso la lista salía siempre vacía.
 export const getStaffBloqueos = webMethod(
   Permissions.Anyone,
   async ({ staffConfigId }) => {
@@ -1119,42 +1430,24 @@ export const getStaffBloqueos = webMethod(
       console.log(`${TAG} 🔒 Leyendo bloqueos: ${staffConfigId}`);
 
       const staffRecord = await wixData.get(CMS_STAFF, staffConfigId, { suppressAuth: true });
-      if (!staffRecord?.wixScheduleId) {
+      if (!staffRecord?.wixResourceId) {
         return { ok: true, bloqueos: [] };
       }
 
-      const elevatedQuery = elevate(sessions.querySessions);
-      const ahora = new Date();
-      const dentroDe6Meses = new Date(ahora);
-      dentroDe6Meses.setMonth(dentroDe6Meses.getMonth() + 6);
+      const filas = await queryBloqueosV2({ staffId: staffRecord.wixResourceId });
 
-      const result = await elevatedQuery()
-        .eq('scheduleId', staffRecord.wixScheduleId)
-        .eq('type', 'EVENT')
-        .ge('end.timestamp', ahora)
-        .lt('start.timestamp', dentroDe6Meses)
-        .find({ suppressAuth: true });
-
-      const bloqueos = (result?.items || [])
-        .filter(s => (s.tags || []).includes('Blocked'))
-        .map(s => {
-          const toMadrid = (ts) => {
-            if (!ts) return '';
-            const d = new Date(ts);
-            return d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
-          };
-          const toFechaMadrid = (ts) => {
-            if (!ts) return '';
-            return new Date(ts).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
-          };
-          return {
-            id:     s._id || s.id,
-            fecha:  toFechaMadrid(s.start?.timestamp),
-            inicio: toMadrid(s.start?.timestamp),
-            fin:    toMadrid(s.end?.timestamp),
-            motivo: s.notes || ''
-          };
-        });
+      const bloqueos = filas.map(r => {
+        const ini = new Date(r.fechaReserva);
+        const dur = Number(r.duracionTotal) || 0;
+        const fin = new Date(ini.getTime() + dur * 60000);
+        return {
+          id:     r._id,
+          fecha:  fechaMadridISO(ini),
+          inicio: horaMadrid(ini),
+          fin:    horaMadrid(fin),
+          motivo: motivoDeBloqueo(r)
+        };
+      });
 
       console.log(`${TAG} ✅ ${bloqueos.length} bloqueos encontrados`);
       return { ok: true, bloqueos };
@@ -1300,8 +1593,14 @@ export const eliminarStaffBloqueo = webMethod(
         return { ok: false, error: { message: 'Falta sessionId' } };
       }
 
-      const elevatedDelete = elevate(sessions.deleteSession);
-      await elevatedDelete(sessionId);
+      // v1.3.6 — sessionId es ahora el _id de la fila BLOQUEO en
+      // KamisuiteReservations. Se delega en eliminarBloqueo de
+      // recepcionProLogic, que lee la fila y aborta si family !== 'BLOQUEO'.
+      // El nombre del parámetro se mantiene para no tocar page code ni widget.
+      const res = await eliminarBloqueoV2({ id: sessionId });
+      if (!res?.ok) {
+        return { ok: false, error: res?.error || { message: 'No se pudo eliminar el bloqueo' } };
+      }
 
       console.log(`${TAG} ✅ Bloqueo eliminado: ${sessionId}`);
       return { ok: true };
@@ -1451,53 +1750,49 @@ export const crearCierreSalon = webMethod(
   }
 );
 
-// ── Leer cierres del salón (consulta bloqueos de CUALQUIERA) ──
+// ── Leer cierres del salón ───────────────────────────
+// v1.3.6 — Lee de KamisuiteReservations (family:'BLOQUEO'). Un cierre de salón
+// no es una fila propia: son N bloqueos, uno por empleado, con la misma fecha,
+// tramo y motivo. Se agrupan por fecha+inicio+fin+motivo y se considera cierre
+// el grupo que afecta a 2 o más empleados distintos (un solo empleado es un
+// bloqueo individual y ya sale en su propia pestaña).
 export const getCierresSalon = webMethod(
   Permissions.Anyone,
   async () => {
     try {
       console.log(`${TAG} 🔒 Leyendo cierres del salón`);
 
-      // Usar CUALQUIERA como representante del salón
-      const cmsResult = await wixData.query(CMS_STAFF)
-        .contains('canonicalName', 'CUALQUIERA')
-        .limit(1)
-        .find({ suppressAuth: true });
+      const filas = await queryBloqueosV2({});
 
-      const cualquiera = cmsResult.items?.[0];
-      if (!cualquiera?.wixScheduleId) {
-        return { ok: true, cierres: [] };
+      const grupos = new Map();
+      for (const r of filas) {
+        const ini = new Date(r.fechaReserva);
+        const dur = Number(r.duracionTotal) || 0;
+        const fin = new Date(ini.getTime() + dur * 60000);
+        const fecha  = fechaMadridISO(ini);
+        const hIni   = horaMadrid(ini);
+        const hFin   = horaMadrid(fin);
+        const motivo = motivoDeBloqueo(r);
+        const clave  = `${fecha}|${hIni}|${hFin}|${motivo}`;
+
+        if (!grupos.has(clave)) {
+          grupos.set(clave, { fecha, inicio: hIni, fin: hFin, motivo, staff: new Set(), ids: [] });
+        }
+        const g = grupos.get(clave);
+        if (r.staffId) g.staff.add(r.staffId);
+        g.ids.push(r._id);
       }
 
-      const elevatedQuery = elevate(sessions.querySessions);
-      const ahora = new Date();
-      const dentroDe6Meses = new Date(ahora);
-      dentroDe6Meses.setMonth(dentroDe6Meses.getMonth() + 6);
-
-      const result = await elevatedQuery()
-        .eq('scheduleId', cualquiera.wixScheduleId)
-        .eq('type', 'EVENT')
-        .ge('end.timestamp', ahora)
-        .lt('start.timestamp', dentroDe6Meses)
-        .find({ suppressAuth: true });
-
-      const toMadrid = (ts) => {
-        if (!ts) return '';
-        return new Date(ts).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
-      };
-      const toFechaMadrid = (ts) => {
-        if (!ts) return '';
-        return new Date(ts).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
-      };
-
-      const cierres = (result?.items || [])
-        .filter(s => (s.tags || []).includes('Blocked'))
-        .map(s => ({
-          sessionIdCualquiera: s._id || s.id,
-          fecha:  toFechaMadrid(s.start?.timestamp),
-          inicio: toMadrid(s.start?.timestamp),
-          fin:    toMadrid(s.end?.timestamp),
-          motivo: s.notes || ''
+      const cierres = [...grupos.values()]
+        .filter(g => g.staff.size >= 2)
+        .sort((a, b) => (a.fecha + a.inicio).localeCompare(b.fecha + b.inicio))
+        .map(g => ({
+          fecha:     g.fecha,
+          inicio:    g.inicio,
+          fin:       g.fin,
+          motivo:    g.motivo,
+          empleados: g.staff.size,
+          ids:       g.ids
         }));
 
       console.log(`${TAG} ✅ ${cierres.length} cierres encontrados`);
@@ -1521,46 +1816,37 @@ export const eliminarCierreSalon = webMethod(
         return { ok: false, error: { message: 'Faltan parámetros: fecha, inicio, fin' } };
       }
 
-      // Leer todos los empleados con scheduleId (incluye CUALQUIERA)
-      const cmsResult = await wixData.query(CMS_STAFF).limit(50).find({ suppressAuth: true });
-      const todos = (cmsResult.items || []).filter(s => s.wixScheduleId && s.wixResourceId);
+      // v1.3.6 — Borra las filas BLOQUEO de KamisuiteReservations que coinciden
+      // en fecha y tramo, sea cual sea el empleado. El borrado pasa por
+      // eliminarBloqueo de recepcionProLogic, que valida family==='BLOQUEO'.
+      const desde = new Date(`${fecha}T00:00:00.000Z`);
+      desde.setUTCDate(desde.getUTCDate() - 1);   // margen por huso horario
+      const hasta = new Date(`${fecha}T00:00:00.000Z`);
+      hasta.setUTCDate(hasta.getUTCDate() + 2);
 
-      const elevatedQuery  = elevate(sessions.querySessions);
-      const elevatedDelete = elevate(sessions.deleteSession);
+      const filas = await queryBloqueosV2({ desde, hasta });
 
-      const ahora = new Date();
-      const dentroDe6Meses = new Date(ahora);
-      dentroDe6Meses.setMonth(dentroDe6Meses.getMonth() + 6);
+      const objetivo = filas.filter(r => {
+        const ini = new Date(r.fechaReserva);
+        const dur = Number(r.duracionTotal) || 0;
+        const f   = new Date(ini.getTime() + dur * 60000);
+        return fechaMadridISO(ini) === fecha
+            && horaMadrid(ini) === inicio
+            && horaMadrid(f)   === fin;
+      });
 
       let eliminadas = 0;
-
-      for (const s of todos) {
+      for (const r of objetivo) {
         try {
-          const result = await elevatedQuery()
-            .eq('scheduleId', s.wixScheduleId)
-            .eq('type', 'EVENT')
-            .ge('end.timestamp', ahora)
-            .lt('start.timestamp', dentroDe6Meses)
-            .find({ suppressAuth: true });
-
-          const bloqueos = (result?.items || []).filter(b => {
-            if (!(b.tags || []).includes('Blocked')) return false;
-            const bInicio = new Date(b.start?.timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
-            const bFin    = new Date(b.end?.timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Madrid' });
-            const bFecha  = new Date(b.start?.timestamp).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
-            return bFecha === fecha && bInicio === inicio && bFin === fin;
-          });
-
-          for (const b of bloqueos) {
-            await elevatedDelete(b._id || b.id);
-            eliminadas++;
-          }
+          const res = await eliminarBloqueoV2({ id: r._id });
+          if (res?.ok) eliminadas++;
+          else console.warn(`${TAG} ⚠️ No se pudo eliminar bloqueo ${r._id}: ${res?.error?.message}`);
         } catch (err) {
-          console.warn(`${TAG} ⚠️ Error eliminando cierre para ${s.displayName}: ${err.message}`);
+          console.warn(`${TAG} ⚠️ Error eliminando bloqueo ${r._id}: ${err.message}`);
         }
       }
 
-      console.log(`${TAG} ✅ Cierre eliminado: ${eliminadas} bloqueos borrados`);
+      console.log(`${TAG} ✅ Cierre eliminado: ${eliminadas}/${objetivo.length} bloqueos borrados`);
       return { ok: true, eliminadas };
 
     } catch (e) {
