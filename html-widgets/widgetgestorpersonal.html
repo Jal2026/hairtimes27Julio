@@ -1,0 +1,1579 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>KAMISUITE · Gestión de Personal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    /* ═══════════════════════════════════════════════════
+       KAMISUITE · Widget Gestión de Personal v1.2.1
+       Dark theme — Bai Jamjuree — accent #e8368f
+       ───────────────────────────────────────────────────
+       CHANGELOG:
+       v1.2.1 · 06 Jul 2026 · +Rango de fechas en Bloqueos y Cierre.
+         · Nuevo <input type="date" id="bloqueoFechaFin"> (opcional) en
+           el formulario de bloqueo, junto a la fecha ya existente
+           (renombrada visualmente a "Fecha inicio"). Fila .row-2 con
+           las clases field-group/field-label ya existentes.
+         · Nuevo <input type="date" id="cierreFechaFin"> (opcional) en
+           el formulario de Cierre del salón, mismo patrón.
+         · crearBloqueo()/aplicarCierreSalon() leen y envían fechaFin.
+           Vacío = un solo día (comportamiento previo). Con fecha fin =
+           rango, día completo por horario laboral (lógica en backend).
+       v1.2.0 · 06 Jul 2026 · +Nivel de acceso (StaffConfig.accessLevel)
+         · Nuevo <select id="editAccessLevel"> en tab DATOS, entre
+           "Notas internas" y toggle "Colaborador externo".
+           Opciones: "" (sin asignar) · 1 Administrador · 2 Encargado
+           · 3 Recepción · 4 Básico.
+         · actualizarEditorConDatos carga s.accessLevel al select.
+         · guardarDatosBasicos envía accessLevel (null | 1..4) al backend.
+         · Sin CSS nuevo (reutiliza .field-group + estilos select globales).
+         · Sin cambios en formulario de alta (se asigna post-creación).
+         · badge-version del topbar NO se toca (texto visible = permiso).
+       v1.1.0 · 13 Mar 2026 · versión previa
+       ═══════════════════════════════════════════════════ */
+    :root {
+      --bg:           #0f1117;
+      --surface:      #181b23;
+      --surface2:     #1e222c;
+      --surface3:     #252a36;
+      --border:       rgba(255,255,255,.08);
+      --border-hover: rgba(255,255,255,.18);
+      --border-focus: #c9a44a;
+      --text:         #e8e9ed;
+      --text-sec:     rgba(255,255,255,.65);
+      --muted:        rgba(255,255,255,.40);
+      --accent:       #e8368f;
+      --accent-dim:   rgba(232,54,143,.15);
+      --accent-glow:  rgba(232,54,143,.25);
+      --cyan:         #4a9ec9;
+      --cyan-dim:     rgba(74,158,201,.12);
+      --green:        #36c06a;
+      --green-dim:    rgba(54,192,106,.12);
+      --red:          #e85454;
+      --gold:         #c9a44a;
+      --gold-dim:     rgba(201,164,74,.12);
+      --radius:       10px;
+      --radius-sm:    6px;
+      --font:         "Bai Jamjuree", sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    .wrap {
+      width: 92%;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 24px 0 60px;
+    }
+
+    /* ─── HEADER ─── */
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .page-header-left { display: flex; align-items: center; gap: 12px; }
+    .page-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: .5px;
+    }
+    .page-subtitle {
+      font-size: 12px;
+      color: var(--text-sec);
+      margin-top: 2px;
+    }
+    .badge-version {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: var(--muted);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 7px;
+    }
+
+    /* ─── STAFF GRID ─── */
+    .staff-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+    .staff-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 16px 14px;
+      cursor: pointer;
+      transition: border-color .2s, box-shadow .2s;
+      position: relative;
+      overflow: hidden;
+    }
+    .staff-card:hover { border-color: var(--border-hover); box-shadow: 0 4px 20px rgba(0,0,0,.3); }
+    .staff-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+    .staff-card.external { border-left: 3px solid var(--gold); }
+    .staff-card.inactive { opacity: .55; }
+
+    .staff-card-avatar {
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: var(--surface3);
+      border: 2px solid var(--border);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px; font-weight: 800;
+      color: var(--accent);
+      overflow: hidden;
+    }
+    .staff-card-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+    .staff-card-name { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .staff-card-meta { font-size: 11px; color: var(--text-sec); font-weight: 500; }
+    .staff-card-badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+
+    .badge {
+      font-size: 10px; font-weight: 700;
+      letter-spacing: .6px; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 4px;
+    }
+    .badge-ext  { background: var(--gold-dim);          color: var(--gold);  border: 1px solid var(--gold); }
+    .badge-int  { background: var(--cyan-dim);          color: var(--cyan);  border: 1px solid var(--cyan); }
+    .badge-wix  { background: var(--green-dim);         color: var(--green); border: 1px solid var(--green); }
+    .badge-nowix{ background: rgba(232,84,84,.1);       color: var(--red);   border: 1px solid var(--red); }
+    .badge-off  { background: rgba(255,255,255,.05);    color: var(--muted); border: 1px solid var(--border); }
+
+    /* ─── EDITOR PANEL ─── */
+    .editor-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      display: none;
+      margin-top: 20px;
+    }
+    .editor-panel.visible { display: block; }
+    .editor-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 22px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      gap: 10px; flex-wrap: wrap;
+    }
+    .editor-title { font-size: 14px; font-weight: 800; color: var(--accent); }
+    .editor-subtitle { font-size: 11px; color: var(--text-sec); margin-top: 2px; }
+
+    /* ─── TABS ─── */
+    .tabs {
+      display: flex; gap: 4px;
+      margin-bottom: 22px;
+      background: var(--surface2);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+    }
+    .tab-btn {
+      flex: 1; background: transparent; border: none;
+      border-radius: 4px;
+      color: var(--text-sec); font-family: var(--font);
+      font-size: 12px; font-weight: 700;
+      letter-spacing: .5px; text-transform: uppercase;
+      padding: 8px 4px; cursor: pointer;
+      transition: all .15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { background: var(--surface3); color: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ─── FORM ELEMENTS ─── */
+    .field-label {
+      display: block; font-size: 11px; font-weight: 600;
+      color: var(--text-sec); letter-spacing: .4px;
+      margin-bottom: 6px; text-transform: uppercase;
+    }
+    .field-group { margin-bottom: 14px; }
+    input[type="text"], input[type="email"], input[type="tel"],
+    input[type="number"], input[type="time"], select, textarea {
+      width: 100%; background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text); font-family: var(--font);
+      font-size: 14px; font-weight: 500;
+      padding: 10px 13px; outline: none;
+      transition: border-color .2s, box-shadow .2s;
+      appearance: none; -webkit-appearance: none;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(.5); cursor: pointer; }
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='7'%3E%3Cpath d='M1 1l5 5 5-5' stroke='rgba(255,255,255,.4)' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center;
+      padding-right: 32px; cursor: pointer;
+    }
+    select option { background: var(--surface); color: var(--text); }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+    /* ─── TOGGLE ─── */
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 14px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      cursor: pointer; margin-bottom: 14px;
+      transition: border-color .2s;
+    }
+    .toggle-row:hover { border-color: var(--border-hover); }
+    .toggle-label { font-size: 13px; font-weight: 600; }
+    .toggle-sub   { font-size: 11px; color: var(--text-sec); margin-top: 2px; }
+    .toggle-switch {
+      width: 38px; height: 22px;
+      background: var(--surface3); border-radius: 11px;
+      border: 1px solid var(--border);
+      position: relative; transition: background .2s; flex-shrink: 0;
+    }
+    .toggle-switch::after {
+      content: ''; position: absolute;
+      width: 16px; height: 16px;
+      background: var(--muted); border-radius: 50%;
+      top: 2px; left: 2px;
+      transition: left .2s, background .2s;
+    }
+    .toggle-switch.on { background: var(--accent-dim); border-color: var(--accent); }
+    .toggle-switch.on::after { left: 18px; background: var(--accent); }
+
+    /* ─── HORARIO GRID ─── */
+    .horario-grid { display: flex; flex-direction: column; gap: 8px; }
+    .horario-row {
+      display: grid; grid-template-columns: 100px 1fr 1fr 36px;
+      gap: 10px; align-items: center;
+    }
+    .horario-dia { font-size: 12px; font-weight: 700; color: var(--text-sec); text-transform: capitalize; }
+    .horario-row.active .horario-dia { color: var(--text); }
+    .horario-chk { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+    .horario-day-toggle { display: flex; align-items: center; gap: 8px; }
+    .btn-remove-dia {
+      background: transparent; border: 1px solid var(--border);
+      border-radius: 4px; color: var(--muted);
+      font-size: 14px; width: 30px; height: 30px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: all .15s; padding: 0;
+    }
+    .btn-remove-dia:hover { border-color: var(--red); color: var(--red); }
+
+    /* ─── FOTO ─── */
+    .foto-area {
+      display: flex; align-items: center; gap: 16px;
+      padding: 16px; background: var(--surface2);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-sm); margin-bottom: 14px;
+    }
+    .foto-preview {
+      width: 68px; height: 68px; border-radius: 50%;
+      background: var(--surface3); border: 2px solid var(--border);
+      overflow: hidden; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 26px; color: var(--accent); font-weight: 800;
+    }
+    .foto-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+    .foto-actions { flex: 1; }
+    .foto-hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.4; }
+
+    input[type="date"] {
+      width: 100%; background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text); font-family: var(--font);
+      font-size: 14px; font-weight: 500;
+      padding: 10px 13px; outline: none;
+      transition: border-color .2s;
+      appearance: none; -webkit-appearance: none;
+    }
+    input[type="date"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+    input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.5); cursor: pointer; }
+
+    /* ─── BLOQUEO ITEM ─── */
+    .bloqueo-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); margin-bottom: 8px;
+      gap: 10px;
+    }
+    .bloqueo-info { flex: 1; }
+    .bloqueo-fecha { font-size: 13px; font-weight: 700; color: var(--text); }
+    .bloqueo-hora  { font-size: 12px; color: var(--text-sec); margin-top: 2px; }
+    .bloqueo-motivo{ font-size: 11px; color: var(--muted); margin-top: 2px; font-style: italic; }
+    .btn-del-bloqueo {
+      background: transparent; border: 1px solid rgba(232,84,84,.4);
+      border-radius: 4px; color: var(--red);
+      font-size: 12px; padding: 5px 10px;
+      cursor: pointer; font-family: var(--font); font-weight: 700;
+      transition: all .15s; white-space: nowrap;
+    }
+    .btn-del-bloqueo:hover { background: rgba(232,84,84,.12); }
+
+    /* ─── BUTTONS ─── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 7px; font-family: var(--font);
+      font-size: 13px; font-weight: 700; letter-spacing: .4px;
+      padding: 10px 20px; border-radius: var(--radius-sm);
+      border: none; cursor: pointer; transition: all .18s;
+      text-transform: uppercase;
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
+    .btn-primary   { background: var(--accent); color: #fff; }
+    .btn-primary:hover { filter: brightness(1.12); box-shadow: 0 4px 16px var(--accent-glow); }
+    .btn-secondary { background: var(--surface3); color: var(--text-sec); border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: var(--border-hover); color: var(--text); }
+    .btn-gold  { background: var(--gold-dim);  color: var(--gold);  border: 1px solid var(--gold); }
+    .btn-gold:hover { background: rgba(201,164,74,.25); }
+    .btn-danger{ background: rgba(232,84,84,.12); color: var(--red); border: 1px solid var(--red); }
+    .btn-danger:hover { background: rgba(232,84,84,.22); }
+    .btn-sm  { font-size: 11px; padding: 7px 13px; }
+    .btn-full{ width: 100%; }
+    .btn-row {
+      display: flex; gap: 10px; margin-top: 22px; padding-top: 18px;
+      border-top: 1px solid var(--border); flex-wrap: wrap;
+    }
+
+    /* ─── STATUS / TOAST ─── */
+    .status-line {
+      font-size: 12px; font-weight: 600;
+      padding: 4px 0; letter-spacing: .2px; min-height: 18px;
+    }
+    .status-line.ok      { color: var(--green); }
+    .status-line.warn    { color: var(--gold); }
+    .status-line.err     { color: var(--red); }
+    .status-line.loading { color: var(--muted); }
+
+    .toast {
+      position: fixed; bottom: 28px; left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px; font-weight: 600; padding: 12px 22px;
+      transition: transform .3s, opacity .3s; opacity: 0;
+      pointer-events: none; white-space: nowrap; z-index: 9999;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+    .toast.ok   { border-color: var(--green); color: var(--green); }
+    .toast.warn { border-color: var(--gold);  color: var(--gold); }
+    .toast.err  { border-color: var(--red);   color: var(--red); }
+
+    /* ─── LOADING OVERLAY ─── */
+    .loading-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(15,17,23,.85);
+      align-items: center; justify-content: center;
+      z-index: 9000;
+    }
+    .loading-overlay.visible { display: flex; }
+    .loading-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 40px;
+      text-align: center;
+    }
+    .loading-spinner {
+      width: 32px; height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      margin: 0 auto 14px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 13px; font-weight: 600; color: var(--text-sec); }
+
+    /* ─── MODAL ELIMINAR ─── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(15,17,23,.88);
+      align-items: center; justify-content: center;
+      z-index: 9500; padding: 20px;
+    }
+    .modal-overlay.visible { display: flex; }
+    .modal-box {
+      background: var(--surface);
+      border: 1px solid var(--red);
+      border-radius: var(--radius);
+      padding: 28px; max-width: 440px; width: 100%;
+    }
+    .modal-title {
+      font-size: 15px; font-weight: 800;
+      color: var(--red); margin-bottom: 10px;
+    }
+    .modal-body { font-size: 13px; color: var(--text-sec); line-height: 1.6; margin-bottom: 18px; }
+    .modal-bookings {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px;
+      margin-bottom: 18px; max-height: 160px; overflow-y: auto;
+    }
+    .modal-booking-item {
+      font-size: 12px; color: var(--text-sec); padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-booking-item:last-child { border-bottom: none; }
+    .modal-actions { display: flex; gap: 10px; }
+
+    /* ─── NUEVO PANEL ─── */
+    .nuevo-panel {
+      display: none;
+      background: var(--surface2);
+      border: 1px solid var(--accent-dim);
+      border-radius: var(--radius);
+      padding: 20px; margin-top: 16px;
+    }
+    .nuevo-panel.visible { display: block; }
+    .nuevo-title {
+      font-size: 12px; font-weight: 800;
+      letter-spacing: 2px; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 16px;
+    }
+
+    /* ─── EMPTY STATE ─── */
+    .empty-state {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 48px 20px; color: var(--muted);
+    }
+    .empty-state .icon { font-size: 40px; margin-bottom: 14px; }
+    .empty-state .msg { font-size: 13px; text-align: center; line-height: 1.6; }
+
+    /* ─── DIVIDER ─── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+    /* ─── DANGER ZONE ─── */
+    .danger-zone {
+      background: rgba(232,84,84,.06);
+      border: 1px solid rgba(232,84,84,.25);
+      border-radius: var(--radius-sm);
+      padding: 16px; margin-top: 8px;
+    }
+    .danger-zone-title {
+      font-size: 10px; font-weight: 800;
+      letter-spacing: 2px; text-transform: uppercase;
+      color: var(--red); margin-bottom: 8px;
+    }
+    .danger-zone-desc {
+      font-size: 12px; color: rgba(232,84,84,.7); margin-bottom: 12px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+
+<div id="loadingOverlay" class="loading-overlay">
+  <div class="loading-box">
+    <div class="loading-spinner"></div>
+    <div id="loadingText" class="loading-text">Procesando...</div>
+  </div>
+</div>
+
+<!-- MODAL ELIMINAR -->
+<div id="modalEliminar" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title">⚠️ Confirmar eliminación</div>
+    <div id="modalEliminarBody" class="modal-body"></div>
+    <div id="modalBookingsWrap" style="display:none">
+      <div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:6px;text-transform:uppercase;letter-spacing:1px">Citas pendientes:</div>
+      <div id="modalBookingsList" class="modal-bookings"></div>
+    </div>
+    <div class="modal-actions">
+      <button id="modalConfirmarBtn" class="btn btn-danger btn-sm" onclick="confirmarEliminar()">🗑️ Eliminar</button>
+      <button class="btn btn-secondary btn-sm" onclick="cerrarModalEliminar()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="page-header">
+    <div class="page-header-left">
+      <div>
+        <div class="page-title">👥 Personal</div>
+        <div class="page-subtitle">Gestión de empleados y colaboradores</div>
+      </div>
+      <span class="badge-version">v1.1.0</span>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="toggleNuevoPanel()">＋ Nuevo empleado</button>
+  </div>
+
+  <!-- NUEVO PANEL -->
+  <div id="nuevoPanel" class="nuevo-panel">
+    <div class="nuevo-title">Nuevo miembro</div>
+    <div class="row-2">
+      <div class="field-group">
+        <label class="field-label">Nombre visible</label>
+        <input type="text" id="nuevoDisplayName" placeholder="Ej: María García">
+      </div>
+      <div class="field-group">
+        <label class="field-label">Nombre canónico</label>
+        <input type="text" id="nuevoCanonicalName" placeholder="Ej: Maria">
+      </div>
+    </div>
+    <div class="row-2">
+      <div class="field-group">
+        <label class="field-label">Email</label>
+        <input type="email" id="nuevoEmail" placeholder="correo@salon.com">
+      </div>
+      <div class="field-group">
+        <label class="field-label">Teléfono</label>
+        <input type="tel" id="nuevoPhone" placeholder="+34 600 000 000">
+      </div>
+    </div>
+    <div class="row-2">
+      <div class="field-group">
+        <label class="field-label">Tipo</label>
+        <select id="nuevoTipo">
+          <option value="interno">Interno</option>
+          <option value="externo">Externo / Colaborador</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <div class="toggle-row" onclick="toggleNuevoHorario()">
+          <div>
+            <div class="toggle-label">Heredar horario del negocio</div>
+            <div class="toggle-sub">El empleado hereda el horario base del salón</div>
+          </div>
+          <div id="nuevoHorarioSwitch" class="toggle-switch on"></div>
+        </div>
+      </div>
+    </div>
+    <div id="nuevoStatus" class="status-line"></div>
+    <div class="btn-row" style="margin-top:12px;padding-top:12px">
+      <button class="btn btn-primary btn-sm" onclick="crearNuevoStaff()">✅ Crear empleado</button>
+      <button class="btn btn-secondary btn-sm" onclick="toggleNuevoPanel()">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- STAFF GRID -->
+  <div class="section-block" style="margin-top:20px">
+    <div id="staffGrid" class="staff-grid">
+      <div class="empty-state" style="grid-column:1/-1">
+        <div class="loading-spinner" style="margin-bottom:12px"></div>
+        <div class="msg">Cargando personal...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDITOR PANEL -->
+  <div id="editorPanel" class="editor-panel">
+
+    <div class="editor-header">
+      <div>
+        <div id="editorTitle" class="editor-title">—</div>
+        <div id="editorSubtitle" class="editor-subtitle">—</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="cerrarEditor()">✕ Cerrar</button>
+    </div>
+
+    <div class="tabs">
+      <button id="tab-datos"    class="tab-btn active" onclick="switchTab('datos')">Datos</button>
+      <button id="tab-horario"  class="tab-btn"        onclick="switchTab('horario')">Horario</button>
+      <button id="tab-foto"     class="tab-btn"        onclick="switchTab('foto')">Foto</button>
+      <button id="tab-bloqueos" class="tab-btn"        onclick="switchTab('bloqueos')">Bloqueos</button>
+      <button id="tab-externo"  class="tab-btn"        onclick="switchTab('externo')" style="display:none">Externo</button>
+    </div>
+
+    <!-- TAB: DATOS -->
+    <div id="tc-datos" class="tab-content active">
+      <div class="row-2">
+        <div class="field-group">
+          <label class="field-label">Nombre visible</label>
+          <input type="text" id="editDisplayName">
+        </div>
+        <div class="field-group">
+          <label class="field-label">Nombre canónico</label>
+          <input type="text" id="editCanonicalName">
+        </div>
+      </div>
+      <div class="row-2">
+        <div class="field-group">
+          <label class="field-label">Email</label>
+          <input type="email" id="editEmail">
+        </div>
+        <div class="field-group">
+          <label class="field-label">Teléfono</label>
+          <input type="tel" id="editPhone">
+        </div>
+      </div>
+      <div class="row-2">
+        <div class="field-group">
+          <label class="field-label">ID Ubicación</label>
+          <input type="text" id="editLocationId" placeholder="Opcional">
+        </div>
+        <div class="field-group">
+          <label class="field-label">Nombre Ubicación</label>
+          <input type="text" id="editLocationName" placeholder="Opcional">
+        </div>
+      </div>
+      <div class="field-group">
+        <label class="field-label">Notas internas</label>
+        <textarea id="editNotes" rows="2" style="resize:vertical"></textarea>
+      </div>
+
+      <!-- v1.2.0 · Nivel de acceso (StaffConfig.accessLevel · Number 1-4) -->
+      <div class="field-group">
+        <label class="field-label">Nivel de acceso</label>
+        <select id="editAccessLevel">
+          <option value="">— Sin asignar —</option>
+          <option value="1">1 · Administrador</option>
+          <option value="2">2 · Encargado</option>
+          <option value="3">3 · Recepción</option>
+          <option value="4">4 · Básico</option>
+        </select>
+      </div>
+
+      <!-- Toggle EXTERNO/INTERNO -->
+      <div class="toggle-row" onclick="toggleEditExterno()">
+        <div>
+          <div class="toggle-label">Colaborador externo</div>
+          <div class="toggle-sub" id="externoDesc">Interno — pertenece a la plantilla del salón</div>
+        </div>
+        <div id="editExternoSwitch" class="toggle-switch"></div>
+      </div>
+
+      <!-- Toggle ACTIVO -->
+      <div class="toggle-row" onclick="toggleEditActive()">
+        <div>
+          <div class="toggle-label">Empleado activo</div>
+          <div class="toggle-sub" id="activoDesc">Activo en el sistema de reservas</div>
+        </div>
+        <div id="editActiveSwitch" class="toggle-switch"></div>
+      </div>
+
+      <div id="statusDatos" class="status-line"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="guardarDatosBasicos()">💾 Guardar datos</button>
+      </div>
+
+      <hr class="divider">
+
+      <!-- DANGER ZONE -->
+      <div class="danger-zone">
+        <div class="danger-zone-title">⚠️ Zona de peligro</div>
+        <div class="danger-zone-desc">Elimina el empleado del sistema y del motor de reservas. Solo es posible si no tiene citas pendientes.</div>
+        <button class="btn btn-danger btn-sm" onclick="abrirModalEliminar()">🗑️ Eliminar empleado</button>
+      </div>
+    </div>
+
+    <!-- TAB: HORARIO -->
+    <div id="tc-horario" class="tab-content">
+      <p style="font-size:12px;color:var(--text-sec);margin-bottom:16px;line-height:1.6">
+        Define los días y horarios de trabajo. Al guardar, el horario anterior se reemplaza completamente.
+      </p>
+      <div id="horarioGrid" class="horario-grid"></div>
+      <div style="margin-top:14px">
+        <button class="btn btn-secondary btn-sm" onclick="rellenarHorarioTipico()">🕙 Horario típico L-V 10-20 / Sáb 10-14</button>
+      </div>
+      <div id="statusHorario" class="status-line" style="margin-top:12px"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="guardarHorario()">💾 Guardar horario</button>
+      </div>
+    </div>
+
+    <!-- TAB: FOTO -->
+    <div id="tc-foto" class="tab-content">
+      <div class="foto-area">
+        <div id="fotoPreview" class="foto-preview">?</div>
+        <div class="foto-actions">
+          <input type="file" id="fotoFileInput" accept="image/*" onchange="onFotoFileSelected(this)">
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('fotoFileInput').click()">
+            📁 Seleccionar imagen
+          </button>
+          <div class="foto-hint">JPG, PNG, WebP. Máx. recomendado 2 MB.</div>
+        </div>
+      </div>
+      <div id="statusFoto" class="status-line"></div>
+      <div class="btn-row">
+        <button id="btnGuardarFoto" class="btn btn-primary" onclick="guardarFoto()" disabled>💾 Guardar foto</button>
+      </div>
+    </div>
+
+    <!-- TAB: EXTERNO -->
+    <div id="tc-externo" class="tab-content">
+      <div class="row-2">
+        <div class="field-group">
+          <label class="field-label">Comisión (%)</label>
+          <input type="number" id="editCommission" min="0" max="100" step="1">
+        </div>
+        <div class="field-group">
+          <label class="field-label">Módulo externo</label>
+          <input type="text" id="editExternalModule" value="EXTERNOS">
+        </div>
+      </div>
+      <div class="row-2">
+        <div class="field-group">
+          <label class="field-label">Wix Resource ID</label>
+          <input type="text" id="editWixResourceId" readonly style="opacity:.5">
+        </div>
+        <div class="field-group">
+          <label class="field-label">Wix Schedule ID</label>
+          <input type="text" id="editWixScheduleId" readonly style="opacity:.5">
+        </div>
+      </div>
+      <div class="toggle-row" onclick="toggleExternoActive()">
+        <div>
+          <div class="toggle-label">Colaborador activo</div>
+          <div class="toggle-sub">Recibe y puede gestionar citas externas</div>
+        </div>
+        <div id="externoActiveSwitch" class="toggle-switch on"></div>
+      </div>
+      <div id="statusExterno" class="status-line"></div>
+      <div class="btn-row">
+        <button class="btn btn-gold" onclick="guardarExterno()">💾 Guardar parámetros externos</button>
+      </div>
+    </div>
+
+    <!-- TAB: BLOQUEOS -->
+    <div id="tc-bloqueos" class="tab-content">
+      <p style="font-size:12px;color:var(--text-sec);margin-bottom:16px;line-height:1.6">
+        Bloquea un tramo horario específico para este empleado. Aparecerá como "Ocupado" en el calendario.
+      </p>
+
+      <!-- Formulario nuevo bloqueo -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin-bottom:18px">
+        <div style="font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:12px">Nuevo bloqueo</div>
+        <div class="row-3">
+          <div class="field-group">
+            <label class="field-label">Fecha</label>
+            <input type="date" id="bloqueoFecha">
+          </div>
+          <div class="field-group">
+            <label class="field-label">Desde</label>
+            <input type="time" id="bloqueoInicio" value="10:00">
+          </div>
+          <div class="field-group">
+            <label class="field-label">Hasta</label>
+            <input type="time" id="bloqueoFin" value="20:00">
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Fecha fin (opcional)</label>
+          <input type="date" id="bloqueoFechaFin">
+        </div>
+        <div class="field-group">
+          <label class="field-label">Motivo (opcional)</label>
+          <input type="text" id="bloqueoMotivo" placeholder="Ej: Día libre, Formación...">
+        </div>
+        <div id="statusBloqueo" class="status-line"></div>
+        <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="crearBloqueo()">🔒 Añadir bloqueo</button>
+      </div>
+
+      <!-- Lista bloqueos existentes -->
+      <div style="font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--text-sec);margin-bottom:10px">Bloqueos activos</div>
+      <div id="listBloqueos">
+        <div style="font-size:12px;color:var(--muted);padding:12px 0">Cargando bloqueos...</div>
+      </div>
+    </div>
+
+  </div><!-- /editor-panel -->
+
+  <!-- ═══ CIERRE DEL SALÓN ═══════════════════════════ -->
+  <div style="margin-top:32px;background:rgba(232,84,84,.06);border:1px solid rgba(232,84,84,.25);border-radius:var(--radius);padding:24px">
+    <div style="font-size:11px;font-weight:800;letter-spacing:2.5px;text-transform:uppercase;color:var(--red);margin-bottom:6px">🔒 Cierre del salón</div>
+    <div style="font-size:12px;color:rgba(255,255,255,.55);margin-bottom:16px;line-height:1.5">Bloquea un tramo horario para <strong style="color:var(--text)">todos los empleados activos</strong> a la vez. Ningún cliente podrá reservar en ese tramo.</div>
+    <div class="row-3">
+      <div class="field-group">
+        <label class="field-label">Fecha</label>
+        <input type="date" id="cierreFecha">
+      </div>
+      <div class="field-group">
+        <label class="field-label">Desde</label>
+        <input type="time" id="cierreInicio" value="10:00">
+      </div>
+      <div class="field-group">
+        <label class="field-label">Hasta</label>
+        <input type="time" id="cierreFin" value="20:00">
+      </div>
+    </div>
+    <div class="field-group">
+      <label class="field-label">Fecha fin (opcional)</label>
+      <input type="date" id="cierreFechaFin">
+    </div>
+    <div class="field-group">
+      <label class="field-label">Motivo (opcional)</label>
+      <input type="text" id="cierreMotivo" placeholder="Ej: Festivo, Vacaciones, Obras...">
+    </div>
+    <div id="statusCierre" class="status-line"></div>
+    <button class="btn btn-danger btn-sm" style="margin-top:8px" onclick="aplicarCierreSalon()">🔒 Cerrar salón ese día</button>
+
+    <!-- Lista cierres existentes -->
+    <div style="margin-top:24px;padding-top:18px;border-top:1px solid rgba(232,84,84,.2)">
+      <div style="font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--red);margin-bottom:10px">Cierres activos</div>
+      <div id="listCierres">
+        <div style="font-size:12px;color:var(--muted);padding:8px 0">Cargando...</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+// =====================================================
+// KAMISUITE · Widget Gestión de Personal v1.2.1
+// =====================================================
+
+const VERSION = '1.2.1';
+const TAG     = `[StaffWidget][${VERSION}]`;
+
+const state = {
+  staff:         [],
+  selected:      null,
+  editActive:    true,
+  editExterno:   false,
+  externoActive: true,
+  nuevoHorario:  true,
+  horarioDias:   {},
+  fotoBase64:    null,
+  fotoFileName:  null,
+  fotoMimeType:  null,
+  pendingDelete: null
+};
+
+const DIAS_SEMANA = ['lunes','martes','miercoles','jueves','viernes','sabado','domingo'];
+const DIAS_LABEL  = {
+  lunes:'Lunes', martes:'Martes', miercoles:'Miércoles',
+  jueves:'Jueves', viernes:'Viernes', sabado:'Sábado', domingo:'Domingo'
+};
+
+// ─── COMUNICACIÓN ────────────────────────────────────
+function sendToPage(type, data = {}) {
+  try { window.parent.postMessage({ type, ...data }, '*'); }
+  catch(e) { console.error(`${TAG} sendToPage error:`, e); }
+}
+
+window.addEventListener('message', e => {
+  const msg = e.data || {};
+  console.log(`${TAG} ← ${msg.type}`);
+  switch (msg.type) {
+    case 'staffLoaded':       handleStaffLoaded(msg);       break;
+    case 'horarioCargado':    handleHorarioCargado(msg);    break;
+    case 'bloqueosCargados':  handleBloqueosCargados(msg);  break;
+    case 'bloqueoCreado':     handleBloqueoCreado(msg);     break;
+    case 'bloqueoEliminado':  handleBloqueoEliminado(msg);  break;
+    case 'cierreSalonOk':     handleCierreSalonOk(msg);     break;
+    case 'cierresCargados':   handleCierresCargados(msg);   break;
+    case 'cierreEliminadoOk': handleCierreEliminadoOk(msg); break;
+    case 'datosGuardadosOk':  handleDatosGuardadosOk(msg);  break;
+    case 'horarioGuardadoOk': handleHorarioGuardadoOk(msg); break;
+    case 'fotoGuardadaOk':    handleFotoGuardadaOk(msg);    break;
+    case 'externoGuardadoOk': handleExternoGuardadoOk(msg); break;
+    case 'nuevoCreado':       handleNuevoCreado(msg);        break;
+    case 'staffEliminadoOk':  handleStaffEliminadoOk(msg);  break;
+    case 'errorEliminar':     handleErrorEliminar(msg);      break;
+    case 'error':             handleError(msg);              break;
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  console.log(`${TAG} 🚀 Widget listo`);
+  inicializarHorarioGrid();
+  sendToPage('ready');
+  sendToPage('getCierres');
+});
+
+// ─── LOADING ─────────────────────────────────────────
+function showLoading(msg = 'Procesando...') {
+  document.getElementById('loadingOverlay').classList.add('visible');
+  document.getElementById('loadingText').textContent = msg;
+}
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.remove('visible');
+}
+
+// ─── TOAST ───────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+}
+
+// ─── STATUS ──────────────────────────────────────────
+function setStatus(id, msg, type = '') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = `status-line ${type}`;
+}
+
+// ─── CARGAR STAFF ────────────────────────────────────
+function handleStaffLoaded(msg) {
+  hideLoading();
+  state.staff = msg.staff || [];
+  renderStaffGrid();
+  // Si hay un seleccionado, refrescar editor
+  if (state.selected) {
+    const s = state.staff.find(x => x._id === state.selected);
+    if (s) actualizarEditorConDatos(s);
+  }
+}
+
+function renderStaffGrid() {
+  const grid = document.getElementById('staffGrid');
+  if (state.staff.length === 0) {
+    grid.innerHTML = `
+      <div class="empty-state" style="grid-column:1/-1">
+        <div class="icon">👥</div>
+        <div class="msg">No hay personal configurado.<br>Pulsa "Nuevo empleado" para añadir el primero.</div>
+      </div>`;
+    return;
+  }
+
+  grid.innerHTML = state.staff.map(s => {
+    const inicial    = (s.displayName || s.canonicalName || '?')[0].toUpperCase();
+    const avatarHtml = s.image
+      ? `<img src="${esc(s.image)}" alt="${esc(s.displayName)}">`
+      : inicial;
+
+    const badgeTipo = s.isExternal
+      ? `<span class="badge badge-ext">Externo</span>`
+      : `<span class="badge badge-int">Interno</span>`;
+
+    const badgeWix = s.enWix
+      ? `<span class="badge badge-wix">Activo</span>`
+      : `<span class="badge badge-nowix">Inactivo</span>`;
+
+    const isSelected = state.selected === s._id;
+
+    return `
+      <div class="staff-card${s.isExternal ? ' external' : ''}${!s.enWix ? ' inactive' : ''}${isSelected ? ' selected' : ''}"
+           onclick="seleccionarStaff('${s._id}')">
+        <div class="staff-card-avatar">${avatarHtml}</div>
+        <div class="staff-card-name">${esc(s.displayName || s.canonicalName)}</div>
+        <div class="staff-card-meta">${esc(s.email || '—')}</div>
+        <div class="staff-card-badges">
+          ${badgeTipo}${badgeWix}
+          ${s.locationName ? `<span class="badge" style="background:var(--surface3);color:var(--text-sec);border-color:var(--border)">${esc(s.locationName)}</span>` : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ─── SELECCIONAR STAFF ───────────────────────────────
+function seleccionarStaff(staffConfigId) {
+  const s = state.staff.find(x => x._id === staffConfigId);
+  if (!s) return;
+  state.selected = staffConfigId;
+  renderStaffGrid();
+  actualizarEditorConDatos(s);
+
+  const panel = document.getElementById('editorPanel');
+  panel.classList.add('visible');
+  switchTab('datos');
+  setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+}
+
+function actualizarEditorConDatos(s) {
+  document.getElementById('editorTitle').textContent    = `Editando: ${s.displayName || s.canonicalName}`;
+  document.getElementById('editorSubtitle').textContent = s.isExternal
+    ? `Colaborador externo · ${s.externalModule || 'EXTERNOS'}`
+    : `Staff interno`;
+
+  document.getElementById('editDisplayName').value   = s.displayName   || '';
+  document.getElementById('editCanonicalName').value = s.canonicalName || '';
+  document.getElementById('editEmail').value         = s.email         || '';
+  document.getElementById('editPhone').value         = s.phone         || '';
+  document.getElementById('editLocationId').value    = s.locationId    || '';
+  document.getElementById('editLocationName').value  = s.locationName  || '';
+  document.getElementById('editNotes').value         = s.notes         || '';
+  // v1.2.0 · Nivel de acceso (Number 1-4 en CMS, string en el <select>)
+  document.getElementById('editAccessLevel').value   = (s.accessLevel === null || s.accessLevel === undefined) ? '' : String(s.accessLevel);
+
+  // El toggle ACTIVO refleja enWix (tiene Wix Resource)
+  state.editActive = s.enWix;
+  actualizarToggle('editActiveSwitch', state.editActive);
+  document.getElementById('activoDesc').textContent = state.editActive
+    ? 'Activo en el motor de reservas'
+    : 'Inactivo — no aparece en reservas (solo historial)';
+
+  // Toggle EXTERNO/INTERNO
+  state.editExterno = s.isExternal || false;
+  actualizarToggle('editExternoSwitch', state.editExterno);
+  document.getElementById('externoDesc').textContent = state.editExterno
+    ? 'Externo — colaborador independiente'
+    : 'Interno — pertenece a la plantilla del salón';
+
+  // Foto
+  resetFotoInput();
+  previewFoto(s.image || null, s.displayName || s.canonicalName);
+
+  // Externo
+  const tabExt = document.getElementById('tab-externo');
+  if (s.isExternal) {
+    tabExt.style.display = '';
+    document.getElementById('editCommission').value     = s.commissionPercentage || s.externalCommission || 0;
+    document.getElementById('editExternalModule').value = s.externalModule || 'EXTERNOS';
+    document.getElementById('editWixResourceId').value  = s.wixResourceId  || '';
+    document.getElementById('editWixScheduleId').value  = s.wixScheduleId  || '';
+    state.externoActive = s.externalActiveStatus !== false;
+    actualizarToggle('externoActiveSwitch', state.externoActive);
+  } else {
+    tabExt.style.display = 'none';
+  }
+
+  ['statusDatos','statusHorario','statusFoto','statusExterno'].forEach(id => setStatus(id, ''));
+  resetHorarioGrid();
+  sendToPage('loadHorario', { staffConfigId: s._id });
+}
+
+function cerrarEditor() {
+  state.selected = null;
+  document.getElementById('editorPanel').classList.remove('visible');
+  renderStaffGrid();
+}
+
+// ─── TABS ────────────────────────────────────────────
+function switchTab(tab) {
+  ['datos','horario','foto','bloqueos','externo'].forEach(t => {
+    document.getElementById(`tc-${t}`)?.classList.toggle('active', t === tab);
+    document.getElementById(`tab-${t}`)?.classList.toggle('active', t === tab);
+  });
+  // Al abrir bloqueos, cargar lista
+  if (tab === 'bloqueos' && state.selected) {
+    sendToPage('getBloqueos', { staffConfigId: state.selected });
+  }
+}
+
+// ─── TOGGLES ─────────────────────────────────────────
+function actualizarToggle(id, estado) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('on', estado);
+}
+function toggleEditActive() {
+  state.editActive = !state.editActive;
+  actualizarToggle('editActiveSwitch', state.editActive);
+  document.getElementById('activoDesc').textContent = state.editActive
+    ? 'Activo en el motor de reservas'
+    : 'Inactivo — no aparece en reservas (solo historial)';
+}
+function toggleEditExterno() {
+  state.editExterno = !state.editExterno;
+  actualizarToggle('editExternoSwitch', state.editExterno);
+  document.getElementById('externoDesc').textContent = state.editExterno
+    ? 'Externo — colaborador independiente'
+    : 'Interno — pertenece a la plantilla del salón';
+  // Mostrar/ocultar tab externo según el toggle
+  document.getElementById('tab-externo').style.display = state.editExterno ? '' : 'none';
+}
+function toggleExternoActive() {
+  state.externoActive = !state.externoActive;
+  actualizarToggle('externoActiveSwitch', state.externoActive);
+}
+function toggleNuevoHorario() {
+  state.nuevoHorario = !state.nuevoHorario;
+  actualizarToggle('nuevoHorarioSwitch', state.nuevoHorario);
+}
+
+// ─── HORARIO GRID ────────────────────────────────────
+function inicializarHorarioGrid() {
+  DIAS_SEMANA.forEach(dia => {
+    state.horarioDias[dia] = { activo: false, inicio: '10:00', fin: '20:00' };
+  });
+  const grid = document.getElementById('horarioGrid');
+  grid.innerHTML = DIAS_SEMANA.map(dia => `
+    <div class="horario-row" id="hrow-${dia}">
+      <div class="horario-day-toggle">
+        <input type="checkbox" class="horario-chk" id="hchk-${dia}"
+               onchange="toggleDia('${dia}', this.checked)">
+        <label class="horario-dia" for="hchk-${dia}">${DIAS_LABEL[dia]}</label>
+      </div>
+      <input type="time" id="hinicio-${dia}" value="10:00"
+             onchange="updateHorarioDia('${dia}')" style="opacity:.3;pointer-events:none">
+      <input type="time" id="hfin-${dia}"    value="20:00"
+             onchange="updateHorarioDia('${dia}')" style="opacity:.3;pointer-events:none">
+      <button class="btn-remove-dia" onclick="limpiarDia('${dia}')" title="Limpiar">×</button>
+    </div>`).join('');
+}
+
+function toggleDia(dia, activo) {
+  state.horarioDias[dia].activo = activo;
+  document.getElementById(`hrow-${dia}`).classList.toggle('active', activo);
+  const ini = document.getElementById(`hinicio-${dia}`);
+  const fin = document.getElementById(`hfin-${dia}`);
+  ini.style.opacity = activo ? '1' : '.3';
+  ini.style.pointerEvents = activo ? 'auto' : 'none';
+  fin.style.opacity = activo ? '1' : '.3';
+  fin.style.pointerEvents = activo ? 'auto' : 'none';
+}
+function updateHorarioDia(dia) {
+  state.horarioDias[dia].inicio = document.getElementById(`hinicio-${dia}`).value;
+  state.horarioDias[dia].fin    = document.getElementById(`hfin-${dia}`).value;
+}
+function limpiarDia(dia) {
+  document.getElementById(`hchk-${dia}`).checked = false;
+  toggleDia(dia, false);
+}
+function resetHorarioGrid() {
+  DIAS_SEMANA.forEach(dia => {
+    document.getElementById(`hchk-${dia}`).checked = false;
+    document.getElementById(`hinicio-${dia}`).value = '10:00';
+    document.getElementById(`hfin-${dia}`).value    = '20:00';
+    toggleDia(dia, false);
+  });
+}
+function handleHorarioCargado(msg) {
+  const horario = msg.horario || [];
+  if (horario.length === 0) return; // grid ya está en blanco, nada que hacer
+
+  resetHorarioGrid(); // asegurar estado limpio antes de poblar
+  horario.forEach(({ dia, inicio, fin }) => {
+    const chk = document.getElementById(`hchk-${dia}`);
+    const ini = document.getElementById(`hinicio-${dia}`);
+    const finEl = document.getElementById(`hfin-${dia}`);
+    if (!chk || !ini || !finEl) return;
+    chk.checked  = true;
+    ini.value    = inicio;
+    finEl.value  = fin;
+    toggleDia(dia, true);
+  });
+  console.log(`${TAG} 📅 Horario cargado: ${horario.length} días`);
+}
+
+function rellenarHorarioTipico() {
+  ['lunes','martes','miercoles','jueves','viernes'].forEach(dia => {
+    document.getElementById(`hchk-${dia}`).checked = true;
+    document.getElementById(`hinicio-${dia}`).value = '10:00';
+    document.getElementById(`hfin-${dia}`).value    = '20:00';
+    toggleDia(dia, true);
+  });
+  document.getElementById('hchk-sabado').checked = true;
+  document.getElementById('hinicio-sabado').value  = '10:00';
+  document.getElementById('hfin-sabado').value     = '14:00';
+  toggleDia('sabado', true);
+  limpiarDia('domingo');
+  showToast('Horario típico aplicado — recuerda guardar');
+}
+
+// ─── FOTO ────────────────────────────────────────────
+function previewFoto(url, nombre) {
+  const el      = document.getElementById('fotoPreview');
+  const inicial = (nombre || '?')[0].toUpperCase();
+  if (url) {
+    el.innerHTML = `<img src="${esc(url)}" onerror="this.parentElement.textContent='${inicial}'">`;
+  } else {
+    el.textContent = inicial;
+  }
+}
+
+function resetFotoInput() {
+  state.fotoBase64   = null;
+  state.fotoFileName = null;
+  state.fotoMimeType = null;
+  document.getElementById('fotoFileInput').value = '';
+  document.getElementById('btnGuardarFoto').disabled = true;
+}
+
+function onFotoFileSelected(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+
+  const maxBytes = 3 * 1024 * 1024; // 3 MB
+  if (file.size > maxBytes) {
+    setStatus('statusFoto', '⚠️ Imagen demasiado grande (máx. 3 MB)', 'warn');
+    return;
+  }
+
+  setStatus('statusFoto', '📁 Leyendo imagen...', 'loading');
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl  = ev.target.result;
+    const base64   = dataUrl.split(',')[1]; // quitar "data:image/...;base64,"
+    state.fotoBase64   = base64;
+    state.fotoFileName = file.name;
+    state.fotoMimeType = file.type || 'image/jpeg';
+
+    // Preview inmediato
+    const s = state.staff.find(x => x._id === state.selected);
+    const nombre = s ? (s.displayName || s.canonicalName) : '';
+    previewFoto(dataUrl, nombre);
+
+    setStatus('statusFoto', `✅ ${file.name} lista — pulsa Guardar para subir`, 'ok');
+    document.getElementById('btnGuardarFoto').disabled = false;
+  };
+  reader.onerror = () => {
+    setStatus('statusFoto', '❌ Error al leer el archivo', 'err');
+  };
+  reader.readAsDataURL(file);
+}
+
+function guardarFoto() {
+  if (!state.selected || !state.fotoBase64) return;
+  setStatus('statusFoto', '⏳ Subiendo foto...', 'loading');
+  document.getElementById('btnGuardarFoto').disabled = true;
+
+  sendToPage('updateFoto', {
+    staffConfigId: state.selected,
+    base64Data:    state.fotoBase64,
+    fileName:      state.fotoFileName,
+    mimeType:      state.fotoMimeType
+  });
+}
+
+function handleFotoGuardadaOk(msg) {
+  setStatus('statusFoto', '✅ Foto guardada correctamente', 'ok');
+  showToast('✅ Foto actualizada');
+  resetFotoInput();
+  // Si viene publicUrl, actualizar preview inmediatamente sin recargar
+  if (msg.publicUrl) {
+    const s = state.staff.find(x => x._id === state.selected);
+    const nombre = s ? (s.displayName || s.canonicalName) : '';
+    previewFoto(msg.publicUrl, nombre);
+    // Actualizar en state.staff para que la tarjeta también la muestre
+    if (s) s.image = msg.publicUrl;
+    renderStaffGrid();
+  } else {
+    sendToPage('loadStaff');
+  }
+}
+
+// ─── BLOQUEOS ────────────────────────────────────────
+function handleBloqueosCargados(msg) {
+  const lista = document.getElementById('listBloqueos');
+  if (!lista) return;
+  const bloqueos = msg.bloqueos || [];
+  if (bloqueos.length === 0) {
+    lista.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:8px 0">Sin bloqueos activos</div>';
+    return;
+  }
+  lista.innerHTML = bloqueos.map(b => {
+    const fechaFmt = b.fecha ? new Date(b.fecha + 'T12:00:00').toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' }) : '—';
+    return `
+      <div class="bloqueo-item">
+        <div class="bloqueo-info">
+          <div class="bloqueo-fecha">${esc(fechaFmt)}</div>
+          <div class="bloqueo-hora">🕐 ${esc(b.inicio)} – ${esc(b.fin)}</div>
+          ${b.motivo ? `<div class="bloqueo-motivo">${esc(b.motivo)}</div>` : ''}
+        </div>
+        <button class="btn-del-bloqueo" onclick="borrarBloqueo('${b.id}')">🗑️ Eliminar</button>
+      </div>`;
+  }).join('');
+}
+
+function crearBloqueo() {
+  if (!state.selected) return;
+  const fecha    = document.getElementById('bloqueoFecha').value;
+  const fechaFin = document.getElementById('bloqueoFechaFin').value;  // v1.2.1 · opcional
+  const inicio   = document.getElementById('bloqueoInicio').value;
+  const fin      = document.getElementById('bloqueoFin').value;
+  const motivo   = document.getElementById('bloqueoMotivo').value.trim();
+  if (!fecha || !inicio || !fin) {
+    setStatus('statusBloqueo', '⚠️ Fecha, hora inicio y fin son obligatorios', 'warn');
+    return;
+  }
+  // Si hay fecha fin, debe ser posterior a la fecha inicio.
+  if (fechaFin && fechaFin < fecha) {
+    setStatus('statusBloqueo', '⚠️ La fecha fin no puede ser anterior a la fecha inicio', 'warn');
+    return;
+  }
+  setStatus('statusBloqueo', '⏳ Creando bloqueo...', 'loading');
+  sendToPage('crearBloqueo', { staffConfigId: state.selected, fecha, fechaFin, inicio, fin, motivo });
+}
+
+function handleBloqueoCreado(msg) {
+  setStatus('statusBloqueo', '✅ Bloqueo añadido', 'ok');
+  showToast('✅ Bloqueo añadido');
+  // Limpiar form
+  document.getElementById('bloqueoFecha').value    = '';
+  document.getElementById('bloqueoFechaFin').value = '';   // v1.2.1
+  document.getElementById('bloqueoMotivo').value   = '';
+  // Recargar lista
+  sendToPage('getBloqueos', { staffConfigId: msg.staffConfigId });
+}
+
+function borrarBloqueo(sessionId) {
+  if (!sessionId) return;
+  sendToPage('eliminarBloqueo', { staffConfigId: state.selected, sessionId });
+}
+
+function handleBloqueoEliminado(msg) {
+  showToast('✅ Bloqueo eliminado');
+  sendToPage('getBloqueos', { staffConfigId: msg.staffConfigId });
+}
+
+// ─── CIERRE DEL SALÓN ────────────────────────────────
+function aplicarCierreSalon() {
+  const fecha    = document.getElementById('cierreFecha').value;
+  const fechaFin = document.getElementById('cierreFechaFin').value;  // v1.2.1 · opcional
+  const inicio   = document.getElementById('cierreInicio').value;
+  const fin      = document.getElementById('cierreFin').value;
+  const motivo   = document.getElementById('cierreMotivo').value.trim();
+  if (!fecha || !inicio || !fin) {
+    setStatus('statusCierre', '⚠️ Fecha, hora inicio y fin son obligatorios', 'warn');
+    return;
+  }
+  if (fechaFin && fechaFin < fecha) {
+    setStatus('statusCierre', '⚠️ La fecha fin no puede ser anterior a la fecha inicio', 'warn');
+    return;
+  }
+  setStatus('statusCierre', '⏳ Aplicando cierre...', 'loading');
+  showLoading('Cerrando salón para todos los empleados...');
+  sendToPage('cierreSalon', { fecha, fechaFin, inicio, fin, motivo });
+}
+
+function handleCierreSalonOk(msg) {
+  hideLoading();
+  setStatus('statusCierre', `✅ Cierre aplicado a ${msg.exitosos}/${msg.total} empleados`, 'ok');
+  showToast(`✅ Salón cerrado: ${msg.exitosos} empleados bloqueados`);
+  document.getElementById('cierreFecha').value    = '';
+  document.getElementById('cierreFechaFin').value = '';   // v1.2.1
+  document.getElementById('cierreMotivo').value   = '';
+}
+
+function handleCierresCargados(msg) {
+  const lista = document.getElementById('listCierres');
+  if (!lista) return;
+  const cierres = msg.cierres || [];
+  if (cierres.length === 0) {
+    lista.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:8px 0">Sin cierres programados</div>';
+    return;
+  }
+  lista.innerHTML = cierres.map(c => {
+    const fechaFmt = c.fecha ? new Date(c.fecha + 'T12:00:00').toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' }) : '—';
+    return `
+      <div class="bloqueo-item">
+        <div class="bloqueo-info">
+          <div class="bloqueo-fecha">${esc(fechaFmt)}</div>
+          <div class="bloqueo-hora">🕐 ${esc(c.inicio)} – ${esc(c.fin)}</div>
+          ${c.motivo ? `<div class="bloqueo-motivo">${esc(c.motivo)}</div>` : ''}
+        </div>
+        <button class="btn-del-bloqueo" onclick="desbloquearCierre('${esc(c.fecha)}','${esc(c.inicio)}','${esc(c.fin)}')">🔓 Desbloquear</button>
+      </div>`;
+  }).join('');
+}
+
+function desbloquearCierre(fecha, inicio, fin) {
+  showLoading('Desbloqueando salón...');
+  sendToPage('eliminarCierre', { fecha, inicio, fin });
+}
+
+function handleCierreEliminadoOk(msg) {
+  hideLoading();
+  showToast(`✅ Cierre eliminado (${msg.eliminadas} empleados desbloqueados)`);
+}
+
+// ─── GUARDAR DATOS BÁSICOS ───────────────────────────
+function guardarDatosBasicos() {
+  if (!state.selected) return;
+  setStatus('statusDatos', '💾 Guardando...', 'loading');
+  // v1.2.0 · Nivel de acceso: '' → null (sin asignar), '1'..'4' → Number
+  const _accessRaw   = document.getElementById('editAccessLevel').value;
+  const _accessLevel = _accessRaw === '' ? null : Number(_accessRaw);
+  sendToPage('updateDatosBasicos', {
+    staffConfigId: state.selected,
+    datos: {
+      displayName:   document.getElementById('editDisplayName').value.trim(),
+      canonicalName: document.getElementById('editCanonicalName').value.trim(),
+      email:         document.getElementById('editEmail').value.trim(),
+      phone:         document.getElementById('editPhone').value.trim(),
+      locationId:    document.getElementById('editLocationId').value.trim(),
+      locationName:  document.getElementById('editLocationName').value.trim(),
+      active:        state.editActive,
+      isExternal:    state.editExterno,
+      notes:         document.getElementById('editNotes').value.trim(),
+      accessLevel:   _accessLevel
+    }
+  });
+}
+function handleDatosGuardadosOk(msg) {
+  setStatus('statusDatos', '✅ Datos guardados correctamente', 'ok');
+  showToast('✅ Datos guardados');
+  sendToPage('loadStaff');
+}
+
+// ─── GUARDAR HORARIO ─────────────────────────────────
+function guardarHorario() {
+  if (!state.selected) return;
+  const horarioSemanal = DIAS_SEMANA
+    .filter(dia => state.horarioDias[dia].activo)
+    .map(dia => ({ dia, inicio: state.horarioDias[dia].inicio, fin: state.horarioDias[dia].fin }));
+
+  if (horarioSemanal.length === 0) {
+    setStatus('statusHorario', '⚠️ Selecciona al menos un día de trabajo', 'warn');
+    return;
+  }
+  setStatus('statusHorario', '💾 Actualizando horario...', 'loading');
+  sendToPage('updateHorario', { staffConfigId: state.selected, horarioSemanal });
+}
+function handleHorarioGuardadoOk(msg) {
+  setStatus('statusHorario', `✅ Horario actualizado: ${msg.creadas} sesiones`, 'ok');
+  showToast('✅ Horario actualizado');
+}
+
+// ─── GUARDAR EXTERNO ─────────────────────────────────
+function guardarExterno() {
+  if (!state.selected) return;
+  setStatus('statusExterno', '💾 Guardando...', 'loading');
+  sendToPage('updateExterno', {
+    staffConfigId:        state.selected,
+    commissionPercentage: parseFloat(document.getElementById('editCommission').value) || 0,
+    activeStatus:         state.externoActive
+  });
+}
+function handleExternoGuardadoOk(msg) {
+  setStatus('statusExterno', '✅ Parámetros externos actualizados', 'ok');
+  showToast('✅ Colaborador externo actualizado');
+  sendToPage('loadStaff');
+}
+
+// ─── NUEVO STAFF ─────────────────────────────────────
+function toggleNuevoPanel() {
+  const panel = document.getElementById('nuevoPanel');
+  panel.classList.toggle('visible');
+  if (panel.classList.contains('visible')) {
+    document.getElementById('nuevoDisplayName').focus();
+  }
+}
+function crearNuevoStaff() {
+  const displayName   = document.getElementById('nuevoDisplayName').value.trim();
+  const canonicalName = document.getElementById('nuevoCanonicalName').value.trim();
+  if (!displayName || !canonicalName) {
+    setStatus('nuevoStatus', '⚠️ Nombre visible y canónico son obligatorios', 'warn');
+    return;
+  }
+  setStatus('nuevoStatus', '⏳ Creando empleado...', 'loading');
+  showLoading('Creando nuevo empleado...');
+  sendToPage('crearStaff', {
+    datos: {
+      displayName,
+      canonicalName,
+      email:              document.getElementById('nuevoEmail').value.trim(),
+      phone:              document.getElementById('nuevoPhone').value.trim(),
+      isExternal:         document.getElementById('nuevoTipo').value === 'externo',
+      externalModule:     'EXTERNOS',
+      usarHorarioNegocio: state.nuevoHorario
+    }
+  });
+}
+function handleNuevoCreado(msg) {
+  hideLoading();
+  setStatus('nuevoStatus', '✅ Empleado creado correctamente', 'ok');
+  showToast('✅ Nuevo empleado creado');
+  ['nuevoDisplayName','nuevoEmail','nuevoPhone','nuevoCanonicalName'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  setTimeout(() => {
+    document.getElementById('nuevoPanel').classList.remove('visible');
+    setStatus('nuevoStatus', '');
+  }, 2000);
+  sendToPage('loadStaff');
+}
+
+// ─── ELIMINAR STAFF ──────────────────────────────────
+function abrirModalEliminar() {
+  if (!state.selected) return;
+  const s = state.staff.find(x => x._id === state.selected);
+  if (!s) return;
+
+  state.pendingDelete = state.selected;
+
+  document.getElementById('modalEliminarBody').textContent =
+    `¿Eliminar a ${s.displayName || s.canonicalName}? Esta acción no se puede deshacer.`;
+  document.getElementById('modalBookingsWrap').style.display = 'none';
+  document.getElementById('modalBookingsList').innerHTML = '';
+  document.getElementById('modalConfirmarBtn').disabled = false;
+  document.getElementById('modalEliminar').classList.add('visible');
+}
+
+function cerrarModalEliminar() {
+  document.getElementById('modalEliminar').classList.remove('visible');
+  state.pendingDelete = null;
+}
+
+function confirmarEliminar() {
+  if (!state.pendingDelete) return;
+  document.getElementById('modalConfirmarBtn').disabled = true;
+  showLoading('Eliminando empleado...');
+  sendToPage('eliminarStaff', { staffConfigId: state.pendingDelete });
+  cerrarModalEliminar();
+}
+
+function handleStaffEliminadoOk(msg) {
+  hideLoading();
+  showToast(`✅ ${msg.displayName || 'Empleado'} eliminado`, 'ok');
+  state.selected = null;
+  document.getElementById('editorPanel').classList.remove('visible');
+  // handleLoadStaff ya fue llamado desde page code
+}
+
+function handleErrorEliminar(msg) {
+  hideLoading();
+  if (msg.tieneBookingsFuturos) {
+    // Reabrir modal mostrando las citas bloqueantes
+    const s = state.staff.find(x => x._id === state.pendingDelete || x._id === state.selected);
+    document.getElementById('modalEliminarBody').textContent =
+      `No es posible eliminar a ${s?.displayName || 'este empleado'}: tiene citas pendientes.`;
+
+    const lista = (msg.bookingsFuturos || []).map(b => {
+      const fecha = b.startDate ? new Date(b.startDate).toLocaleDateString('es-ES') : '—';
+      return `<div class="modal-booking-item">📅 ${fecha} · ${esc(b.serviceName || '—')}</div>`;
+    }).join('');
+
+    document.getElementById('modalBookingsList').innerHTML = lista;
+    document.getElementById('modalBookingsWrap').style.display = 'block';
+    document.getElementById('modalConfirmarBtn').disabled = true;
+    state.pendingDelete = null;
+
+    // Reabrir el modal
+    document.getElementById('modalEliminar').classList.add('visible');
+  } else {
+    showToast(`❌ ${msg.mensaje || 'Error al eliminar'}`, 'err');
+  }
+}
+
+// ─── ERRORES GENERALES ───────────────────────────────
+function handleError(msg) {
+  hideLoading();
+  console.error(`${TAG} ❌`, msg.error);
+  showToast(`❌ ${msg.error?.message || 'Error desconocido'}`, 'err');
+  const activo = document.querySelector('.tab-btn.active')?.id?.replace('tab-','');
+  if (activo) setStatus(`status${cap(activo)}`, `❌ ${msg.error?.message || 'Error'}`, 'err');
+  // Rehabilitar botón foto si estaba bloqueado
+  document.getElementById('btnGuardarFoto').disabled = !state.fotoBase64;
+}
+
+// ─── UTILS ───────────────────────────────────────────
+function esc(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function cap(str) {
+  return str ? str[0].toUpperCase() + str.slice(1) : '';
+}
+</script>
+</body>
+</html>
