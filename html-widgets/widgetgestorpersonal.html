@@ -9,10 +9,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE · Widget Gestión de Personal v1.2.1
+       KAMISUITE · Widget Gestión de Personal v1.2.2
        Dark theme — Bai Jamjuree — accent #e8368f
        ───────────────────────────────────────────────────
        CHANGELOG:
+       v1.2.2 · 20 Ago 2026 · FIX mensaje de estado colgado.
+         · handleError deducía el id del div de estado a partir del
+           nombre de la pestaña activa ('bloqueos' → 'statusBloqueos'),
+           pero el div real es 'statusBloqueo' (singular). setStatus
+           salía sin hacer nada y el "⏳ Creando bloqueo..." se quedaba
+           girando indefinidamente cuando el backend devolvía error.
+           Ahora hay mapa explícito pestaña → id de estado.
+         · handleError apaga también 'statusCierre' si estaba en curso
+           (el bloque Cierre del salón vive fuera de las pestañas).
+         · Sin cambios de HTML, CSS, ids ni copy.
        v1.2.1 · 06 Jul 2026 · +Rango de fechas en Bloqueos y Cierre.
          · Nuevo <input type="date" id="bloqueoFechaFin"> (opcional) en
            el formulario de bloqueo, junto a la fecha ya existente
@@ -845,7 +855,7 @@
 // KAMISUITE · Widget Gestión de Personal v1.2.1
 // =====================================================
 
-const VERSION = '1.2.1';
+const VERSION = '1.2.2';
 const TAG     = `[StaffWidget][${VERSION}]`;
 
 const state = {
@@ -1557,12 +1567,35 @@ function handleErrorEliminar(msg) {
 }
 
 // ─── ERRORES GENERALES ───────────────────────────────
+// v1.2.2 — El id del div de estado NO se deduce del nombre de la pestaña:
+// la pestaña 'bloqueos' escribe en 'statusBloqueo' (singular). Con el id
+// derivado ('statusBloqueos') setStatus salía sin hacer nada y el
+// "⏳ Creando bloqueo..." se quedaba colgado indefinidamente. Mapa explícito.
+const STATUS_POR_TAB = {
+  datos:    'statusDatos',
+  horario:  'statusHorario',
+  foto:     'statusFoto',
+  bloqueos: 'statusBloqueo',
+  externo:  'statusExterno'
+};
+
 function handleError(msg) {
   hideLoading();
   console.error(`${TAG} ❌`, msg.error);
-  showToast(`❌ ${msg.error?.message || 'Error desconocido'}`, 'err');
-  const activo = document.querySelector('.tab-btn.active')?.id?.replace('tab-','');
-  if (activo) setStatus(`status${cap(activo)}`, `❌ ${msg.error?.message || 'Error'}`, 'err');
+  const texto = msg.error?.message || 'Error desconocido';
+  showToast(`❌ ${texto}`, 'err');
+
+  const activo   = document.querySelector('.tab-btn.active')?.id?.replace('tab-','');
+  const statusId = STATUS_POR_TAB[activo];
+  if (statusId) setStatus(statusId, `❌ ${texto}`, 'err');
+
+  // El bloque Cierre del salón vive fuera de las pestañas: si tenía un
+  // "⏳..." en curso, también hay que apagarlo o queda colgado igual.
+  const elCierre = document.getElementById('statusCierre');
+  if (elCierre && elCierre.className.includes('loading')) {
+    setStatus('statusCierre', `❌ ${texto}`, 'err');
+  }
+
   // Rehabilitar botón foto si estaba bloqueado
   document.getElementById('btnGuardarFoto').disabled = !state.fotoBase64;
 }
