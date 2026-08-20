@@ -1,9 +1,44 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.50
-// FECHA: 18 de agosto de 2026
+// VERSION: 1.0.51
+// FECHA: 20 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.51: 🧾 SEGREGACIÓN FISCAL — LA VERDAD PASA A SER *STAFF ASIGNADO*.
+//          La guardia de v1.0.50 decidía si un servicio era "de externa"
+//          leyendo ServiceCatalog.family === 'externo'. Ese valor SOLO lo
+//          escribe el JSON de alta del salón: el Editor de Servicios nunca
+//          lo pone (family = family || 'simple', y el desplegable de familia
+//          solo ofrece coloracion/tratamiento para tipologías complejas).
+//
+//          CONSECUENCIA REAL (Hair-Times, 20-ago): "DEPILACIÓN LÁSER ZONA…",
+//          creada desde el Editor de Servicios con STAFF ASIGNADO = LOLA
+//          (externa), nació con family='simple'. La guardia la leía como
+//          servicio del salón y bloqueaba añadirla a una cita de LOLA:
+//          «es un servicio del salón y no puede añadirse a una cita de la
+//          profesional externa». Es decir, un servicio que SOLO presta una
+//          externa era incobrable desde su propia cita.
+//
+//          AHORA: un servicio se considera de externa si
+//            (a) family === 'externo'  [criterio previo, se conserva], o
+//            (b) tiene STAFF ASIGNADO (idStaff) y TODOS los asignados son
+//                personal externo en StaffConfig (isExternal === true).
+//          Es el mismo criterio que el operador ve en pantalla y el mismo
+//          que ya decide el enrutado del cobro (StaffConfig.isExternal).
+//
+//          LA BARRERA NO SE DEBILITA: un servicio de EMY sigue sin poder
+//          entrar en una cita de personal interno, y un servicio del salón
+//          (asignado a interno, o a mezcla de interno y externo, o sin
+//          asignación) sigue sin poder entrar en una cita de externa.
+//          Solo cambia el caso que estaba mal clasificado: el servicio
+//          exclusivo de una externa entrando en la cita de esa externa.
+//
+//          FAIL-OPEN: sin idStaff no se reclasifica nada (se cae al criterio
+//          por family, comportamiento previo). Si StaffConfig no resuelve a
+//          los asignados, tampoco se reclasifica.
+//
+//          Sin cambios en el enrutado del cobro ni en ninguna otra función.
 //
 // v1.0.50: 🧾 SEGREGACIÓN FISCAL EXTERNO / INTERNO.
 //          Un pack ya NO puede mezclar servicios de familia 'externo' con
@@ -1116,7 +1151,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.50';
+const VERSION = '1.0.51';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1339,9 +1374,79 @@ async function resolverScheduleIdAncla(wixAnclaId) {
 const FAMILIA_EXTERNA = 'externo';
 
 // ¿Es de familia externa el servicio del catálogo?
+// Criterio original (v1.0.50): la etiqueta family del catálogo. Se conserva
+// porque es la que traen los servicios dados de alta por el JSON del salón.
 function esServicioExterno(svc) {
   if (!svc) return false;
   return String(svc.family || '').trim().toLowerCase() === FAMILIA_EXTERNA;
+}
+
+// v1.0.51 — STAFF ASIGNADO del catálogo. El campo es OBJECT en CMS:
+//   idStaff = { ids: [wixResourceId, ...] }
+// Parser copiado literalmente de serviciosEdicionLogic.parseStaffIds, que es
+// quien escribe el campo, para no divergir en el formato aceptado.
+function parseIdStaffCatalogo(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'object' && Array.isArray(value.ids)) return value.ids;
+  if (typeof value === 'string') {
+    try {
+      const p = JSON.parse(value);
+      if (Array.isArray(p)) return p;
+      if (p && Array.isArray(p.ids)) return p.ids;
+    } catch (_) {}
+  }
+  return [];
+}
+
+// v1.0.51 — Mapa wixResourceId → isExternal, cacheado 60s. Evita una query por
+// cada servicio evaluado cuando se valida un pack con varios complementos.
+// El TTL corto acota el desfase si se cambia el flag de un empleado en caliente.
+let _cacheStaffExterno = { at: 0, map: null };
+async function mapaStaffExterno() {
+  const ahora = Date.now();
+  if (_cacheStaffExterno.map && (ahora - _cacheStaffExterno.at) < 60000) {
+    return _cacheStaffExterno.map;
+  }
+  const r = await wixData.query(CMS_STAFF).limit(100).find({ suppressAuth: true });
+  const map = new Map();
+  for (const s of (r.items || [])) {
+    if (s.wixResourceId) map.set(s.wixResourceId, !!s.isExternal);
+  }
+  _cacheStaffExterno = { at: ahora, map };
+  return map;
+}
+
+// v1.0.51 — ¿Este servicio pertenece a una profesional externa?
+//
+//   (a) family === 'externo'  → sí (alta por JSON del salón), o
+//   (b) tiene STAFF ASIGNADO y TODOS los asignados son externos → sí.
+//
+// Fail-open deliberado en (b): sin idStaff, o con algún asignado que
+// StaffConfig no resuelve, NO se reclasifica y se mantiene el criterio por
+// family. Un solo asignado interno basta para que sea servicio del salón.
+async function esServicioDeExterna(svc) {
+  if (!svc) return false;
+  if (esServicioExterno(svc)) return true;
+
+  const ids = parseIdStaffCatalogo(svc.idStaff);
+  if (!ids.length) return false;
+
+  try {
+    const mapa = await mapaStaffExterno();
+    for (const id of ids) {
+      if (!mapa.has(id)) {
+        console.warn(`${TAG} ⚠️ Staff asignado no resuelto en "${svc?.label}" (id=${id}). No se reclasifica.`);
+        return false;
+      }
+      if (mapa.get(id) !== true) return false;   // hay personal interno asignado
+    }
+    console.log(`${TAG} 🏷 "${svc?.label}" clasificado como servicio de externa por STAFF ASIGNADO (${ids.length})`);
+    return true;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ esServicioDeExterna lookup falló: ${e.message}`);
+    return false;
+  }
 }
 
 // ¿El titular del pack es personal externo? Lookup por wixResourceId, el
@@ -1364,7 +1469,7 @@ async function staffEsExterno(staffId) {
 // Valida que un servicio pueda entrar en un pack cuyo titular es `staffId`.
 // Devuelve { ok:true } o { ok:false, error:'<mensaje para el operador>' }.
 async function validarSegregacionFiscal(svc, staffId, contexto) {
-  const svcExterno = esServicioExterno(svc);
+  const svcExterno = await esServicioDeExterna(svc);   // v1.0.51
   const titularExterno = await staffEsExterno(staffId);
 
   // Fail-open: sin dato de titular no se bloquea (ver nota de arriba).
@@ -2025,13 +2130,14 @@ export const crearPackReserva = webMethod(
           return { ok: false, version: VERSION, error: { message: seg.error } };
         }
         // Los complementos llegan como setupUid suelto o como objeto {setupUid,...}.
-        const principalExterno = esServicioExterno(principalBase);
+        const principalExterno = await esServicioDeExterna(principalBase);   // v1.0.51
         for (const c of (complementosSetupUid || [])) {
           const uid = (c && typeof c === 'object') ? c.setupUid : c;
           if (!uid) continue;
           const svcComp = porSetupUid[uid];
           if (!svcComp) continue;   // fail-open: ya lo resolverá el constructor de fases
-          if (esServicioExterno(svcComp) !== principalExterno) {
+          const compExterno = await esServicioDeExterna(svcComp);   // v1.0.51
+          if (compExterno !== principalExterno) {
             const msg = `"${svcComp.label || 'Un servicio elegido'}" no puede ir en la misma cita que "${principalBase.label || 'el servicio principal'}": uno lo presta el salón y el otro personal externo, y su facturación es independiente.`;
             console.warn(`${TAG} ⛔ Segregación fiscal (complemento): ${msg}`);
             return { ok: false, version: VERSION, error: { message: msg } };
