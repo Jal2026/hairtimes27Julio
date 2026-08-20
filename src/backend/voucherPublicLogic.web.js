@@ -1,8 +1,23 @@
 // =====================================================
 // KAMISUITE - Bonos (Página Pública) Backend
 // =====================================================
-// VERSION: 1.3.0
-// FECHA: 11 de agosto de 2026
+// VERSION: 1.4.0
+// FECHA: 20 de agosto de 2026
+//
+// v1.4.0: ⏳ PLAZO MÁXIMO POR USO — SNAPSHOT AL EMITIR.
+//   Nuevo campo ServiceCatalog.bonusMaxIntervalDays (Número, días). Define
+//   el plazo MÁXIMO de cada uso en ventanas correlativas desde la emisión:
+//   ventana que vence sin consumirse, sesión que se pierde. Es la palanca de
+//   frecuencia, y CONVIVE con bonusUseIntervalDays (espera mínima), que no
+//   cambia de semántica ni de comportamiento.
+//   · Se CONGELA en KamisuiteVouchers al confirmar el pago, junto al mínimo
+//     y a expirationDate. Motivo: cambiar la configuración del servicio no
+//     puede alterar las reglas de un bono ya vendido y pagado.
+//   · getVoucherCatalog lo expone (solo lectura) para el detalle público.
+//   · 0/vacío = sin regla. Los bonos emitidos ANTES de esta versión lo
+//     tienen vacío y siguen comportándose exactamente igual que siempre.
+//   Cero cambios en precios, variantes, checkout ni emisión más allá de
+//   añadir el snapshot.
 //
 // v1.3.0: 🔓 INTERRUPTOR GLOBAL "BONOS SIN PRIME".
 //   · Nuevo campo KamisuiteProductsConfig.vouchersSkipPrime (Booleano).
@@ -223,7 +238,7 @@ import { currentMember } from 'wix-members-backend';
 // v1.0.1 — F7: email triggered de confirmación de compra
 import { triggeredEmails } from 'wix-crm-backend';
 
-const TAG = '[VoucherPublic][1.3.0]';
+const TAG = '[VoucherPublic][1.4.0]';
 
 const CMS_CATALOG = 'ServiceCatalog';
 const CMS_CONFIG = 'KamisuiteProductsConfig';
@@ -480,7 +495,7 @@ export const getVoucherCatalog = webMethod(
       // plazo de uso cuando el servicio no define bonusValidityDays. Mismo
       // origen que confirmVoucherPayment (KamisuiteProductsConfig).
       let globalValidityMonths = 12;
-      // v1.3.0 — Interruptor global "bonos sin PRIME". Se lee en ESTA MISMA
+      // v1.4.0 — Interruptor global "bonos sin PRIME". Se lee en ESTA MISMA
       // query (cero queries nuevas). Polaridad de apertura: false/vacío =
       // se exige PRIME (comportamiento histórico).
       let vouchersSkipPrime = false;
@@ -508,6 +523,10 @@ export const getVoucherCatalog = webMethod(
         const bonusUseIntervalDays = (typeof c.bonusUseIntervalDays === 'number' && c.bonusUseIntervalDays > 0)
           ? Math.floor(c.bonusUseIntervalDays)
           : 0;   // 0 = USO LIBRE
+        // v1.4.0 — plazo MÁXIMO por uso (solo lectura para el detalle).
+        const bonusMaxIntervalDays = (typeof c.bonusMaxIntervalDays === 'number' && c.bonusMaxIntervalDays > 0)
+          ? Math.floor(c.bonusMaxIntervalDays)
+          : 0;   // 0 = sin regla
 
         // Detectar variantes válidas del servicio (mismo criterio que
         // aplicaremos también en createVoucherCheckout para consistencia).
@@ -564,11 +583,12 @@ export const getVoucherCatalog = webMethod(
           // v1.2.0 — Plazo de uso y frecuencia (solo lectura) para el detalle.
           bonusValidityDays,
           bonusUseIntervalDays,
+          bonusMaxIntervalDays,
           globalValidityMonths
         };
       });
 
-      // v1.3.0 — vouchersSkipPrime viaja junto al catálogo. El page code lo
+      // v1.4.0 — vouchersSkipPrime viaja junto al catálogo. El page code lo
       // transporta al bootstrap y el widget decide si pinta el banner
       // #primeGate. Nivel raíz de la respuesta, NO dentro de cada voucher:
       // es configuración global del salón, no propiedad del bono.
@@ -687,7 +707,7 @@ export const createVoucherCheckout = webMethod(
 
       // Decisión A: requiere PRIME activo.
       //
-      // v1.3.0 — El candado es ahora CONDICIONAL al interruptor global
+      // v1.4.0 — El candado es ahora CONDICIONAL al interruptor global
       // KamisuiteProductsConfig.vouchersSkipPrime:
       //   · false / vacío → se exige PRIME activo (comportamiento
       //     histórico literal, sin cambios).
@@ -831,7 +851,7 @@ export const createVoucherCheckout = webMethod(
         paymentMethod: 'Wix Pay',
         paymentId: '',
         paymentReservationId: '',
-        // v1.3.0 — Con vouchersSkipPrime activo el comprador puede no tener
+        // v1.4.0 — Con vouchersSkipPrime activo el comprador puede no tener
         // PRIME: en ese caso el vínculo queda vacío. Con el candado puesto,
         // prime SIEMPRE existe aquí (el guard ya habría cortado antes) y el
         // valor es idéntico al histórico.
@@ -1071,6 +1091,13 @@ export const confirmVoucherPayment = webMethod(
       const intervalDays = (servicioBono && typeof servicioBono.bonusUseIntervalDays === 'number' && servicioBono.bonusUseIntervalDays > 0)
         ? Math.floor(servicioBono.bonusUseIntervalDays)
         : 0;
+      // v1.4.0 — bonusMaxIntervalDays: plazo MÁXIMO por uso, en ventanas
+      // correlativas desde la emisión. También se CONGELA aquí: cambiar la
+      // configuración del servicio mañana no puede alterar las reglas de un
+      // bono ya vendido y pagado. 0/vacío = sin regla.
+      const maxIntervalDays = (servicioBono && typeof servicioBono.bonusMaxIntervalDays === 'number' && servicioBono.bonusMaxIntervalDays > 0)
+        ? Math.floor(servicioBono.bonusMaxIntervalDays)
+        : 0;
 
       const cfgResult = await wixData.query(CMS_CONFIG).limit(1).find({ suppressAuth: true });
       const validityMonths = (cfgResult.items.length > 0 && typeof cfgResult.items[0].voucherValidityMonths === 'number')
@@ -1083,10 +1110,11 @@ export const confirmVoucherPayment = webMethod(
       registro.expirationDate = (validityDays > 0)
         ? calcularExpirationDateDias(now, validityDays)
         : calcularExpirationDate(now, validityMonths);
-      registro.bonusUseIntervalDays = intervalDays;   // snapshot congelado (0 = LIBRE)
+      registro.bonusUseIntervalDays = intervalDays;      // snapshot congelado — espera MÍNIMA (0 = LIBRE)
+      registro.bonusMaxIntervalDays = maxIntervalDays;   // snapshot congelado — plazo MÁXIMO por uso (0 = sin regla)
       registro.paymentMethod = 'Wix Pay';
 
-      console.log(`${TAG} 📆 Bono ${registro.code}: caducidad=${validityDays > 0 ? validityDays + 'd (servicio)' : validityMonths + 'm (global)'} · intervalo=${intervalDays > 0 ? intervalDays + 'd' : 'LIBRE'}`);
+      console.log(`${TAG} 📆 Bono ${registro.code}: caducidad=${validityDays > 0 ? validityDays + 'd (servicio)' : validityMonths + 'm (global)'} · mínimo=${intervalDays > 0 ? intervalDays + 'd' : 'LIBRE'} · máximo=${maxIntervalDays > 0 ? maxIntervalDays + 'd/uso' : 'sin regla'}`);
 
       const updated = await wixData.update(CMS_VOUCHERS, registro, { suppressAuth: true });
       console.log(`${TAG} ✅ Voucher ACTIVO: ${updated._id} | vence=${updated.expirationDate.toISOString()}`);
