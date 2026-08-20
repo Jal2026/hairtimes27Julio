@@ -1,8 +1,32 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.1
-// FECHA: 3 de agosto de 2026
+// VERSION: 0.9.2
+// FECHA: 20 de agosto de 2026
+//
+// v0.9.2: 🔤 SLUG DE CATEGORÍA A PRUEBA DE TILDES.
+//    getServiciosCategoria comparaba el slug de la URL con el del CMS con
+//    igualdad estricta de cadenas. Una "ó" puede venir codificada de dos
+//    formas distintas que se imprimen idénticas: precompuesta (un solo
+//    carácter, NFC) o descompuesta (o + tilde combinante, NFD). El
+//    navegador y el CMS no tienen por qué coincidir.
+//
+//    CASO REAL (Hair-Times, 20-ago): la categoría "Depilación Laser" —la
+//    única de las catorce con tilde en el enlace, /servicios/depilación-
+//    laser— devolvía «groupCatalog no resuelto (slug=depilación-laser)»
+//    aunque la categoría existía, estaba activa y su groupCatalog
+//    coincidía con el group de los servicios. La página pública se quedaba
+//    cargando indefinidamente.
+//
+//    AHORA la comparación se hace en tres pasadas, de más estricta a más
+//    tolerante: (1) normalizada NFC, (2) NFC en minúsculas, (3) sin tildes
+//    y en minúsculas. La primera que casa gana. Si ninguna casa, el log
+//    lista los slugs disponibles para poder diagnosticarlo de un vistazo
+//    en vez de a ciegas.
+//
+//    Alcance: solo la resolución del slug. No se toca el filtrado por
+//    group, ni USOS_PUBLICOS, ni TIPOS_PRINCIPALES, ni adaptarServicio, ni
+//    ninguna otra función del backend.
 //
 // v0.9.1: 📨 COMPLEMENTOS Y SU PROFESIONAL EN LA CONFIRMACIÓN AL CLIENTE.
 //    Hasta ahora el mensaje decía solo el servicio principal y el
@@ -589,7 +613,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.1';
+const VERSION = '0.9.2';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -638,6 +662,25 @@ function jsonIn(v, unwrapKey) {
 function extraerSlug(linkPath) {
   if (!linkPath) return '';
   return String(linkPath).split('/').filter(Boolean).pop() || '';
+}
+
+// v0.9.2 — Normalización de slug para comparar.
+// La misma letra acentuada puede llegar en dos codificaciones distintas que
+// se imprimen igual: NFC (un carácter) o NFD (letra + tilde combinante). Sin
+// normalizar, "depilación-laser" !== "depilación-laser".
+function slugNFC(s) {
+  return String(s || '').trim().normalize('NFC');
+}
+
+// Misma cadena en minúsculas y sin diacríticos: última red de seguridad.
+// normalize('NFD') separa la tilde de la letra y el rango \u0300-\u036f la
+// elimina.
+function slugPlano(s) {
+  return String(s || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
 }
 
 // Iniciales a partir de un nombre: "Verónica" → "VE", "María José" → "MJ".
@@ -1125,9 +1168,25 @@ export const getServiciosCategoria = webMethod(
           .eq('activo', true)
           .limit(100)
           .find({ suppressAuth: true });
-        const match = (r.items || []).find(it =>
-          extraerSlug(it['link-servicios-title']) === slug
-        );
+
+        const cats = r.items || [];
+
+        // v0.9.2 — Tres pasadas, de más estricta a más tolerante.
+        const objNFC   = slugNFC(slug);
+        const objPlano = slugPlano(slug);
+
+        let match =
+          cats.find(it => slugNFC(extraerSlug(it['link-servicios-title'])) === objNFC) ||
+          cats.find(it => slugNFC(extraerSlug(it['link-servicios-title'])).toLowerCase() === objNFC.toLowerCase()) ||
+          cats.find(it => slugPlano(extraerSlug(it['link-servicios-title'])) === objPlano);
+
+        if (!match) {
+          // Sin match: dejar en el log los slugs disponibles para poder
+          // diagnosticarlo de un vistazo en vez de a ciegas.
+          const disponibles = cats.map(it => extraerSlug(it['link-servicios-title'])).filter(Boolean);
+          console.warn(`${TAG} ⚠️ slug "${slug}" no casa con ninguna categoría activa. Disponibles: [${disponibles.join(' | ')}]`);
+        }
+
         if (match) {
           gc = match.groupCatalog || '';
           categoria = {
