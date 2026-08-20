@@ -1,8 +1,31 @@
 // =====================================================
 // KAMISUITE - Edición de Servicios Backend
 // =====================================================
-// VERSION: 1.12.0
-// FECHA: 30 de julio de 2026
+// VERSION: 1.13.0
+// FECHA: 20 de agosto de 2026
+//
+// v1.13.0 — BONOS: plazo MÁXIMO por uso, campo nuevo y CONVIVIENDO con el
+//   mínimo. Se conecta bonusMaxIntervalDays (ServiceCatalog), entero >= 0,
+//   mismo patrón que bonusUseIntervalDays:
+//     · bonusUseIntervalDays  → espera MÍNIMA entre usos. Bloquea el canje
+//       si la clienta vuelve antes. NO quita nada: vuelve otro día y su
+//       sesión sigue ahí. Criterio comercial (o de espaciado). 0 = sin regla.
+//     · bonusMaxIntervalDays  → plazo MÁXIMO por uso, en ventanas
+//       correlativas desde la emisión. Ventana que vence sin consumirse,
+//       sesión que SE PIERDE. Palanca de frecuencia. 0 = sin regla.
+//   Son independientes y pueden convivir: mínimo 42 + máximo 70 describe la
+//   banda de una tanda con espaciado técnico. Solo hay conflicto si el
+//   mínimo supera al máximo.
+//
+//   ⚠️ POR QUÉ UN CAMPO NUEVO Y NO UN MODO SOBRE EL EXISTENTE: los bonos ya
+//   vendidos congelaron bonusUseIntervalDays con semántica de MÍNIMO. Un
+//   campo nuevo nace vacío, así que todo lo emitido hasta hoy sigue
+//   comportándose exactamente como el día que se pagó, sin valor por defecto
+//   que interpretar ni migración. La regla nueva solo afecta a bonos nuevos.
+//
+//   NOTA: este backend NO valida la coherencia entre campos (máximo > mínimo,
+//   y caducidad >= usos x máximo). Esa comprobación vive en el widget, que es
+//   donde el usuario puede corregirla en el momento.
 //
 // v1.12.0 — BONOS: caducidad y frecuencia por servicio.
 //   Se conectan dos campos nuevos de ServiceCatalog (leer + crear +
@@ -449,7 +472,9 @@ export const listarServiciosCompleto = webMethod(
           bonoDescuento: (typeof c.bonoDescuento === 'number') ? c.bonoDescuento : null,
           // v1.12.0 — caducidad (días) + frecuencia mínima entre usos (días)
           bonusValidityDays: (typeof c.bonusValidityDays === 'number') ? c.bonusValidityDays : null,
-          bonusUseIntervalDays: (typeof c.bonusUseIntervalDays === 'number') ? c.bonusUseIntervalDays : null
+          bonusUseIntervalDays: (typeof c.bonusUseIntervalDays === 'number') ? c.bonusUseIntervalDays : null,
+          // v1.13.0 — plazo MÁXIMO por uso (ventanas desde la emisión)
+          bonusMaxIntervalDays: (typeof c.bonusMaxIntervalDays === 'number') ? c.bonusMaxIntervalDays : null
         }));
 
       const staff = await cargarStaffDesdeConfig();
@@ -513,7 +538,10 @@ export const actualizarServicio = webMethod(
       bonoDescuento,
       // v1.12.0 — caducidad (días) + frecuencia mínima entre usos (días)
       bonusValidityDays,
-      bonusUseIntervalDays
+      bonusUseIntervalDays,
+      bonusMaxIntervalDays,
+      // v1.13.0 — plazo MÁXIMO por uso
+      bonusMaxIntervalDays
     } = payload;
 
     try {
@@ -628,6 +656,15 @@ export const actualizarServicio = webMethod(
           registro.bonusUseIntervalDays = isNaN(n) ? null : Math.max(0, Math.floor(n));
         }
       }
+      // v1.13.0 — plazo MÁXIMO por uso. Mismo patrón, campo independiente.
+      if (bonusMaxIntervalDays !== undefined) {
+        if (bonusMaxIntervalDays === null || bonusMaxIntervalDays === '') {
+          registro.bonusMaxIntervalDays = null;
+        } else {
+          const n = Number(bonusMaxIntervalDays);
+          registro.bonusMaxIntervalDays = isNaN(n) ? null : Math.max(0, Math.floor(n));
+        }
+      }
 
       // v1.11.7 — Fuente de verdad: SalonConfig.wixAnclaId (no más family).
       if (!registro.wixAnclaId || !registro.wixAnclaId.trim()) {
@@ -689,7 +726,8 @@ export const actualizarServicio = webMethod(
           bonoDescuento: (typeof registro.bonoDescuento === 'number') ? registro.bonoDescuento : null,
           // v1.12.0
           bonusValidityDays: (typeof registro.bonusValidityDays === 'number') ? registro.bonusValidityDays : null,
-          bonusUseIntervalDays: (typeof registro.bonusUseIntervalDays === 'number') ? registro.bonusUseIntervalDays : null
+          bonusUseIntervalDays: (typeof registro.bonusUseIntervalDays === 'number') ? registro.bonusUseIntervalDays : null,
+          bonusMaxIntervalDays: (typeof registro.bonusMaxIntervalDays === 'number') ? registro.bonusMaxIntervalDays : null
         }
       };
 
@@ -813,6 +851,11 @@ export const crearServicioCatalogo = webMethod(
           const n = Number(bonusValidityDays);
           return isNaN(n) ? null : Math.max(0, Math.floor(n));
         })(),
+        bonusMaxIntervalDays: (() => {
+          if (bonusMaxIntervalDays === undefined || bonusMaxIntervalDays === null || bonusMaxIntervalDays === '') return null;
+          const n = Number(bonusMaxIntervalDays);
+          return isNaN(n) ? null : Math.max(0, Math.floor(n));
+        })(),
         bonusUseIntervalDays: (() => {
           if (bonusUseIntervalDays === undefined || bonusUseIntervalDays === null || bonusUseIntervalDays === '') return null;
           const n = Number(bonusUseIntervalDays);
@@ -891,7 +934,8 @@ export const crearServicioCatalogo = webMethod(
           bonoDescuento: (typeof inserted.bonoDescuento === 'number') ? inserted.bonoDescuento : null,
           // v1.12.0
           bonusValidityDays: (typeof inserted.bonusValidityDays === 'number') ? inserted.bonusValidityDays : null,
-          bonusUseIntervalDays: (typeof inserted.bonusUseIntervalDays === 'number') ? inserted.bonusUseIntervalDays : null
+          bonusUseIntervalDays: (typeof inserted.bonusUseIntervalDays === 'number') ? inserted.bonusUseIntervalDays : null,
+          bonusMaxIntervalDays: (typeof inserted.bonusMaxIntervalDays === 'number') ? inserted.bonusMaxIntervalDays : null
         }
       };
 
