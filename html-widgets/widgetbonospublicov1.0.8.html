@@ -10,8 +10,35 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════
-   KAMISUITE — Widget público Bonos v1.0.7
+   KAMISUITE — Widget público Bonos v1.0.8
    F2.3 del módulo Productos Custom.
+
+   v1.0.8 (20 ago 2026):
+     · ⏳ DOS REGLAS DE PLAZO, REDACTADAS POR SEPARADO. El detalle decía
+       "Frecuencia: cada N días" para bonusUseIntervalDays, un texto que
+       no dice en qué dirección aprieta y que se volvió ambiguo al
+       aparecer el plazo máximo. Ahora:
+         - "Validez total: N días/meses"  (sin cambios de dato)
+         - "Usa cada sesión antes de N días — la sesión que no uses
+           dentro de su plazo se pierde"   (bonusMaxIntervalDays > 0)
+         - "Deja al menos N días entre una sesión y la siguiente"
+           (bonusUseIntervalDays > 0)
+         - "Ritmo de uso: libre, dentro de la validez"  (ambas a 0)
+       Las dos pueden convivir. La condición que hace PERDER una sesión
+       va marcada con el color de aviso del skin: no puede leerse igual
+       que una que solo aplaza.
+       bonusMaxIntervalDays lo envía voucherPublicLogic v1.4.0 en
+       getVoucherCatalog. Si llega undefined (backend anterior), vale 0
+       y esa línea no se pinta: degrada sin romper.
+     · 👤 BONO NOMINATIVO. Nota permanente en el detalle: personal e
+       intransferible, y para compartirlo (p. ej. corte infantil entre
+       hermanos) hay que consultarlo antes con el salón. Va SIEMPRE,
+       tenga o no reglas de plazo: es condición de la compra.
+       ⚠️ Es solo el texto informativo. El canje NO comprueba identidad
+       (aplicarCanjeProducto valida el código, no el contacto): el
+       permiso es una decisión del mostrador.
+     · Cero cambios en cards del catálogo, variantes, precios, flujo de
+       compra, estados de vista, skins ni backend.
 
    v1.0.7 (11 ago 2026):
      · 🔓 INTERRUPTOR GLOBAL "bonos sin PRIME". El banner #primeGate
@@ -473,6 +500,16 @@ html, body {
 .kp-panel-hero-info .kp-hero-terms .t strong {
   color: var(--kr-ink);
   font-weight: var(--kr-w-semi);
+}
+/* v1.0.8 — La condición que hace PERDER una sesión no puede leerse igual
+   que las demás: se marca en el color de aviso del skin. */
+.kp-panel-hero-info .kp-hero-terms .kp-terms-warn {
+  color: var(--kr-warn, var(--kr-ink-2));
+}
+/* v1.0.8 — Nota de bono nominativo: secundaria, siempre visible. */
+.kp-panel-hero-info .kp-hero-terms .kp-terms-nota {
+  margin-top: 6px;
+  opacity: .85;
 }
 .kp-panel-hero-info .stats {
   font-size: var(--kr-fs-xs);
@@ -1101,10 +1138,34 @@ html, body {
     var validityDays = (typeof v.bonusValidityDays === 'number') ? v.bonusValidityDays : 0;
     var globalMonths = (typeof v.globalValidityMonths === 'number' && v.globalValidityMonths > 0) ? v.globalValidityMonths : 12;
     var intervalDays = (typeof v.bonusUseIntervalDays === 'number') ? v.bonusUseIntervalDays : 0;
+    var maxDays      = (typeof v.bonusMaxIntervalDays === 'number') ? v.bonusMaxIntervalDays : 0;
     var plazoTxt = (validityDays > 0) ? fmtDias(validityDays) : fmtMeses(globalMonths);
-    var frecTxt = (intervalDays > 0) ? ('cada ' + fmtDias(intervalDays)) : 'USO LIBRE';
-    return '<div class="t">Plazo de uso: <strong>' + esc(plazoTxt) + '</strong></div>'
-         + '<div class="t">Frecuencia: <strong>' + esc(frecTxt) + '</strong></div>';
+
+    var out = '<div class="t">Validez total: <strong>' + esc(plazoTxt) + '</strong></div>';
+
+    // v1.0.8 — Las dos reglas son independientes y pueden convivir. Se
+    // redactan por SEPARADO porque no son lo mismo: la mínima solo aplaza,
+    // la máxima hace perder la sesión. Meterlas en una sola línea
+    // "Frecuencia: cada N días" ocultaba justo esa diferencia.
+    if (maxDays > 0) {
+      out += '<div class="t">Usa cada sesión antes de <strong>' + esc(fmtDias(maxDays))
+           + '</strong> <span class="kp-terms-warn">— la sesión que no uses dentro de su plazo se pierde</span></div>';
+    }
+    if (intervalDays > 0) {
+      out += '<div class="t">Deja al menos <strong>' + esc(fmtDias(intervalDays))
+           + '</strong> entre una sesión y la siguiente</div>';
+    }
+    if (maxDays === 0 && intervalDays === 0) {
+      out += '<div class="t">Ritmo de uso: <strong>libre</strong>, dentro de la validez</div>';
+    }
+
+    // v1.0.8 — Nominativo. Va SIEMPRE, con o sin reglas de plazo: es una
+    // condición de la compra, no un detalle de configuración del servicio.
+    out += '<div class="t kp-terms-nota">Bono personal e intransferible: solo puede usarlo quien lo compra. '
+         + 'Si quieres compartirlo —por ejemplo, un bono de corte infantil para varios hermanos— '
+         + 'consúltalo antes con el salón.</div>';
+
+    return out;
   }
 
   function emailValido(e) {
