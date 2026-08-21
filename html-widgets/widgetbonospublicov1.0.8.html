@@ -1159,15 +1159,13 @@ html, body {
       out += '<div class="t">Ritmo de uso: <strong>libre</strong>, dentro de la validez</div>';
     }
 
-    // v1.0.8 — Nominativo. Va SIEMPRE, con o sin reglas de plazo: es una
-    // condición de la compra, no un detalle de configuración del servicio.
-    out += '<div class="t kp-terms-nota">Bono personal e intransferible: solo puede usarlo quien lo compra. '
-         + 'Si quieres compartirlo —por ejemplo, un bono de corte infantil para varios hermanos— '
-         + 'consúltalo antes con el salón.</div>';
+// v1.0.8 — Nominativo. Va SIEMPRE, con o sin reglas de plazo: es una
+// condición de la compra, no un detalle de configuración del servicio.
 
-    return out;
-  }
+out += '<div class="t kp-terms-nota">Bono personal e intransferible válido para una persona. Si necesitas alguna excepción como uso familiar, consulta con el salón.</div>';
 
+return out;
+}
   function emailValido(e) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || '').trim());
   }
