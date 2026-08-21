@@ -1,7 +1,17 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.5
+// VERSION: 0.9.6
+//
+// v0.9.6 — El catálogo público dice si el servicio se vende en bono.
+//   Nuevo campo `tieneBono` (Boolean) en cada servicio devuelto por
+//   getServiciosCategoria, leído de ServiceCatalog.bonoActivo.
+//   Es un dato del SERVICIO, no del visitante: no se consulta ninguna
+//   colección de bonos emitidos ni se identifica a nadie. El widget lo usa
+//   para mostrar, justo antes del botón de reservar, un recordatorio de
+//   repasar las condiciones del bono a quien lo tenga.
+//   Aditivo puro: ni disponibilidad, ni precios, ni complementos, ni
+//   variantes, ni el resto del catálogo cambian.
 // FECHA: 20 de agosto de 2026
 //
 // v0.9.5: 🔗 SLUG CODIFICADO EN URL.
@@ -666,7 +676,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.5';
+const VERSION = '0.9.6';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -1174,6 +1184,13 @@ function adaptarServicio(it, porSetupUid) {
     complements,
     claseServicio: it.claseServicio || '',
     idStaff: idStaffArr,   // v0.6.0 — wixResourceIds permitidos. [] = todos.
+    // v0.9.6 — ¿Este servicio se vende también en bono? Dato PÚBLICO y
+    // GENÉRICO: no dice nada de quién reserva ni de si tiene bono. Sirve solo
+    // para que el widget muestre, justo antes de reservar, un recordatorio de
+    // repasar las condiciones del bono a quien lo tenga. Deliberadamente NO se
+    // consulta KamisuiteVouchers: eso exigiría identificar al visitante y este
+    // aviso es informativo, no personalizado.
+    tieneBono: it.bonoActivo === true,
     order: toNum(it.order)
   };
 }
