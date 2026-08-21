@@ -9,10 +9,75 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.15.0
+       KAMISUITE — Edición Servicios Widget v1.15.6
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.15.6: 📍 EL AVISO SE DIBUJA DONDE EL USUARIO ACABA DE PULSAR.
+         Dentro de un componente HTML de Wix, position:fixed se calcula
+         contra el alto del COMPONENTE — miles de píxeles en este editor —
+         y no contra la pantalla, así que "centrado en la ventana" caía a
+         media altura del catálogo. El componente tampoco puede saber por
+         dónde va el scroll de la página que lo contiene. Ahora se registra
+         la posición de la última pulsación y el aviso se dibuja justo ahí,
+         encima del punto pulsado (o debajo si no cabe). Quien acaba de
+         pulsar Guardar está mirando ese punto, mida lo que mida el modal.
+       v1.15.5: 🔓 LOS AVISOS DE PLAZOS DEL BONO YA NO BLOQUEAN.
+         v1.15.0 impedía guardar si la espera mínima superaba al plazo máximo
+         o si la caducidad no cubría sesiones × plazo. Eso contradice la
+         decisión de Jal (20-ago-2026) de que en los bonos el sistema informa
+         y el salón decide: puede haber motivos comerciales para una
+         configuración corta a propósito. Ahora el servicio SE GUARDA y el
+         aviso se muestra junto a la confirmación, con icono 💡 y borde
+         dorado en vez de rojo — no es un error, es una advertencia.
+       v1.15.4: 🧺 AVISO DE GUARDADO GRANDE, CENTRADO Y FIJO (a petición
+         de Jal). El botón de guardar está al final de un modal muy largo:
+         un aviso pequeño, anclado a un borde y que se desvanece a los pocos
+         segundos obliga a ir corriendo a mirarlo. Ahora aparece CENTRADO en
+         la ventana, con emoji grande (🧺 al guardar, ⚠️ en error), el texto
+         a 17px, y NO desaparece solo — se cierra con la X de la esquina o
+         con el botón Entendido, que es además la confirmación de que el
+         usuario lo ha visto. Solo cambia la presentación del aviso: ninguna
+         lógica de guardado, payload ni backend se toca.
+       v1.15.3: 📍 EL AVISO DE GUARDADO SE DIBUJABA FUERA DE LA VISTA.
+         `.toast` estaba anclado con position:fixed a bottom:20px. Dentro de
+         un componente HTML de Wix, ese borde inferior NO es el de la pantalla
+         del usuario: es el del componente, que en este editor mide varios
+         miles de píxeles. El aviso se mostraba correctamente y se desvanecía
+         a los 3s muy por debajo de lo que se está mirando — de ahí que no se
+         viera nunca, se guardara lo que se guardara, y de ahí que el código
+         del aviso llevara idéntico desde v1.14.6 sin que nadie lo notara.
+         Ahora va anclado arriba (top:16px), showToast sube la vista del
+         componente al tope antes de mostrarlo, y dura 4,5s en vez de 3.
+       v1.15.2: 🩹 EL AVISO DE GUARDADO NO PUEDE DEPENDER DE NADA MÁS.
+         El aviso "Servicio actualizado", el cierre del modal y la
+         reactivación del botón se ejecutan AHORA lo primero al recibir la
+         respuesta, dentro de try/catch. Antes iban seguidos de la
+         actualización del estado local de la lista sin protección: si algo
+         fallaba ahí, el usuario se quedaba con el botón oscurecido y ninguna
+         señal en pantalla, que es exactamente el síntoma reportado. El
+         refresco de la lista va en su propio try/catch aparte.
+         Se añade traza de TODO mensaje que entra al widget
+         ('[EdicionServicios/widget] ⇦ mensaje: ...'), para distinguir en un
+         clic entre "la respuesta no llega" y "llega y algo la suprime".
+       v1.15.1: 🩹 DOS FALLOS DEL GUARDADO.
+         1) El plazo máximo (y en potencia la caducidad y la espera mínima)
+            se guardaba SIEMPRE como null aunque el usuario viera el número
+            escrito en pantalla. Los tres se leían de la referencia cacheada
+            en el objeto `el`, construido una única vez al cargar el widget.
+            Si ese nodo se sustituye después o la referencia no se resolvió,
+            el patrón `el.fX ? el.fX.value : ''` devuelve cadena vacía SIN
+            LANZAR ERROR: el payload sale con null y el backend guarda null
+            obedientemente. Ahora se leen con getElementById en el momento
+            del guardado, que siempre devuelve el nodo vivo. Se añade además
+            una traza en consola con los tres valores tal como se leen.
+         2) No aparecía el aviso "Servicio actualizado" y el modal no se
+            cerraba, modificara lo que modificara. Causa: `pendingToggle`.
+            Si un activar/desactivar desde el listado se quedaba sin
+            respuesta, esa variable permanecía encendida y la siguiente
+            respuesta 'saved' entraba por la rama del toggle, que hace
+            return antes del toast, del closeModal y de reactivar el botón.
+            Se limpia al guardar desde el modal, donde no puede ser válida.
        v1.15.0: ⏳ BONOS: plazo MÁXIMO por uso, campo nuevo que CONVIVE con
          la espera mínima. "Plazo máximo por uso (días)"
          (fBonoMaxIntervaloDias -> bonusMaxIntervalDays). Cada uso tiene su
@@ -591,10 +656,24 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 .btn-save:hover { opacity: .9; }
 .btn-save:disabled { opacity: .5; cursor: not-allowed; }
 
-.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(60px); background: var(--surface3); border: 1px solid var(--border-hover); color: var(--text); font-family: inherit; font-size: 12px; font-weight: 600; padding: 10px 20px; border-radius: var(--radius); opacity: 0; transition: all .3s ease; pointer-events: none; z-index: 2000; }
-.toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+/* v1.15.4 — El aviso vivía anclado a un borde del componente HTML, que en
+   este editor mide varios miles de píxeles: se dibujaba fuera de lo que el
+   usuario está mirando. Y el botón de guardar está al final de un modal muy
+   largo, así que anclarlo arriba obligaba a subir corriendo antes de que se
+   desvaneciera. Ahora va CENTRADO en la ventana, grande, y NO se va solo:
+   se cierra con la X, que además confirma que el usuario lo ha visto. */
+.toast { position: absolute; top: 0; left: 50%; transform: translate(-50%, 0) scale(.92); display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; min-width: 320px; max-width: 440px; background: var(--surface3); border: 2px solid var(--border-hover); color: var(--text); font-family: inherit; padding: 30px 34px 26px; border-radius: 16px; opacity: 0; transition: all .22s ease; pointer-events: none; z-index: 2000; }
+.toast.show { transform: translate(-50%, 0) scale(1); opacity: 1; pointer-events: auto; }
+.toast { box-shadow: 0 18px 60px rgba(0,0,0,.7); }
+.toast-emoji { font-size: 46px; line-height: 1; }
+.toast-msg { font-size: 17px; font-weight: 700; line-height: 1.35; }
+.toast-close { margin-top: 4px; background: var(--surface2); border: 1px solid var(--border-hover); color: var(--text); font-family: inherit; font-size: 13px; font-weight: 700; padding: 8px 26px; border-radius: var(--radius); cursor: pointer; transition: all .15s; }
+.toast-close:hover { background: var(--surface3); border-color: var(--green); color: var(--green); }
+.toast-x { position: absolute; top: 8px; right: 12px; background: none; border: none; color: var(--text-secondary); font-family: inherit; font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px; }
+.toast-x:hover { color: var(--text); }
 .toast.success { border-color: var(--green); color: var(--green); }
 .toast.error { border-color: var(--red); color: var(--red); }
+.toast.warn { border-color: var(--gold, #cbab54); color: var(--gold, #cbab54); }
 
 .empty-state { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 13px; }
 .btn-nuevo { background: var(--green); border: none; color: var(--bg); border-radius: var(--radius-sm); padding: 7px 14px; font-family: inherit; font-weight: 700; font-size: 11px; cursor: pointer; transition: opacity .2s; letter-spacing: .3px; }
@@ -713,7 +792,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.15.0</span>
+    <span class="header-version"> v1.15.6</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -1075,6 +1154,7 @@ let fImageBase64 = null,
 let fImagePreviewUrl = '';
 let pendingImageCatalogId = null;
 let pendingToggle = null;
+let avisoBono = '';   // v1.15.5 — aviso de plazos, se muestra tras guardar
 
 function setImagePreview(url, placeholder) {
   fImagePreviewUrl = url || '';
@@ -2187,12 +2267,28 @@ function buildPayloadComun() {
   const bonoNumero = (bnRaw === '' || bnRaw === null) ? null : (parseInt(bnRaw, 10) || 0);
   const bdRaw = el.fBonoDescuento ? el.fBonoDescuento.value : '';
   const bonoDescuento = (bdRaw === '' || bdRaw === null) ? null : (parseFloat(bdRaw) || 0);
-  const bvdRaw = el.fBonoValidezDias ? el.fBonoValidezDias.value : '';
-  const bonusValidityDays = (bvdRaw === '' || bvdRaw === null) ? null : (parseInt(bvdRaw, 10) || 0);
-  const bidRaw = el.fBonoIntervaloDias ? el.fBonoIntervaloDias.value : '';
-  const bonusUseIntervalDays = (bidRaw === '' || bidRaw === null) ? null : (parseInt(bidRaw, 10) || 0);
-  const bmaxRaw = el.fBonoMaxIntervaloDias ? el.fBonoMaxIntervaloDias.value : '';
-  const bonusMaxIntervalDays = (bmaxRaw === '' || bmaxRaw === null) ? null : (parseInt(bmaxRaw, 10) || 0);
+  // v1.15.1 — Los tres campos numéricos del bono se leen del DOM EN ESTE
+  // INSTANTE, no de la referencia cacheada en `el`. Motivo: el objeto `el` se
+  // construye una sola vez al cargar; si el nodo se sustituye después (o la
+  // referencia nunca se resolvió), `el.fX` apunta a un nodo desconectado o a
+  // null, y el patrón `el.fX ? el.fX.value : ''` devuelve cadena vacía SIN
+  // ERROR — el valor que el usuario ve escrito en pantalla nunca llega al
+  // payload y se guarda null. Es exactamente el fallo del plazo máximo.
+  // getElementById en el momento del guardado siempre devuelve el nodo vivo.
+  const numDelDOM = (id) => {
+    const nodo = document.getElementById(id);
+    const bruto = nodo ? String(nodo.value).trim() : '';
+    if (bruto === '') return null;
+    const n = parseInt(bruto, 10);
+    return isNaN(n) ? null : Math.max(0, n);
+  };
+  const bonusValidityDays    = numDelDOM('fBonoValidezDias');
+  const bonusUseIntervalDays = numDelDOM('fBonoIntervaloDias');
+  const bonusMaxIntervalDays = numDelDOM('fBonoMaxIntervaloDias');
+  console.log('[EdicionServicios/widget] bono →',
+    'caducidad=', bonusValidityDays,
+    '| minimo=', bonusUseIntervalDays,
+    '| maximo=', bonusMaxIntervalDays);
 
   return {
     nombre: el.fNombre.value.trim(),
@@ -2229,6 +2325,13 @@ function buildPayloadComun() {
 }
 
 function saveModal() {
+  // v1.15.1 — Si un activar/desactivar desde el listado se quedó sin
+  // respuesta, `pendingToggle` permanece encendido y la SIGUIENTE respuesta
+  // 'saved' entra por la rama del toggle: no cierra el modal, no reactiva el
+  // botón y no muestra "Servicio actualizado". Era el motivo de que guardar
+  // no diera ninguna señal en pantalla. Al guardar desde el modal, ese
+  // pendiente ya no puede ser válido.
+  pendingToggle = null;
   const comun = buildPayloadComun();
   if (!comun.nombre) {
     showToast('El nombre es obligatorio', 'error');
@@ -2238,17 +2341,21 @@ function saveModal() {
   // Se validan AQUÍ y no en el backend porque es donde el usuario puede
   // corregirlas en el momento. Ninguna de las dos bloquea si el campo va
   // vacío o a 0: eso significa "sin regla".
+  // v1.15.5 — AVISAN, NO BLOQUEAN.
+  // v1.15.0 las puso como bloqueo y eso contradice la decisión de Jal
+  // (20-ago-2026) de que en los bonos el sistema informa y el salón decide.
+  // Puede haber motivos comerciales perfectamente válidos para dejar una
+  // configuración "corta a propósito". El texto se arrastra y se muestra
+  // JUNTO a la confirmación de guardado, ya guardado el servicio.
   const _min  = comun.bonusUseIntervalDays || 0;
   const _max  = comun.bonusMaxIntervalDays || 0;
   const _usos = comun.bonoNumero || 0;
   const _cad  = comun.bonusValidityDays || 0;
+  avisoBono = '';
   if (_min > 0 && _max > 0 && _min >= _max) {
-    showToast('La espera mínima (' + _min + ' d) debe ser menor que el plazo máximo por uso (' + _max + ' d).', 'error');
-    return;
-  }
-  if (_max > 0 && _usos > 0 && _cad > 0 && _cad < _usos * _max) {
-    showToast('Caducidad insuficiente: con ' + _usos + ' usos y ' + _max + ' días por uso hacen falta al menos ' + (_usos * _max) + ' días. Las últimas sesiones no llegarían a poder usarse.', 'error');
-    return;
+    avisoBono = 'Revisa los plazos: la espera mínima de ' + _min + ' días es igual o mayor que el plazo máximo por uso de ' + _max + ' días, así que ninguna sesión llegaría a poder usarse a tiempo.';
+  } else if (_max > 0 && _usos > 0 && _cad > 0 && _cad < _usos * _max) {
+    avisoBono = 'Ojo con la caducidad: con ' + _usos + ' sesiones y ' + _max + ' días de plazo cada una, la última no se abre hasta el día ' + ((_usos - 1) * _max) + ' y necesitaría hasta el ' + (_usos * _max) + '. Con ' + _cad + ' días de caducidad se queda con menos margen del previsto.';
   }
   el.btnSave.disabled = true;
   el.btnSave.textContent = modoCrear ? 'Creando...' : 'Guardando...';
@@ -2391,10 +2498,55 @@ function onCatalogDuplicated(r) {
   }
 }
 
+/* v1.15.4 — El aviso ya NO se desvanece solo: se queda fijo en el centro
+   hasta que el usuario lo cierra. Motivo: el botón de guardar está al final
+   de un modal muy largo, y un aviso que se va a los pocos segundos obliga a
+   ir corriendo a mirarlo. Cerrarlo a mano es además la confirmación de que
+   se ha leído. Se limpia el ✓/✕ del principio del texto porque el icono
+   grande ya lo dice. */
+function hideToast() {
+  el.toast.classList.remove('show');
+}
+
+/* v1.15.6 — DÓNDE SE DIBUJA EL AVISO.
+   Dentro de un componente HTML de Wix, position:fixed se calcula contra el
+   alto del COMPONENTE (miles de píxeles en este editor), no contra la
+   pantalla: "centrado" acababa a media altura del catálogo, lejos de la
+   vista. Y el propio componente no puede saber por dónde va el scroll de la
+   página que lo contiene.
+   Solución: recordar dónde fue la última pulsación del usuario y dibujar el
+   aviso ahí mismo. Quien acaba de pulsar Guardar está mirando ese punto, sea
+   cual sea el alto del modal o del catálogo. */
+let ultimoClicY = 0;
+document.addEventListener('click', (ev) => {
+  const y = (typeof ev.pageY === 'number' && ev.pageY > 0) ? ev.pageY : 0;
+  if (y) ultimoClicY = y;
+}, true);
+
+function colocarToast() {
+  const alto = el.toast.offsetHeight || 220;
+  const base = ultimoClicY || (window.pageYOffset + 200);
+  let top = base - alto - 24;                 // justo encima de donde pulsó
+  if (top < window.pageYOffset + 12) top = base + 32;   // si no cabe, debajo
+  if (top < 12) top = 12;
+  el.toast.style.top = Math.round(top) + 'px';
+}
+
 function showToast(msg, type = '') {
-  el.toast.textContent = msg;
+  const texto = String(msg == null ? '' : msg).replace(/^[✓✕]\s*/, '');
+  const emoji = (type === 'error') ? '⚠️' : (type === 'warn' ? '💡' : '🧺');
+  el.toast.innerHTML =
+    '<button class="toast-x" id="toastX" aria-label="Cerrar">✕</button>' +
+    '<div class="toast-emoji">' + emoji + '</div>' +
+    '<div class="toast-msg"></div>' +
+    '<button class="toast-close" id="toastOk">Entendido</button>';
+  el.toast.querySelector('.toast-msg').textContent = texto;
   el.toast.className = 'toast show' + (type ? ' ' + type : '');
-  setTimeout(() => el.toast.classList.remove('show'), 3000);
+  colocarToast();
+  const x = el.toast.querySelector('#toastX');
+  const ok = el.toast.querySelector('#toastOk');
+  if (x) x.addEventListener('click', hideToast);
+  if (ok) ok.addEventListener('click', hideToast);
 }
 
 function esc(str) {
@@ -2462,6 +2614,10 @@ let readyConfirmed = false;
 window.addEventListener('message', (event) => {
   const msg = event.data;
   if (!msg || typeof msg !== 'object') return;
+  // v1.15.2 — traza de TODO mensaje que entra al widget. Si el aviso de
+  // guardado no aparece, esto distingue en un clic entre "no llega el
+  // mensaje" y "llega pero algo lo suprime".
+  console.log('[EdicionServicios/widget] ⇦ mensaje:', msg.type);
   if (msg.type === 'data') {
     readyConfirmed = true;
     render(msg.payload);
@@ -2481,10 +2637,27 @@ window.addEventListener('message', (event) => {
       historialCambios = [];
       return;
     }
-    showToast('✓ Servicio actualizado correctamente', 'success');
-    closeModal();
-    el.btnSave.disabled = false;
-    el.btnSave.textContent = 'Guardar cambios';
+    // v1.15.2 — El aviso, el cierre del modal y la reactivación del botón
+    // van PRIMERO y protegidos. Antes, cualquier excepción en la
+    // actualización del estado local de más abajo dejaba el modal abierto y
+    // el botón apagado sin decir nada: el usuario veía el botón oscurecerse
+    // y ninguna otra señal. La confirmación al usuario no puede depender de
+    // que el refresco interno de la lista funcione.
+    try {
+      if (avisoBono) {
+        showToast('Servicio actualizado correctamente. ' + avisoBono, 'warn');
+        avisoBono = '';
+      } else {
+        showToast('✓ Servicio actualizado correctamente', 'success');
+      }
+      closeModal();
+      el.btnSave.disabled = false;
+      el.btnSave.textContent = 'Guardar cambios';
+    } catch (e) {
+      console.error('[EdicionServicios/widget] fallo al confirmar guardado:', e);
+      if (el.btnSave) { el.btnSave.disabled = false; el.btnSave.textContent = 'Guardar cambios'; }
+    }
+    try {
     if (msg.payload && msg.payload.servicio) {
       const sv = msg.payload.servicio;
       const idx = allServicios.findIndex(s => s.id === (sv._catalogId || sv.id));
@@ -2521,6 +2694,9 @@ window.addEventListener('message', (event) => {
       }
       recomputeTaxonomias(); // v1.14.6 — refrescar listas derivadas (allGroups, allFamilies)
       applyFilters();
+    }
+    } catch (e) {
+      console.error('[EdicionServicios/widget] fallo refrescando la lista tras guardar:', e);
     }
     historialCambios = [];
   }
