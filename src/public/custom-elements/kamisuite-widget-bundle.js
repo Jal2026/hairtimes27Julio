@@ -3,6 +3,29 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
+ * VERSION:   2.0.20 (bundle)
+ *
+ * v2.0.20 — Recordatorio de bono antes de reservar.
+ *   Si el servicio principal se vende también en bono, el paso de confirmar
+ *   muestra una nota discreta recordando repasar las condiciones de uso del
+ *   bono (sesiones, plazos, caducidad) antes de reservar.
+ *
+ *   DÓNDE Y POR QUÉ AHÍ (decisión de Jal, 21-ago-2026): al final, encima de
+ *   las casillas legales y de los botones — NO en la ficha del servicio. En
+ *   la ficha ensuciaría la elección a quien los bonos le dan igual, que es
+ *   la mayoría; al confirmar, lo lee justo quien está a punto de reservar.
+ *
+ *   ES GENÉRICO, NO PERSONALIZADO: el widget no sabe ni pregunta si esta
+ *   persona tiene un bono. Saberlo exigiría identificar al visitante, y este
+ *   aviso es un recordatorio, no una comprobación.
+ *
+ *   El dato llega en `tieneBono` dentro de cada servicio del catálogo
+ *   (widgetPublicoLogic v0.9.6, leído de ServiceCatalog.bonoActivo). Con
+ *   backend anterior llega undefined y no se pinta nada: degrada sin romper.
+ *
+ *   Cero cambios en disponibilidad, precios, cálculo, complementos,
+ *   variantes, gating de RESERVAR, resumen o flujo de pago.
+ *
  * VERSION:   2.0.19 (bundle)
  * FECHA:     20 de agosto de 2026
  *
@@ -803,6 +826,11 @@ window.KR_STYLES = `
 .kr-paybar { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: var(--kr-fs-xs); color: var(--kr-ink-3); }
 .kr-paybar svg { width: 14px; height: 14px; }
 .kr-hint-pick { font-size: var(--kr-fs-sm); color: var(--kr-ink-3); text-align: center; padding: 4px; }
+/* v2.0.20 — Recordatorio de bono. Va justo antes de confirmar, no en la
+   ficha del servicio: a quien no le interesan los bonos no debe ensuciarle
+   la elección. Tono discreto y a la altura del texto legal. */
+.kr-bononota { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border: 1px dashed var(--kr-line); border-radius: var(--kr-r-sm, 10px); font-size: var(--kr-fs-xs); line-height: 1.5; color: var(--kr-ink-2); }
+.kr-bononota svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 2px; }
 
 /* ---- confirmation ---------------------------------------------------- */
 .kr-confirm { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 24px 8px 8px; animation: kr-rise 360ms var(--kr-ease); }
@@ -1021,7 +1049,7 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.0.19
+   VERSION: 2.0.20
    FECHA:   20 de agosto de 2026
 
    v2.0.19 — "A valorar" depende del TOTAL, no del precio base.
@@ -2943,6 +2971,20 @@ window.KR_applySkin = function (el, name) {
         lbl.append(ci, txt);
         return lbl;
       };
+
+      // ── v2.0.20: recordatorio de bono ───────────────────────────────
+      // Se muestra si el servicio principal se vende también en bono
+      // (`tieneBono`, de widgetPublicoLogic v0.9.6). Es un aviso GENÉRICO:
+      // el widget no sabe ni pregunta si esta persona tiene bono, porque
+      // eso obligaría a identificar al visitante. Va aquí, en el paso de
+      // confirmar, y no en la ficha del servicio: a quien no le interesan
+      // los bonos no debe estorbarle mientras elige.
+      const svcCfg = this._selectedService || this._service;
+      if (svcCfg && svcCfg.tieneBono === true) {
+        const nota = el("div", "kr-bononota");
+        nota.innerHTML = `${ICON.alert}<span>Este servicio también se puede contratar en bono. Si ya tienes uno, repasa sus condiciones de uso antes de reservar: número de sesiones, plazos y caducidad están en tu Área de Cliente.</span>`;
+        this.actionsBox.appendChild(nota);
+      }
 
       const legalBox = el("div", "kr-legal");
       legalBox.style.marginBottom = "14px";
