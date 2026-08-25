@@ -4,7 +4,21 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>KAMISUITE · Entrenador AKIRA</title>
-<!-- v1.0.0 — Patrón EGAEL adaptado a KAMISUITE -->
+<!-- v1.2.0 — Patrón EGAEL adaptado a KAMISUITE -->
+<!-- CAMBIOS v1.1.0 -> v1.2.0: selector de PLANO en la cabecera (Asesor/Ayuda).
+     Todo el bloque de configuracion -prompt base, tono, detalle, guardrails,
+     instrucciones y saludo- pasa a ser POR PLANO: se carga, se guarda y se
+     publica la fila de AkiraAlignment de ese plano. Requiere el backend
+     akiraEntrenador v1.2.0, que archiva solo las publicadas del mismo plano.
+     NUEVO bloque "Saludo de bienvenida": titulo y texto que ve el usuario al
+     abrir AKIRA. Antes estaban escritos en el custom element. -->
+<!-- CAMBIOS v1.0.0 -> v1.1.0: selector de PLANO (asesor/ayuda/asistente) en el
+     alta de documentos. El backend akiraEntrenador v1.1.0 ya aceptaba y
+     persistia 'modo', pero ni este widget ni el page code lo enviaban: todo
+     documento creado desde aqui caia en ASESOR sin posibilidad de marcarlo
+     como AYUDA. Se muestra ademas el plano de cada documento en la lista.
+     'modo' (plano de utilidad) NO es lo mismo que 'tipo' (taxonomia de
+     contenido), que se mantiene intacta. -->
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <style>
@@ -76,6 +90,10 @@ textarea::placeholder,input::placeholder{color:var(--muted2)}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--fg);color:#fff;padding:8px 14px;border-radius:var(--r);font-size:12px;display:none;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.2)}
 .btn-icon{background:transparent;border:1px solid var(--line2);color:var(--orange);width:24px;height:24px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center}
 .btn-icon:hover{background:var(--orange-dim);border-color:var(--orange)}
+.plano-tabs{display:flex;gap:6px;margin-left:auto}
+.plano-tab{background:transparent;border:1px solid var(--line2);color:var(--muted);border-radius:var(--r);padding:5px 12px;font-family:var(--font);font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;cursor:pointer;transition:all .18s}
+.plano-tab:hover{color:var(--fg2);border-color:var(--orange)}
+.plano-tab.active{background:var(--orange);border-color:var(--orange);color:#fff}
 .sec-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
 .sec-head h3{margin-bottom:0}
 </style>
@@ -85,6 +103,10 @@ textarea::placeholder,input::placeholder{color:var(--muted2)}
   <div class="hd">
     <span class="hd-title">KAMISUITE</span><span class="hd-sep">›</span>
     <span class="hd-sub">Entrenador AKIRA</span>
+    <div class="plano-tabs" id="planoTabs">
+      <button class="plano-tab active" data-plano="asesor">Asesor</button>
+      <button class="plano-tab" data-plano="ayuda">Ayuda</button>
+    </div>
   </div>
   <div class="status-bar" id="statusBar">
     <div class="sb-item"><span class="sb-dot"></span> <span id="sbDocs">0 documentos activos</span></div>
@@ -106,6 +128,16 @@ textarea::placeholder,input::placeholder{color:var(--muted2)}
       <textarea id="promptBase" class="ta-lg" placeholder="Aquí aparecerá el prompt generado, o escríbelo tú directamente. Este texto define la personalidad y conocimiento base de AKIRA."></textarea>
     </div>
 
+    <!-- SALUDO DE BIENVENIDA -->
+    <div class="sec">
+      <h3>Saludo de bienvenida</h3>
+      <div class="pg-hint">Lo que ve el usuario al abrir AKIRA en este plano, antes de escribir nada. Si lo dejas vacío, se usa el texto por defecto.</div>
+      <div class="nr-grid">
+        <div class="nr-full"><label>Título</label><input type="text" id="welcomeTitle" placeholder="Ej: AKIRA · Ayuda"/></div>
+        <div class="nr-full"><label>Mensaje</label><textarea id="welcomeText" class="ta-sm" placeholder="Ej: Te explico cómo se usa KAMISUITE. Pregúntame: cómo cobrar una cita · cómo hacer el arqueo de caja."></textarea></div>
+      </div>
+    </div>
+
     <!-- DOCUMENTOS -->
     <div class="sec">
       <div class="sec-head"><h3>Documentos de conocimiento (<span id="docsCount">0</span> activos)</h3><button class="btn-icon" id="btnAddDoc" title="Añadir documento">+</button></div>
@@ -124,6 +156,7 @@ textarea::placeholder,input::placeholder{color:var(--muted2)}
         <div class="nr-grid" style="margin-top:10px">
           <div class="nr-full"><label>Título del documento *</label><input type="text" id="nrTitle" placeholder="Se rellena con el nombre del archivo"/></div>
           <div><label>Tipo</label><select id="nrTipo"><option value="identidad">Identidad del salón</option><option value="servicios">Servicios y precios</option><option value="staff">Staff y equipo</option><option value="facturacion">Reglas de facturación</option><option value="comportamiento">Comportamiento y estilo</option><option value="otro">Otro</option></select></div>
+          <div><label>Plano de AKIRA</label><select id="nrModo"><option value="asesor">Asesor (negocio)</option><option value="ayuda">Ayuda (manual de uso)</option><option value="asistente">Asistente</option></select></div>
           <div><label>Resumen (opcional)</label><input type="text" id="nrResumen" placeholder="Breve descripción"/></div>
           <div class="nr-full actions" style="margin-top:6px">
             <button class="btn btn-accent btn-sm" id="btnSaveDoc">Guardar documento</button>
@@ -195,24 +228,26 @@ textarea::placeholder,input::placeholder{color:var(--muted2)}
 
 <script>
 var currentAlignmentId='';
+var planoActivo='asesor';   // v1.2.0 — plano cuya configuracion se esta editando
 var documentos=[];
 var extractedContent='';
 var $=function(id){return document.getElementById(id);};
 function toast(msg,ms){var t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(function(){t.style.display='none';},ms||2000);}
 function send(type,data){parent.postMessage(Object.assign({type:type},data||{}),'*');}
-function collectConfig(){return{promptBase:$('promptBase').value,tone:$('tone').value,detailLevel:$('detailLevel').value,grOnlyQuery:$('grOnlyQuery').checked,grNoInvent:$('grNoInvent').checked,grNoMarkdown:$('grNoMarkdown').checked,grConcision:$('grConcision').checked,extraInstructions:$('extraInstructions').value};}
-function populateForm(cfg){if(!cfg)return;$('promptBase').value=cfg.promptBase||'';$('tone').value=cfg.tone||'directo';$('detailLevel').value=cfg.detailLevel||'medio';$('grOnlyQuery').checked=cfg.grOnlyQuery!==false;$('grNoInvent').checked=cfg.grNoInvent!==false;$('grNoMarkdown').checked=cfg.grNoMarkdown!==false;$('grConcision').checked=cfg.grConcision||false;$('extraInstructions').value=cfg.extraInstructions||'';}
+function collectConfig(){return{modo:planoActivo,welcomeTitle:$('welcomeTitle').value,welcomeText:$('welcomeText').value,promptBase:$('promptBase').value,tone:$('tone').value,detailLevel:$('detailLevel').value,grOnlyQuery:$('grOnlyQuery').checked,grNoInvent:$('grNoInvent').checked,grNoMarkdown:$('grNoMarkdown').checked,grConcision:$('grConcision').checked,extraInstructions:$('extraInstructions').value};}
+function clearForm(){$('promptBase').value='';$('welcomeTitle').value='';$('welcomeText').value='';$('tone').value='directo';$('detailLevel').value='medio';$('grOnlyQuery').checked=true;$('grNoInvent').checked=true;$('grNoMarkdown').checked=true;$('grConcision').checked=false;$('extraInstructions').value='';currentAlignmentId='';}
+function populateForm(cfg){if(!cfg)return;$('welcomeTitle').value=cfg.welcomeTitle||'';$('welcomeText').value=cfg.welcomeText||'';$('promptBase').value=cfg.promptBase||'';$('tone').value=cfg.tone||'directo';$('detailLevel').value=cfg.detailLevel||'medio';$('grOnlyQuery').checked=cfg.grOnlyQuery!==false;$('grNoInvent').checked=cfg.grNoInvent!==false;$('grNoMarkdown').checked=cfg.grNoMarkdown!==false;$('grConcision').checked=cfg.grConcision||false;$('extraInstructions').value=cfg.extraInstructions||'';}
 function fileSizeStr(b){if(b<1024)return b+' B';if(b<1048576)return Math.ceil(b/1024)+' KB';return(b/1048576).toFixed(1)+' MB';}
 function processFile(file){extractedContent='';$('fileInfo').style.display='block';$('fiName').textContent=file.name;$('fiSize').textContent=fileSizeStr(file.size);$('fiStatus').textContent='Procesando...';$('fiError').textContent='';$('nrExtracted').style.display='none';if(!$('nrTitle').value.trim())$('nrTitle').value=file.name.replace(/\.[^.]+$/,'');var ext=file.name.split('.').pop().toLowerCase();if(file.size>5*1048576){$('fiStatus').textContent='';$('fiError').textContent='Archivo demasiado grande (máx. 5 MB)';return;}if(ext==='txt'||ext==='md'){var r=new FileReader();r.onload=function(e){extractedContent=e.target.result;showExtracted(extractedContent);$('fiStatus').textContent='Extraído ('+extractedContent.length+' chars)';};r.onerror=function(){$('fiError').textContent='Error leyendo';$('fiStatus').textContent='';};r.readAsText(file);return;}if(ext==='docx'){var r2=new FileReader();r2.onload=function(e){mammoth.extractRawText({arrayBuffer:e.target.result}).then(function(result){extractedContent=result.value;showExtracted(extractedContent);$('fiStatus').textContent='DOCX extraído ('+extractedContent.length+' chars)';}).catch(function(err){$('fiError').textContent='Error DOCX: '+err.message;$('fiStatus').textContent='';});};r2.onerror=function(){$('fiError').textContent='Error leyendo';$('fiStatus').textContent='';};r2.readAsArrayBuffer(file);return;}$('fiStatus').textContent='';$('fiError').textContent='Formato no soportado. Usa .txt, .md o .docx';}
 function showExtracted(text){$('nrExtracted').style.display='block';$('nrPreview').textContent=text.length>2000?text.substring(0,2000)+'...\n['+text.length+' chars total]':text;$('nrContenido').value=text;}
-function clearDocForm(){$('nrTitle').value='';$('nrTipo').value='identidad';$('nrResumen').value='';$('nrContenido').value='';$('fileInput').value='';extractedContent='';$('fileInfo').style.display='none';$('nrExtracted').style.display='none';$('newDocForm').style.display='none';}
-function renderDocs(){var list=$('docsList');var activos=0;if(!documentos||documentos.length===0){list.innerHTML='<div class="res-empty">Sin documentos. Pulsa + para añadir conocimiento al salón.</div>';$('docsCount').textContent='0';$('sbDocs').textContent='0 documentos activos';return;}var html='';for(var i=0;i<documentos.length;i++){var d=documentos[i];if(d.activo)activos++;html+='<div class="res-item" data-id="'+d.id+'"><span class="res-type">'+(d.tipo||'doc')+'</span><span class="res-title">'+(d.titulo||'Sin título')+'</span><span class="res-toggle '+(d.activo?'on':'off')+'" data-id="'+d.id+'" data-activo="'+(d.activo?'true':'false')+'">'+(d.activo?'● activo':'○ inactivo')+'</span><span class="res-del" data-id="'+d.id+'" title="Eliminar">✕</span></div>';}list.innerHTML=html;$('docsCount').textContent=String(activos);$('sbDocs').textContent=activos+' documentos activos';list.querySelectorAll('.res-toggle').forEach(function(el){el.addEventListener('click',function(){send('toggleDocument',{documentoId:this.dataset.id,activo:this.dataset.activo!=='true'});});});list.querySelectorAll('.res-del').forEach(function(el){el.addEventListener('click',function(){if(confirm('¿Eliminar este documento?'))send('deleteDocument',{documentoId:this.dataset.id});});});}
+function clearDocForm(){$('nrTitle').value='';$('nrTipo').value='identidad';$('nrModo').value='asesor';$('nrResumen').value='';$('nrContenido').value='';$('fileInput').value='';extractedContent='';$('fileInfo').style.display='none';$('nrExtracted').style.display='none';$('newDocForm').style.display='none';}
+function renderDocs(){var list=$('docsList');var activos=0;if(!documentos||documentos.length===0){list.innerHTML='<div class="res-empty">Sin documentos. Pulsa + para añadir conocimiento al salón.</div>';$('docsCount').textContent='0';$('sbDocs').textContent='0 documentos activos';return;}var html='';for(var i=0;i<documentos.length;i++){var d=documentos[i];if(d.activo)activos++;html+='<div class="res-item" data-id="'+d.id+'"><span class="res-type">'+((d.modo||'asesor')+' · '+(d.tipo||'doc'))+'</span><span class="res-title">'+(d.titulo||'Sin título')+'</span><span class="res-toggle '+(d.activo?'on':'off')+'" data-id="'+d.id+'" data-activo="'+(d.activo?'true':'false')+'">'+(d.activo?'● activo':'○ inactivo')+'</span><span class="res-del" data-id="'+d.id+'" title="Eliminar">✕</span></div>';}list.innerHTML=html;$('docsCount').textContent=String(activos);$('sbDocs').textContent=activos+' documentos activos';list.querySelectorAll('.res-toggle').forEach(function(el){el.addEventListener('click',function(){send('toggleDocument',{documentoId:this.dataset.id,activo:this.dataset.activo!=='true'});});});list.querySelectorAll('.res-del').forEach(function(el){el.addEventListener('click',function(){if(confirm('¿Eliminar este documento?'))send('deleteDocument',{documentoId:this.dataset.id});});});}
 function updateStatus(pub){if(pub){$('sbVersion').textContent='Versión: v'+(pub.version||'?');$('ftVersion').textContent='v'+(pub.version||'?');$('ftPublicado').textContent=pub.publicationDate?new Date(pub.publicationDate).toLocaleString('es-ES'):'—';}else{$('sbVersion').textContent='Versión: —';$('ftVersion').textContent='—';$('ftPublicado').textContent='—';}}
 
 // ── MENSAJES ──
 window.addEventListener('message',function(event){
   var msg=event.data;if(!msg||typeof msg!=='object')return;
-  if(msg.type==='configLoaded'){var p=msg.payload;if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}var cfg=p.borrador||p.publicada;if(cfg){populateForm(cfg);currentAlignmentId=cfg._id||'';$('sbEstado').textContent=cfg.status==='publicado'?'Config publicada':'Borrador';var b=$('badgeEstado');b.textContent=cfg.status==='publicado'?'Publicado':'Borrador';b.className='badge '+(cfg.status==='publicado'?'published':'draft');}else{$('sbEstado').textContent='Sin configurar';}updateStatus(p.publicada);documentos=p.documentos||[];renderDocs();return;}
+  if(msg.type==='configLoaded'){var p=msg.payload;if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}if(p.plano)planoActivo=p.plano;clearForm();var cfg=p.borrador||p.publicada;if(cfg){populateForm(cfg);currentAlignmentId=cfg._id||'';$('sbEstado').textContent=cfg.status==='publicado'?'Config publicada':'Borrador';var b=$('badgeEstado');b.textContent=cfg.status==='publicado'?'Publicado':'Borrador';b.className='badge '+(cfg.status==='publicado'?'published':'draft');}else{$('sbEstado').textContent='Sin configurar';}updateStatus(p.publicada);documentos=p.documentos||[];renderDocs();return;}
   if(msg.type==='configSaved'){var p=msg.payload;if(p&&p.ok){currentAlignmentId=p.alignmentId;$('badgeEstado').textContent='Borrador';$('badgeEstado').className='badge draft';$('sbEstado').textContent='Borrador guardado';toast('Borrador guardado (v'+p.version+')');}else{toast('Error: '+(p?p.error:'?'));}$('btnSave').disabled=false;return;}
   if(msg.type==='configPublished'){var p=msg.payload;if(p&&p.ok){$('badgeEstado').textContent='Publicado';$('badgeEstado').className='badge published';$('sbEstado').textContent='Publicado v'+p.version;$('sbVersion').textContent='Versión: v'+p.version;$('ftVersion').textContent='v'+p.version;$('ftPublicado').textContent=new Date().toLocaleString('es-ES');toast('Publicado v'+p.version+'. AKIRA ya usa esta versión.');}else{toast('Error: '+(p?p.error:'?'));}$('btnPublish').disabled=false;return;}
   if(msg.type==='testResult'){var p=msg.payload;$('btnTest').disabled=false;$('btnTest').textContent='Probar respuesta';if(!p||!p.ok){toast('Error: '+(p?p.error:'?'));return;}$('testResponse').style.display='block';$('respText').textContent=p.response;var cfg=p.config||{};$('respConfig').textContent='Tono: '+(cfg.tone||'?')+' | Detalle: '+(cfg.detailLevel||'?');$('respGuardrails').textContent='Guardrails: '+((cfg.guardrails||[]).join(', ')||'ninguno');$('respTime').textContent='Tiempo: '+(p.timeMs||'?')+'ms | Docs: '+(p.documentsCount||0)+' | Prompt: '+(p.systemPromptLength||'?')+' chars';return;}
@@ -234,11 +269,20 @@ $('btnCancelDoc').addEventListener('click',function(){clearDocForm();});
 $('btnPickFile').addEventListener('click',function(e){e.stopPropagation();$('fileInput').click();});
 $('fileInput').addEventListener('change',function(){if(this.files[0])processFile(this.files[0]);});
 var dz=$('dropzone');dz.addEventListener('click',function(){$('fileInput').click();});dz.addEventListener('dragenter',function(e){e.preventDefault();this.classList.add('dragging');});dz.addEventListener('dragover',function(e){e.preventDefault();});dz.addEventListener('dragleave',function(){this.classList.remove('dragging');});dz.addEventListener('drop',function(e){e.preventDefault();this.classList.remove('dragging');if(e.dataTransfer&&e.dataTransfer.files[0])processFile(e.dataTransfer.files[0]);});
-$('btnSaveDoc').addEventListener('click',function(){var titulo=$('nrTitle').value.trim();if(!titulo){toast('Título obligatorio');return;}var contenido=extractedContent||$('nrContenido').value.trim();if(!contenido){toast('Escribe o sube contenido');return;}send('createDocument',{titulo:titulo,tipo:$('nrTipo').value,contenido:contenido,resumen:$('nrResumen').value.trim()||titulo});});
+$('btnSaveDoc').addEventListener('click',function(){var titulo=$('nrTitle').value.trim();if(!titulo){toast('Título obligatorio');return;}var contenido=extractedContent||$('nrContenido').value.trim();if(!contenido){toast('Escribe o sube contenido');return;}send('createDocument',{titulo:titulo,tipo:$('nrTipo').value,modo:$('nrModo').value,contenido:contenido,resumen:$('nrResumen').value.trim()||titulo});});
 // Auto-resize
 var lastH=0;function notifyHeight(){var h=document.documentElement.scrollHeight;if(h!==lastH){lastH=h;send('resize',{height:h});}}
 var ro=new ResizeObserver(notifyHeight);ro.observe(document.body);
-send('ready');
+// ── SELECTOR DE PLANO (v1.2.0) ──
+// Cada plano tiene su propia fila de AkiraAlignment: al cambiar de pestana se
+// recarga la configuracion de ese plano desde el backend. El formulario se
+// limpia antes de poblar para no dejar a la vista texto del plano anterior.
+function setPlano(p){if(!p||p===planoActivo)return;planoActivo=p;
+  document.querySelectorAll('.plano-tab').forEach(function(t){t.classList.toggle('active',t.dataset.plano===p);});
+  clearForm();$('sbEstado').textContent='Cargando…';send('ready',{modo:p});}
+document.querySelectorAll('.plano-tab').forEach(function(t){t.addEventListener('click',function(){setPlano(this.dataset.plano);});});
+
+send('ready',{modo:planoActivo});
 </script>
 </body>
 </html>
