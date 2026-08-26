@@ -3,7 +3,29 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.0.20 (bundle)
+ * VERSION:   2.0.21 (bundle)
+ *
+ * v2.0.21 — Imagenes redimensionadas en origen (rendimiento en movil 4G).
+ *   Pareja del page code `Servicios (Item)` v0.3.6, que ahora envia dos
+ *   propiedades nuevas por servicio junto a `image`:
+ *     · `imageCard` → 600x450, para .kr-svc-card__img (grid, aspect 4/3)
+ *     · `imageSq`   → 192x192, para .kr-svc-header__img (miniatura 96x96)
+ *   Ambas las recorta el servidor de Wix con `fill` + `al_c`, que reproduce
+ *   exactamente el `object-fit:cover` centrado que este bundle ya aplicaba
+ *   en cliente. El encuadre resultante es identico al de v2.0.20.
+ *   Motivo: hasta ahora se bajaba el ORIGINAL (medido: 146 kB, ~1122 px de
+ *   ancho) para pintarlo en 240-380 px. Con 12 servicios en una categoria
+ *   eran ~1,75 MB. Ahora ~0,4 MB.
+ *
+ *   RESPALDO: si el page code no manda las propiedades nuevas (page code
+ *   viejo) o si la URL transformada fallara al cargar, se usa `image`, el
+ *   original de siempre. Un listener 'error' de un solo disparo revierte
+ *   la imagen a `image`. Por tanto este bundle es compatible hacia atras
+ *   con el page code v0.3.5 sin ningun cambio de comportamiento.
+ *
+ *   Cambio quirurgico: dos bloques `if (svc.image)` / `if (cfg.image)`
+ *   ampliados. Cero cambios en CSS, en layout, en el resto del render, en
+ *   el flujo de pasos, en huecos, en variantes ni en complementos.
  *
  * v2.0.20 — Recordatorio de bono antes de reservar.
  *   Si el servicio principal se vende también en bono, el paso de confirmar
@@ -1049,7 +1071,8 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.0.20
+   VERSION: 2.0.21
+   v2.0.21 — Imagenes redimensionadas en origen (imageCard / imageSq).
    FECHA:   20 de agosto de 2026
 
    v2.0.19 — "A valorar" depende del TOTAL, no del precio base.
@@ -1692,7 +1715,16 @@ window.KR_applySkin = function (el, name) {
         card.type = 'button';
         if (svc.image) {
           const img = el('img', 'kr-svc-card__img');
-          img.src = svc.image; img.alt = svc.name || ''; img.loading = 'lazy';
+          // v2.0.21 — Preferimos la version 600x450 que ya llega recortada
+          // desde el servidor de Wix. Si el page code no la manda, `image`
+          // (el original) sigue funcionando igual que en v2.0.20.
+          img.src = svc.imageCard || svc.image;
+          img.alt = svc.name || ''; img.loading = 'lazy';
+          if (svc.imageCard) {
+            // Respaldo de un solo disparo: si la URL transformada fallara,
+            // volvemos al original en vez de dejar la tarjeta sin foto.
+            img.addEventListener('error', () => { img.src = svc.image; }, { once: true });
+          }
           card.appendChild(img);
         }
         const body = el('div', 'kr-svc-card__body');
@@ -2176,7 +2208,13 @@ window.KR_applySkin = function (el, name) {
 
       if (cfg.image) {
         const img = el('img', 'kr-svc-header__img');
-        img.src = cfg.image; img.alt = cfg.name || ''; img.loading = 'lazy';
+        // v2.0.21 — Version cuadrada 192x192 para la miniatura de 96x96.
+        // Mismo respaldo que en la tarjeta del grid.
+        img.src = cfg.imageSq || cfg.image;
+        img.alt = cfg.name || ''; img.loading = 'lazy';
+        if (cfg.imageSq) {
+          img.addEventListener('error', () => { img.src = cfg.image; }, { once: true });
+        }
         head.appendChild(img);
       }
       const body = el('div', 'kr-svc-header__body');
