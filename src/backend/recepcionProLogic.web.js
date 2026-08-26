@@ -1,9 +1,92 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.52
-// FECHA: 20 de agosto de 2026
+// VERSION: 1.0.53
+// FECHA: 26 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.53: 🔎 BUSCAR ANTES DE CREAR en ensureContactInCRM.
+//          SÍNTOMA REPORTADO: en el modal de cita de Recepción PRO, el botón
+//          FICHA TÉCNICA salía inhabilitado en citas creadas desde la web
+//          pública. Caso real Hair-Times: María Pérez Monje, contacto único
+//          en CRM (fdd5a725-…), reserva web con `contactId` vacío en
+//          KamisuiteReservations.
+//
+//          CAUSA VERIFICADA: el botón se inhabilita SOLO cuando
+//          `r.contactId` está vacío (recepcionProCMS_widget, _renderModal).
+//          Para un cliente NO logueado, `widgetPublicoLogic.crearReservaPublica`
+//          llega aquí con memberContactId='' y contactDetails rellenos.
+//          ensureContactInCRM iba DIRECTA a createContact sin buscar antes.
+//          Como el cliente ya existía, Wix rechaza el duplicado de email,
+//          el catch devolvía null y la reserva se grababa con contactId:''.
+//
+//          DOS DAÑOS COLATERALES DE LA MISMA CAUSA:
+//            · Sin contactId, comunicacionesLogic._enviarEmailTriggered sale
+//              sin enviar el email de confirmación (solo sale el WhatsApp,
+//              que va por teléfono).
+//            · getProductosCustomCliente con contactId vacío devuelve listas
+//              vacías: al cobrar no se le detectan bonos, PRIME ni tarjetas.
+//
+//          COMPORTAMIENTO DE WIX, VERIFICADO EN PRODUCCIÓN (bitácoras
+//          06-Jul-2026 §B.3 y 19-Ago-2026), NO supuesto:
+//            · createContact con allowDuplicates:false NO deja duplicar por
+//              EMAIL en ningún caso.
+//            · SÍ deja duplicar por TELÉFONO: crea el contacto igualmente Y
+//              ADEMÁS lanza excepción con
+//                err.details.applicationError.code = 'DUPLICATE_CONTACT_EXISTS'
+//                …data.duplicatePhone / …data.duplicateContactId
+//              Es decir: hasta hoy, un cliente web que tecleaba mal el email
+//              pero bien el teléfono generaba un contacto DUPLICADO en el CRM
+//              y encima dejaba la reserva sin contactId. Puerta de entrada de
+//              duplicados documentada el 19-Ago y ahora cerrada.
+//
+//          QUÉ CAMBIA (una sola función + 3 helpers privados nuevos):
+//            PASO 0 (sin cambios) memberContactId GUID → se devuelve tal cual.
+//                    El cliente logueado nunca llega a la búsqueda.
+//            PASO 1 (NUEVO) buscarContactoExistente(email, phone):
+//              1a) EMAIL — eq('info.emails.email', <lowercase>). Filtro
+//                  oficial de la tabla Wix, ya en producción en
+//                  fichaClienteLogic:1499, hairAssessmentLogic:55 y
+//                  contactLookup:176. Se acepta SOLO si devuelve
+//                  EXACTAMENTE UN contacto. Si devuelve varios → ambiguo,
+//                  no se elige ninguno y se pasa al teléfono. Esta regla
+//                  neutraliza sola el email genérico del salón, que agrega
+//                  ~182 contactos bajo un mismo buzón: al devolver muchos,
+//                  nunca se selecciona.
+//              1b) TELÉFONO — solo si el email no resolvió. startsWith sobre
+//                  'info.phones.phone' con variantes en paralelo (patrón
+//                  literal de contactSearchLogic v1.0.0 líneas 179-195),
+//                  y confirmación en JS por los ÚLTIMOS 9 DÍGITOS, que hace
+//                  equivalentes '+34 606716040', '+34606716040' y
+//                  '606716040'. Guardas acordadas con Jal:
+//                    · se descarta el teléfono con menos de 9 o más de 15
+//                      dígitos;
+//                    · se descarta el que sea todo el mismo dígito
+//                      (mata el 000000000 del cliente provisional);
+//                    · si el cruce devuelve MÁS DE UN contacto → ambiguo,
+//                      no se elige ninguno. Preferible una cita sin
+//                      contactId a colgarla del cliente equivocado (fichas
+//                      familiares con teléfono compartido, y el contacto del
+//                      salón con 6 teléfonos adicionales — 19-Ago §5).
+//            PASO 2 (sin cambios) Si la búsqueda no resuelve, createContact
+//                    con allowDuplicates:false, exactamente como hasta ahora.
+//            PASO 3 (NUEVO) Red de seguridad en el catch: si Wix responde
+//                    DUPLICATE_CONTACT_EXISTS y trae un duplicateContactId
+//                    válido, se reutiliza ese ID en vez de devolver null.
+//
+//          ALCANCE: ensureContactInCRM la usa crearPackReserva, que comparten
+//          Recepción PRO Desktop, Recepción Lite Mobile y el widget público.
+//          Los tres se benefician. El cliente provisional NO pasa por aquí
+//          (esProvisional:true corta antes, línea ~2241): sigue sin contacto
+//          y sin ensuciar el CRM.
+//
+//          NO SE TOCA NADA MÁS: ni crearPackReserva, ni la centralita, ni
+//          marcarPagadoReserva, ni ningún otro webMethod, export, import o
+//          constante. La firma de ensureContactInCRM es la misma y sigue
+//          devolviendo string|null.
+//
+//          NO ES RETROACTIVO: las reservas ya grabadas con contactId vacío
+//          (María incluida) siguen igual. Repararlas es un backfill aparte.
 //
 // v1.0.52: ⏳ PLAZO MÁXIMO POR USO — CAMPO NUEVO QUE CONVIVE CON EL MÍNIMO.
 //          Hasta ahora el bono solo sabía frenar: bonusUseIntervalDays era
@@ -1213,7 +1296,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.52';
+const VERSION = '1.0.53';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1790,6 +1873,114 @@ export const getStaffColumnas = webMethod(
 // Copiado de externosLogic v1.1.5 ensureContactInCRM.
 // =====================================================
 
+// ---------------------------------------------------------------------
+// v1.0.53 — HELPERS DE BÚSQUEDA DE CONTACTO (privados de este archivo)
+// Patrón copiado de contactSearchLogic.web.js v1.0.0 (líneas 124-158 y
+// 179-195), en producción desde el 6-ago-2026. No se importa nada nuevo:
+// `contacts` y `elevate` ya estaban importados en la cabecera.
+// ---------------------------------------------------------------------
+
+// Últimos 9 dígitos del teléfono. Hace equivalentes '+34 606716040',
+// '+34606716040', '0034606716040' y '606716040'.
+function tel9CRM(v) {
+  const d = String(v || '').replace(/[^\d]/g, '');
+  return d.length > 9 ? d.slice(-9) : d;
+}
+
+// ¿Es un teléfono utilizable para buscar? Guardas acordadas con Jal:
+// entre 9 y 15 dígitos, y nunca todo el mismo dígito (000000000…).
+function telUtilizableCRM(v) {
+  const d = String(v || '').replace(/[^\d]/g, '');
+  if (d.length < 9 || d.length > 15) return false;
+  if (/^(\d)\1+$/.test(d)) return false;
+  return true;
+}
+
+// Variantes de prefijo para el startsWith (case del CRM: unos contactos
+// guardan el teléfono con prefijo y espacio, otros a pelo). El cruce fino
+// lo hace después tel9CRM en JS; estas variantes solo sirven para que la
+// query no vuelva vacía.
+function variantesTelefonoCRM(v) {
+  const d = String(v || '').replace(/[^\d]/g, '');
+  const set = new Set();
+  if (!d) return [];
+  const nueve = tel9CRM(d);
+  set.add(d);
+  set.add(nueve);
+  set.add('+' + d);
+  const literal = String(v || '').trim();
+  if (literal) set.add(literal);
+  // Prefijo internacional presente en el propio dato, si lo trae.
+  if (d.length > 9) {
+    const pais = d.slice(0, d.length - 9);
+    set.add('+' + pais + nueve);
+    set.add('+' + pais + ' ' + nueve);
+    set.add(pais + nueve);
+  }
+  return Array.from(set).filter(Boolean);
+}
+
+// Devuelve el contactId de un contacto YA EXISTENTE, o null.
+// Regla transversal: si un criterio devuelve más de un contacto se considera
+// AMBIGUO y no se elige ninguno. Mejor cita sin contactId que cita colgada
+// del cliente equivocado.
+async function buscarContactoExistente(email, phone) {
+  const elevatedQuery = elevate(contacts.queryContacts);
+
+  // ── 1) EMAIL (criterio fuerte) ──
+  const mail = String(email || '').trim().toLowerCase();
+  if (mail) {
+    try {
+      const r = await elevatedQuery().eq('info.emails.email', mail).limit(10).find();
+      const ids = Array.from(new Set((r?.items || []).map(c => c?._id).filter(x => isGuid(x))));
+      if (ids.length === 1) {
+        console.log(`${TAG} ✅ Contacto localizado por email: ${ids[0]}`);
+        return ids[0];
+      }
+      if (ids.length > 1) {
+        console.warn(`${TAG} ⚠️ Email compartido por ${ids.length} contactos: ambiguo, no se elige ninguno`);
+      }
+    } catch (e) {
+      console.warn(`${TAG} ⚠️ Búsqueda por email falló: ${e.message}`);
+    }
+  }
+
+  // ── 2) TELÉFONO (solo si el email no resolvió) ──
+  if (!telUtilizableCRM(phone)) return null;
+  const objetivo = tel9CRM(phone);
+
+  try {
+    const variantes = variantesTelefonoCRM(phone);
+    const resultados = await Promise.allSettled(
+      variantes.map(v => elevatedQuery().startsWith('info.phones.phone', v).limit(25).find())
+    );
+
+    const ids = new Set();
+    for (const r of resultados) {
+      if (r.status !== 'fulfilled') continue;
+      for (const c of (r.value?.items || [])) {
+        if (!isGuid(c?._id)) continue;
+        const phones = Array.isArray(c?.info?.phones) ? c.info.phones : [];
+        const casa = phones.some(p => tel9CRM(p?.phone || p) === objetivo);
+        if (casa) ids.add(c._id);
+      }
+    }
+
+    if (ids.size === 1) {
+      const unico = Array.from(ids)[0];
+      console.log(`${TAG} ✅ Contacto localizado por teléfono: ${unico}`);
+      return unico;
+    }
+    if (ids.size > 1) {
+      console.warn(`${TAG} ⚠️ Teléfono compartido por ${ids.size} contactos: ambiguo, no se elige ninguno`);
+    }
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ Búsqueda por teléfono falló: ${e.message}`);
+  }
+
+  return null;
+}
+
 async function ensureContactInCRM(contactDetails, memberContactId) {
   if (memberContactId && isGuid(memberContactId)) return memberContactId;
 
@@ -1801,6 +1992,18 @@ async function ensureContactInCRM(contactDetails, memberContactId) {
   if (!firstName && !email && !phone) {
     console.warn(`${TAG} ⚠️ ensureContactInCRM: sin datos suficientes`);
     return null;
+  }
+
+  // v1.0.53 — PASO 1: buscar antes de crear. Evita el duplicado por
+  // teléfono (que Wix SÍ crea) y recupera el contactId del cliente
+  // recurrente que reserva en la web sin estar logueado.
+  try {
+    const existente = await buscarContactoExistente(email, phone);
+    if (existente) return existente;
+  } catch (eBusca) {
+    // La búsqueda nunca bloquea el alta: si falla, se sigue al createContact
+    // exactamente como antes de v1.0.53.
+    console.warn(`${TAG} ⚠️ buscarContactoExistente no concluyente: ${eBusca.message}`);
   }
 
   try {
@@ -1815,6 +2018,16 @@ async function ensureContactInCRM(contactDetails, memberContactId) {
     if (newId) console.log(`${TAG} ✅ Contacto CRM asegurado: ${newId}`);
     return newId;
   } catch (e) {
+    // v1.0.53 — PASO 3: red de seguridad. Wix acompaña el error de duplicado
+    // con el ID del contacto que ya existía. Shape verificado en producción
+    // (bitácora 06-Jul-2026 §B.3) y ya parseado igual en
+    // fichaClienteLogic v1.9.11.
+    const appErr = e?.details?.applicationError || {};
+    const dupId = appErr?.data?.duplicateContactId || '';
+    if (appErr?.code === 'DUPLICATE_CONTACT_EXISTS' && isGuid(dupId)) {
+      console.warn(`${TAG} ⚠️ Duplicado detectado por Wix; se reutiliza el contacto existente: ${dupId}`);
+      return dupId;
+    }
     console.warn(`${TAG} ⚠️ ensureContactInCRM falló: ${e.message}`);
     return null;
   }
