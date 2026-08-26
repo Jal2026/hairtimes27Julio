@@ -1,8 +1,37 @@
 // =====================================================
 // KAMISUITE — Page Code: /reservar/{slug}
 // =====================================================
-// VERSION: 0.3.5
-// FECHA: 3 de agosto de 2026
+// VERSION: 0.3.6
+// FECHA: 26 de agosto de 2026
+//
+// v0.3.6:
+//   + IMAGENES REDIMENSIONADAS EN ORIGEN (rendimiento en movil 4G).
+//     Hasta v0.3.5 el page code convertia `wix:image://` a la URL HTTPS
+//     desnuda del ORIGINAL. El widget pinta esa imagen en tarjetas de
+//     240-380 px (grid, ratio 4/3) y en la miniatura de cabecera (96x96),
+//     asi que el navegador bajaba ~1122 px para pintar 240 y recortaba en
+//     cliente. Medido en Hair-Times el 26-ago-2026: original 146 kB,
+//     version 400x300 servida por Wix 17 kB. Con 12 servicios en una
+//     categoria eso son ~1,75 MB frente a ~0,4 MB.
+//     Nuevo helper `wixImageResized(url, w, h)` que construye la URL de
+//     transformacion de static.wixstatic.com. Se anaden DOS propiedades
+//     nuevas a cada servicio del config:
+//       · `imageCard` → 600x450 (4:3, el ratio exacto de .kr-svc-card__img)
+//       · `imageSq`   → 192x192 (1:1, el ratio exacto de .kr-svc-header__img)
+//     Ambas usan `fill` + `al_c`, que reproduce exactamente el recorte que
+//     el navegador ya hacia con `object-fit:cover` sin `object-position`
+//     (default 50% 50%). Resultado visual identico al actual.
+//     `image` se CONSERVA intacta: el bundle v2.0.21 la usa como respaldo
+//     si alguna transformacion fallara.
+//     La imagen de la CATEGORIA no se toca. La consume el elemento nativo
+//     #cabeceraImage de la pagina (hero a tamano grande), donde bajar
+//     resolucion si se notaria.
+//     Cambio quirurgico: un helper nuevo, dos constantes y un bloque
+//     aditivo en montarCustomElement. Cero cambios en los handlers
+//     ('pedir-huecos', 'reservar', 'navigate-back'), en imports, en
+//     `wixImageToHttps` ni en `resolverImagenesEnObjeto`.
+//   ~ TAG corregido: en v0.3.5 la constante seguia diciendo v0.3.4
+//     mientras la cabecera decia 0.3.5. Ahora ambas dicen 0.3.6.
 //
 // v0.3.5:
 //   + Reenvía el SEGUNDO PROFESIONAL para los complementos, en los dos
@@ -85,7 +114,16 @@ import {
   crearReservaPublica
 } from 'backend/widgetPublicoLogic.web';
 
-const TAG = '[ReservarPage][v0.3.4]';
+const TAG = '[ReservarPage][v0.3.6]';
+
+// v0.3.6 — Tamanos de las variantes redimensionadas de la imagen de servicio.
+// Se corresponden con lo que el bundle pinta realmente:
+//   · .kr-svc-card__img   → grid minmax(240px,1fr) con aspect-ratio 4/3.
+//     600x450 cubre pantallas de densidad 2x sin verse blando.
+//   · .kr-svc-header__img → 96x96 fijos. 192 es el doble, para 2x.
+const IMG_CARD_W = 600;
+const IMG_CARD_H = 450;
+const IMG_SQ     = 192;
 
 // Estado de la página
 let ctx = {
@@ -231,6 +269,26 @@ function montarCustomElement() {
     memberInfo: ctx.memberInfo,
     hoyISO: nuevoHoyMadridISO()
   };
+
+  // v0.3.6 — Variantes redimensionadas de la imagen de cada SERVICIO.
+  // Se calculan AQUI, antes de resolverImagenesEnObjeto, porque parten del
+  // valor crudo `wix:image://` que llega del CMS. `image` se conserva tal
+  // cual para que el widget tenga respaldo.
+  // La imagen de la CATEGORIA (config.categoria.image) NO se toca: la
+  // consume el elemento nativo #cabeceraImage de la pagina, que la pinta
+  // grande.
+  if (Array.isArray(config.servicios)) {
+    let conVariantes = 0;
+    config.servicios.forEach(svc => {
+      if (!svc || !svc.image) return;
+      const card = wixImageResized(svc.image, IMG_CARD_W, IMG_CARD_H);
+      const sq   = wixImageResized(svc.image, IMG_SQ, IMG_SQ);
+      if (card) svc.imageCard = card;
+      if (sq)   svc.imageSq   = sq;
+      if (card || sq) conVariantes++;
+    });
+    console.log(`${TAG} 🖼️ ${conVariantes}/${config.servicios.length} servicios con imagen redimensionada`);
+  }
 
   // v0.3.0 — convertir TODAS las URLs `wix:image://...` a HTTPS antes
   // de inyectar al widget. Sin esto, las imágenes salen rotas en el
@@ -383,6 +441,47 @@ function wixImageToHttps(wixImageStr) {
   if (!match) return wixImageStr; // no es Wix image: devolver tal cual
   const mediaId = match[1];
   return `https://static.wixstatic.com/media/${mediaId}`;
+}
+
+// v0.3.6 — Devuelve la URL de la imagen YA REDIMENSIONADA por el servidor
+// de Wix, para no bajar el original y recortarlo en el navegador.
+//
+// Formato:
+//   https://static.wixstatic.com/media/<mediaId>/v1/fill/w_<W>,h_<H>,al_c,q_80/imagen.<ext>
+//
+//   · fill → recorta al ratio exacto pedido. Es el mismo comportamiento que
+//            el `object-fit: cover` que el bundle ya aplica hoy en el CSS.
+//   · al_c → recorte centrado. Equivale al `object-position` por defecto
+//            (50% 50%), que el bundle no sobreescribe en ninguna de las dos
+//            imagenes. Por eso el encuadre resultante es el mismo de ahora.
+//   · q_80 → calidad.
+//
+// Verificado empiricamente en Hair-Times el 26-ago-2026 sobre una imagen
+// real del CMS: el original devuelve 146 kB, la version 400x300 devuelve
+// 17 kB con el recorte correcto.
+//
+// Acepta el valor crudo `wix:image://v1/<mediaId>/...` del CMS y tambien una
+// URL HTTPS de static.wixstatic.com ya resuelta. Si no reconoce el formato
+// devuelve cadena vacia: el llamante NO asigna la propiedad y el widget se
+// queda con `image`, el comportamiento de v0.3.5.
+//
+// La extension de salida se toma del propio mediaId (`~mv2.png` → png, resto
+// → jpg) para no forzar a Wix a cambiar de formato.
+function wixImageResized(wixImageStr, w, h) {
+  if (!wixImageStr || typeof wixImageStr !== 'string') return '';
+
+  let mediaId = '';
+  const mWix = wixImageStr.match(/^wix:image:\/\/v1\/([^/]+)\//);
+  if (mWix) {
+    mediaId = mWix[1];
+  } else {
+    const mHttps = wixImageStr.match(/^https:\/\/static\.wixstatic\.com\/media\/([^/?#]+)/);
+    if (mHttps) mediaId = mHttps[1];
+  }
+  if (!mediaId) return '';
+
+  const ext = /\.png$/i.test(mediaId) ? 'png' : 'jpg';
+  return `https://static.wixstatic.com/media/${mediaId}/v1/fill/w_${w},h_${h},al_c,q_80/imagen.${ext}`;
 }
 
 // Recorre un objeto resolviendo TODAS las propiedades `image` que
