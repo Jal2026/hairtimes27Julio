@@ -1,29 +1,29 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.53
+// VERSION: 1.0.54
 // FECHA: 26 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
 //
-// v1.0.53: 🔎 BUSCAR ANTES DE CREAR en ensureContactInCRM.
-//          SÍNTOMA REPORTADO: en el modal de cita de Recepción PRO, el botón
-//          FICHA TÉCNICA salía inhabilitado en citas creadas desde la web
-//          pública. Caso real Hair-Times: María Pérez Monje, contacto único
-//          en CRM (fdd5a725-…), reserva web con `contactId` vacío en
+// v1.0.54: 🔎 BUSCAR ANTES DE CREAR en ensureContactInCRM.
+//          SÍNTOMA: en el modal de cita de Recepción PRO, el botón FICHA
+//          TÉCNICA salía inhabilitado en citas creadas desde la web pública.
+//          Caso real Hair-Times: María Pérez Monje, contacto único en CRM
+//          (fdd5a725-…), reserva web con `contactId` vacío en
 //          KamisuiteReservations.
 //
-//          CAUSA VERIFICADA: el botón se inhabilita SOLO cuando
-//          `r.contactId` está vacío (recepcionProCMS_widget, _renderModal).
-//          Para un cliente NO logueado, `widgetPublicoLogic.crearReservaPublica`
-//          llega aquí con memberContactId='' y contactDetails rellenos.
-//          ensureContactInCRM iba DIRECTA a createContact sin buscar antes.
-//          Como el cliente ya existía, Wix rechaza el duplicado de email,
-//          el catch devolvía null y la reserva se grababa con contactId:''.
+//          CAUSA VERIFICADA: el botón se inhabilita SOLO cuando `r.contactId`
+//          está vacío (recepcionProCMS_widget, _renderModal). Para un cliente
+//          NO logueado, widgetPublicoLogic.crearReservaPublica llega aquí con
+//          memberContactId='' y contactDetails rellenos. ensureContactInCRM
+//          iba DIRECTA a createContact sin buscar antes. Como la clienta ya
+//          existía, Wix rechazó el duplicado de email, el catch devolvía null
+//          y la reserva se grababa con contactId:''.
 //
 //          DOS DAÑOS COLATERALES DE LA MISMA CAUSA:
 //            · Sin contactId, comunicacionesLogic._enviarEmailTriggered sale
-//              sin enviar el email de confirmación (solo sale el WhatsApp,
-//              que va por teléfono).
+//              sin enviar el email de confirmación (el WhatsApp sí sale, va
+//              por teléfono).
 //            · getProductosCustomCliente con contactId vacío devuelve listas
 //              vacías: al cobrar no se le detectan bonos, PRIME ni tarjetas.
 //
@@ -31,124 +31,108 @@
 //          06-Jul-2026 §B.3 y 19-Ago-2026), NO supuesto:
 //            · createContact con allowDuplicates:false NO deja duplicar por
 //              EMAIL en ningún caso.
-//            · SÍ deja duplicar por TELÉFONO: crea el contacto igualmente Y
+//            · SÍ deja duplicar por TELÉFONO: CREA el contacto igualmente Y
 //              ADEMÁS lanza excepción con
 //                err.details.applicationError.code = 'DUPLICATE_CONTACT_EXISTS'
 //                …data.duplicatePhone / …data.duplicateContactId
-//              Es decir: hasta hoy, un cliente web que tecleaba mal el email
+//              Es decir: hasta hoy, una clienta web que tecleaba mal el email
 //              pero bien el teléfono generaba un contacto DUPLICADO en el CRM
 //              y encima dejaba la reserva sin contactId. Puerta de entrada de
 //              duplicados documentada el 19-Ago y ahora cerrada.
 //
 //          QUÉ CAMBIA (una sola función + 3 helpers privados nuevos):
 //            PASO 0 (sin cambios) memberContactId GUID → se devuelve tal cual.
-//                    El cliente logueado nunca llega a la búsqueda.
+//                    La clienta logueada nunca llega a la búsqueda.
 //            PASO 1 (NUEVO) buscarContactoExistente(email, phone):
 //              1a) EMAIL — eq('info.emails.email', <lowercase>). Filtro
 //                  oficial de la tabla Wix, ya en producción en
 //                  fichaClienteLogic:1499, hairAssessmentLogic:55 y
-//                  contactLookup:176. Se acepta SOLO si devuelve
-//                  EXACTAMENTE UN contacto. Si devuelve varios → ambiguo,
-//                  no se elige ninguno y se pasa al teléfono. Esta regla
-//                  neutraliza sola el email genérico del salón, que agrega
-//                  ~182 contactos bajo un mismo buzón: al devolver muchos,
-//                  nunca se selecciona.
+//                  contactLookup:176. Se acepta SOLO si devuelve EXACTAMENTE
+//                  UN contacto. Si devuelve varios → ambiguo, no se elige
+//                  ninguno y se pasa al teléfono. Esta regla neutraliza sola
+//                  el email genérico del salón, que agrega ~182 contactos
+//                  bajo un mismo buzón: al devolver muchos, nunca se
+//                  selecciona.
 //              1b) TELÉFONO — solo si el email no resolvió. startsWith sobre
 //                  'info.phones.phone' con variantes en paralelo (patrón
-//                  literal de contactSearchLogic v1.0.0 líneas 179-195),
-//                  y confirmación en JS por los ÚLTIMOS 9 DÍGITOS, que hace
+//                  literal de contactSearchLogic v1.0.0 líneas 179-195) y
+//                  confirmación en JS por los ÚLTIMOS 9 DÍGITOS, que hace
 //                  equivalentes '+34 606716040', '+34606716040' y
 //                  '606716040'. Guardas acordadas con Jal:
 //                    · se descarta el teléfono con menos de 9 o más de 15
 //                      dígitos;
-//                    · se descarta el que sea todo el mismo dígito
-//                      (mata el 000000000 del cliente provisional);
-//                    · si el cruce devuelve MÁS DE UN contacto → ambiguo,
-//                      no se elige ninguno. Preferible una cita sin
-//                      contactId a colgarla del cliente equivocado (fichas
-//                      familiares con teléfono compartido, y el contacto del
-//                      salón con 6 teléfonos adicionales — 19-Ago §5).
+//                    · se descarta el que sea todo el mismo dígito (mata el
+//                      000000000 del cliente provisional);
+//                    · si el cruce devuelve MÁS DE UN contacto → ambiguo, no
+//                      se elige ninguno. Preferible una cita sin contactId a
+//                      colgarla de la clienta equivocada (fichas familiares
+//                      con teléfono compartido, y el contacto del salón con
+//                      6 teléfonos adicionales — 19-Ago §5).
 //            PASO 2 (sin cambios) Si la búsqueda no resuelve, createContact
 //                    con allowDuplicates:false, exactamente como hasta ahora.
 //            PASO 3 (NUEVO) Red de seguridad en el catch: si Wix responde
 //                    DUPLICATE_CONTACT_EXISTS y trae un duplicateContactId
 //                    válido, se reutiliza ese ID en vez de devolver null.
+//                    Mismo parseo que fichaClienteLogic v1.9.11.
 //
 //          ALCANCE: ensureContactInCRM la usa crearPackReserva, que comparten
 //          Recepción PRO Desktop, Recepción Lite Mobile y el widget público.
 //          Los tres se benefician. El cliente provisional NO pasa por aquí
-//          (esProvisional:true corta antes, línea ~2241): sigue sin contacto
-//          y sin ensuciar el CRM.
+//          (esProvisional:true corta antes): sigue sin contacto y sin
+//          ensuciar el CRM.
 //
 //          NO SE TOCA NADA MÁS: ni crearPackReserva, ni la centralita, ni
-//          marcarPagadoReserva, ni ningún otro webMethod, export, import o
-//          constante. La firma de ensureContactInCRM es la misma y sigue
-//          devolviendo string|null.
+//          marcarPagadoReserva, ni las condiciones informativas del bono de
+//          v1.0.53, ni ningún otro webMethod, export, import o constante. La
+//          firma de ensureContactInCRM es la misma y sigue devolviendo
+//          string|null.
 //
 //          NO ES RETROACTIVO: las reservas ya grabadas con contactId vacío
-//          (María incluida) siguen igual. Repararlas es un backfill aparte.
+//          siguen igual. Repararlas es un backfill aparte.
 //
-// v1.0.52: ⏳ PLAZO MÁXIMO POR USO — CAMPO NUEVO QUE CONVIVE CON EL MÍNIMO.
-//          Hasta ahora el bono solo sabía frenar: bonusUseIntervalDays era
-//          una espera MÍNIMA y bloqueaba el canje si la clienta volvía antes
-//          de tiempo. Faltaba la palanca contraria, la que incentiva la
-//          frecuencia. Se añade como CAMPO INDEPENDIENTE, no sustituyendo al
-//          anterior:
+// v1.0.53: 🔓 LAS CONDICIONES DEL BONO DEJAN DE SER CANDADOS.
+//          Decisión de Jal (20-ago-2026): el sistema INFORMA, el salón
+//          DECIDE. "Es un salón, no Google o Netflix poniendo condiciones
+//          que incluso su atención al cliente a veces soluciona." Enfermedad,
+//          confusión, la clienta de toda la vida a la que se le niega el
+//          canje por un día, la profesional habitual de baja que impidió
+//          reservar a tiempo: mil circunstancias que un candado no entiende
+//          y que el mostrador resuelve en dos segundos.
 //
-//            bonusUseIntervalDays  → espera MÍNIMA entre usos. BLOQUEA el
-//              canje si vuelve antes. No quita nada: vuelve otro día y su
-//              sesión sigue ahí. SIN CAMBIOS respecto a v1.0.42.
+//          QUÉ CAMBIA:
+//            · bonusUseIntervalDays (espera mínima). v1.0.42-v1.0.52
+//              BLOQUEABA el canje con return ok:false. AHORA solo informa.
+//            · bonusMaxIntervalDays (plazo máximo por uso). v1.0.52
+//              DESCONTABA las sesiones vencidas. AHORA solo informa. NO se
+//              resta absolutamente nada: usesAfter vuelve a ser usesBefore-1.
 //
-//            bonusMaxIntervalDays  → plazo MÁXIMO por uso, en ventanas
-//              CORRELATIVAS desde la EMISIÓN. NUEVO. Ventana que vence sin
-//              consumirse, sesión que SE PIERDE.
+//          El canje NUNCA se rechaza por estas dos condiciones. Lo único que
+//          sigue impidiéndolo es lo de siempre: bono caducado, agotado o de
+//          otro servicio.
 //
-//          Un bono de 4 usos con máximo 15 reparte cuatro ventanas fijas:
-//            uso 1 → 0-15 · uso 2 → 15-30 · uso 3 → 30-45 · uso 4 → 45-60
-//          Las ventanas NO se desplazan: adelantarse no corre los plazos
-//          siguientes.
-//            ventanasVencidas = floor(díasDesdeEmisión / máximo)
-//            perdidas         = ventanasVencidas − canjesRealizados  (mín 0)
-//          Ejemplo (Jal): 4 usos, 15 días, usa el primero en plazo y vuelve
-//          el día 35 → 2 vencidas − 1 canje = pierde 1, le quedan 2, y con
-//          una de ellas paga la visita de hoy.
-//          La pérdida PUEDE SER MAYOR QUE 1: quien aparece el día 65 con una
-//          sola sesión gastada pierde tres.
+//          `aplicarCanjeProducto` devuelve `fueraDeCondiciones` (booleano) y
+//          `avisoCondiciones` (texto ya redactado para el staff, vacío si
+//          está en regla), más `condicionMinDias` y `condicionMaxDias` por si
+//          la UI los quiere mostrar. El widget pinta el aviso y deja el botón
+//          de canjear activo.
 //
-//          POR QUÉ CAMPO NUEVO Y NO UN MODO SOBRE EL EXISTENTE (Jal,
-//          20-ago-2026): los bonos ya vendidos congelaron
-//          bonusUseIntervalDays con semántica de MÍNIMO. Un campo nuevo nace
-//          vacío, así que todo lo emitido hasta hoy sigue comportándose
-//          exactamente como el día que se pagó — sin valor por defecto que
-//          interpretar ni migración. La regla nueva solo afecta a bonos
-//          nuevos, que era el requisito.
+//          `confirmarCanjeProducto` YA NO RECALCULA NADA de esto: si el
+//          cálculo es solo informativo, repetirlo al confirmar sobra. Se
+//          eliminó el bloque entero. Menos código y una query menos por
+//          canje.
 //
-//          Los dos valores se leen del BONO (snapshot congelado por
-//          voucherPublicLogic v1.4.0 al emitir), NUNCA del catálogo:
-//          reconfigurar el servicio no puede cambiarle las reglas a alguien
-//          que ya pagó.
+//          El ledger se lee UNA sola vez para las dos condiciones (antes eran
+//          dos queries a KamisuiteVoucherRedemptions en el mismo preview).
 //
-//          Orden de evaluación: primero si puede canjear HOY (mínimo),
-//          después cuántas ha perdido por el camino (máximo). Si las
-//          pérdidas se comen todo lo que queda, el canje se RECHAZA y el
-//          bono queda AGOTADO, con mensaje explícito para recepción.
-//          Días naturales, calendario Madrid. 0/vacío = sin regla, en ambos.
-//          Ledger o issueDate ilegibles → NO se penaliza (fail-open: jamás
-//          quitar una sesión por un error de lectura).
+//          Ambos valores se leen del BONO (snapshot congelado al emitir por
+//          voucherPublicLogic v1.4.0), nunca del catálogo.
+//          0/vacío = sin condición. Ledger ilegible → sin aviso.
 //
-//          DOS PUNTOS DE CÁLCULO, misma regla: aplicarCanjeProducto (previo,
-//          expone `sesionesPerdidas` y `avisoFrecuencia` para que la UI avise
-//          antes de confirmar) y confirmarCanjeProducto (que RECALCULA y no
-//          se fía de lo que mande el cliente).
-//
-//          ⚠️ REGLA DE DISEÑO NO VALIDADA AQUÍ: la caducidad total del bono
-//          debe ser AL MENOS usos × máximo (60 días en el ejemplo). Con
-//          menos, las últimas ventanas no llegan a abrirse y esas sesiones
-//          son invendibles. Se avisa en el Editor de Servicios v1.15.0.
-//
-//          REQUIERE: campo bonusMaxIntervalDays en ServiceCatalog y en
-//          KamisuiteVouchers · voucherPublicLogic v1.4.0 ·
-//          serviciosEdicionLogic v1.13.0 · widget Edición de Servicios v1.15.0
+//          ⚠️ ALCANCE — DÓNDE DEBERÍA ESTAR EL AVISO DE VERDAD: el canje
+//          ocurre AL COBRAR, con el servicio ya prestado. Bloquear ahí no
+//          evitaba nada; solo impedía PAGAR con el bono a quien ya se había
+//          cortado el pelo. El aviso útil va al AGENDAR, que es cuando aún se
+//          puede mover la cita. PENDIENTE (ver bitácora 20-ago §5.1).
 //
 // v1.0.51: 🧾 SEGREGACIÓN FISCAL — LA VERDAD PASA A SER *STAFF ASIGNADO*.
 //          La guardia de v1.0.50 decidía si un servicio era "de externa"
@@ -1296,7 +1280,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.53';
+const VERSION = '1.0.54';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1874,7 +1858,7 @@ export const getStaffColumnas = webMethod(
 // =====================================================
 
 // ---------------------------------------------------------------------
-// v1.0.53 — HELPERS DE BÚSQUEDA DE CONTACTO (privados de este archivo)
+// v1.0.54 — HELPERS DE BÚSQUEDA DE CONTACTO (privados de este archivo)
 // Patrón copiado de contactSearchLogic.web.js v1.0.0 (líneas 124-158 y
 // 179-195), en producción desde el 6-ago-2026. No se importa nada nuevo:
 // `contacts` y `elevate` ya estaban importados en la cabecera.
@@ -1896,10 +1880,10 @@ function telUtilizableCRM(v) {
   return true;
 }
 
-// Variantes de prefijo para el startsWith (case del CRM: unos contactos
-// guardan el teléfono con prefijo y espacio, otros a pelo). El cruce fino
-// lo hace después tel9CRM en JS; estas variantes solo sirven para que la
-// query no vuelva vacía.
+// Variantes de prefijo para el startsWith (unos contactos guardan el
+// teléfono con prefijo y espacio, otros a pelo). El cruce fino lo hace
+// después tel9CRM en JS; estas variantes solo sirven para que la query no
+// vuelva vacía.
 function variantesTelefonoCRM(v) {
   const d = String(v || '').replace(/[^\d]/g, '');
   const set = new Set();
@@ -1922,8 +1906,8 @@ function variantesTelefonoCRM(v) {
 
 // Devuelve el contactId de un contacto YA EXISTENTE, o null.
 // Regla transversal: si un criterio devuelve más de un contacto se considera
-// AMBIGUO y no se elige ninguno. Mejor cita sin contactId que cita colgada
-// del cliente equivocado.
+// AMBIGUO y no se elige ninguno. Mejor cita sin contactId que cita colgada de
+// la clienta equivocada.
 async function buscarContactoExistente(email, phone) {
   const elevatedQuery = elevate(contacts.queryContacts);
 
@@ -1961,7 +1945,7 @@ async function buscarContactoExistente(email, phone) {
       for (const c of (r.value?.items || [])) {
         if (!isGuid(c?._id)) continue;
         const phones = Array.isArray(c?.info?.phones) ? c.info.phones : [];
-        const casa = phones.some(p => tel9CRM(p?.phone || p) === objetivo);
+        const casa = phones.some(pp => tel9CRM(pp?.phone || pp) === objetivo);
         if (casa) ids.add(c._id);
       }
     }
@@ -1994,15 +1978,15 @@ async function ensureContactInCRM(contactDetails, memberContactId) {
     return null;
   }
 
-  // v1.0.53 — PASO 1: buscar antes de crear. Evita el duplicado por
-  // teléfono (que Wix SÍ crea) y recupera el contactId del cliente
-  // recurrente que reserva en la web sin estar logueado.
+  // v1.0.54 — PASO 1: buscar antes de crear. Evita el duplicado por teléfono
+  // (que Wix SÍ crea) y recupera el contactId de la clienta recurrente que
+  // reserva en la web sin estar logueada.
   try {
     const existente = await buscarContactoExistente(email, phone);
     if (existente) return existente;
   } catch (eBusca) {
     // La búsqueda nunca bloquea el alta: si falla, se sigue al createContact
-    // exactamente como antes de v1.0.53.
+    // exactamente como antes de v1.0.54.
     console.warn(`${TAG} ⚠️ buscarContactoExistente no concluyente: ${eBusca.message}`);
   }
 
@@ -2018,10 +2002,10 @@ async function ensureContactInCRM(contactDetails, memberContactId) {
     if (newId) console.log(`${TAG} ✅ Contacto CRM asegurado: ${newId}`);
     return newId;
   } catch (e) {
-    // v1.0.53 — PASO 3: red de seguridad. Wix acompaña el error de duplicado
+    // v1.0.54 — PASO 3: red de seguridad. Wix acompaña el error de duplicado
     // con el ID del contacto que ya existía. Shape verificado en producción
-    // (bitácora 06-Jul-2026 §B.3) y ya parseado igual en
-    // fichaClienteLogic v1.9.11.
+    // (bitácora 06-Jul-2026 §B.3) y ya parseado igual en fichaClienteLogic
+    // v1.9.11.
     const appErr = e?.details?.applicationError || {};
     const dupId = appErr?.data?.duplicateContactId || '';
     if (appErr?.code === 'DUPLICATE_CONTACT_EXISTS' && isGuid(dupId)) {
@@ -4689,132 +4673,104 @@ export const aplicarCanjeProducto = webMethod(
           }
         }
 
-        // ── v1.0.52 — DOS REGLAS TEMPORALES INDEPENDIENTES ──────────────
-        // Ambas se leen del BONO (snapshot congelado al emitir), nunca del
-        // catálogo: cambiar la configuración del servicio no puede alterar
-        // las reglas de un bono ya vendido y pagado.
+        // ── v1.0.53 — DOS CONDICIONES DE USO, SOLO INFORMATIVAS ─────
+        // Decisión de Jal (20-ago-2026): NINGÚN CANDADO. El sistema informa,
+        // el salón decide. Un salón de barrio no es Netflix: enfermedad,
+        // confusión, la clienta de toda la vida a la que se le niega el
+        // canje por un día, la profesional habitual de baja que impidió
+        // reservar a tiempo. Mil circunstancias que un candado no entiende y
+        // que el mostrador resuelve en dos segundos.
         //
-        //   bonusUseIntervalDays → ESPERA MÍNIMA entre usos. Si la clienta
-        //     vuelve antes, se BLOQUEA el canje. No quita nada: vuelve otro
-        //     día y su sesión sigue ahí. Es la regla que ya existía desde
-        //     v1.0.42 y NO cambia de comportamiento.
+        // Ambas condiciones se leen del BONO (snapshot congelado al emitir),
+        // nunca del catálogo: reconfigurar el servicio no puede cambiarle las
+        // reglas a quien ya pagó.
         //
-        //   bonusMaxIntervalDays → PLAZO MÁXIMO por uso, en ventanas
-        //     CORRELATIVAS desde la EMISIÓN. Campo NUEVO en v1.0.52.
-        //     Ventana que vence sin consumirse, sesión que SE PIERDE.
+        //   bonusUseIntervalDays → espera MÍNIMA entre usos.
+        //     v1.0.42-v1.0.52: BLOQUEABA el canje (return ok:false).
+        //     AHORA: solo se informa.
         //
-        // Convivencia: mínimo 42 + máximo 70 describe la banda de una tanda
-        // con espaciado técnico. Cada campo a 0/vacío = sin regla. Como el
-        // máximo es campo nuevo, TODO lo emitido antes de esta versión lo
-        // tiene vacío y se comporta exactamente igual que siempre.
+        //   bonusMaxIntervalDays → plazo MÁXIMO por uso, ventanas
+        //     correlativas desde la emisión.
+        //     v1.0.52: DESCONTABA las sesiones vencidas (confiscación).
+        //     AHORA: solo se informa. NO se resta nada.
         //
-        // Orden: primero si puede canjear HOY (mínimo), después cuántas ha
-        // perdido por el camino (máximo).
-        // ─────────────────────────────────────────────────────────────────
+        // Lo único que sigue impidiendo el canje es lo que ya lo impedía
+        // antes de todo esto: bono caducado, agotado o de otro servicio.
+        //
+        // NOTA DE ALCANCE: el canje ocurre AL COBRAR, con el servicio ya
+        // prestado. Bloquear ahí no evitaba nada — solo impedía PAGAR con el
+        // bono a quien ya se había cortado el pelo. El aviso útil va al
+        // AGENDAR, y está pendiente (ver bitácora 20-ago).
+        // ──────────────────────────────────────────────────────────────
+        const DIA_MS = 86400000;
+        const madridDayMs = (ms) => {
+          const t = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' }); // YYYY-MM-DD
+          const p = t.split('-');
+          return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+        };
+        const fmtFecha = (ms) => new Date(ms).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
 
-        // ── REGLA 1: ESPERA MÍNIMA (v1.0.42, sin cambios) ──
-        // Días naturales (calendario Madrid) contra el redeemDate más
-        // reciente del bono en el ledger. El primer uso siempre pasa.
-        const intervaloDias = (typeof bono.bonusUseIntervalDays === 'number' && bono.bonusUseIntervalDays > 0)
+        // Ambas reglas necesitan el ledger. Se lee UNA sola vez.
+        const minDias = (typeof bono.bonusUseIntervalDays === 'number' && bono.bonusUseIntervalDays > 0)
           ? Math.floor(bono.bonusUseIntervalDays)
           : 0;
-        if (intervaloDias > 0) {
+        const maxDias = (typeof bono.bonusMaxIntervalDays === 'number' && bono.bonusMaxIntervalDays > 0)
+          ? Math.floor(bono.bonusMaxIntervalDays)
+          : 0;
+
+        let avisoCondiciones = '';   // '' = en regla (la UI no pinta nada)
+        let fueraDeCondiciones = false;
+
+        if (minDias > 0 || maxDias > 0) {
           let ultimoCanjeMs = null;
+          let canjesRealizados = null;
           try {
             const redRes = await wixData.query(CMS_VOUCHER_REDEMPTIONS)
               .eq('voucherId', bono._id)
               .limit(1000)
               .find({ suppressAuth: true });
-            for (const r of (redRes.items || [])) {
+            const items = redRes.items || [];
+            canjesRealizados = items.length;
+            for (const r of items) {
               if (!r.redeemDate) continue;
               const t = new Date(r.redeemDate).getTime();
               if (Number.isFinite(t) && (ultimoCanjeMs === null || t > ultimoCanjeMs)) ultimoCanjeMs = t;
             }
           } catch (e) {
-            console.warn(`${TAG} ⚠️ intervalo bono ${safeCode}: query ledger falló (${e.message}) — se permite el canje`);
+            canjesRealizados = null;
+            console.warn(`${TAG} ⚠️ condiciones bono ${safeCode}: ledger ilegible (${e.message}) — sin aviso`);
           }
-          if (ultimoCanjeMs !== null) {
-            const DIA_MS = 86400000;
-            const madridDayMs = (ms) => {
-              const s = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' }); // YYYY-MM-DD
-              const p = s.split('-');
-              return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
-            };
-            const ultimoDia = madridDayMs(ultimoCanjeMs);
-            const hoyDia = madridDayMs(ahora.getTime());
-            const diasTranscurridos = Math.round((hoyDia - ultimoDia) / DIA_MS);
-            if (diasTranscurridos < intervaloDias) {
-              const disponibleMs = ultimoDia + intervaloDias * DIA_MS;
-              const fmt = (ms) => new Date(ms).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
-              return {
-                ok: false,
-                version: VERSION,
-                error: {
-                  message: `Este bono admite un uso cada ${intervaloDias} días. Último uso: ${fmt(ultimoDia)}. Disponible desde: ${fmt(disponibleMs)}.`
-                }
-              };
-            }
-          }
-        }
 
-        // ── REGLA 2: PLAZO MÁXIMO POR USO (ventanas desde la emisión) ──
-        // Un bono de 4 usos con máximo 15 reparte cuatro ventanas fijas:
-        //   uso 1 → días 0-15 · uso 2 → 15-30 · uso 3 → 30-45 · uso 4 → 45-60
-        // Las ventanas NO se desplazan: adelantarse en un uso no corre los
-        // plazos siguientes.
-        //
-        //   ventanasVencidas = floor(díasDesdeEmisión / máximo)
-        //   perdidas         = ventanasVencidas − canjesRealizados  (mín 0)
-        //
-        // Se compara lo que DEBERÍA llevar consumido con lo que consumió; la
-        // diferencia se evapora. La pérdida PUEDE SER MAYOR QUE 1: quien
-        // aparece el día 65 con una sola sesión gastada pierde tres.
-        //
-        // ⚠️ REGLA DE DISEÑO NO VALIDADA AQUÍ: la caducidad total debe ser al
-        // menos usos × máximo. Con menos, las últimas ventanas no llegan a
-        // abrirse. Se avisa en el Editor de Servicios.
-        //
-        // Fail-open: si el ledger o issueDate no se pueden leer, NO se
-        // penaliza. Jamás quitar una sesión por un error de lectura.
-        const maxDias = (typeof bono.bonusMaxIntervalDays === 'number' && bono.bonusMaxIntervalDays > 0)
-          ? Math.floor(bono.bonusMaxIntervalDays)
-          : 0;
-        let sesionesPerdidas = 0;
-        let diasDesdeEmision = null;
-        if (maxDias > 0 && bono.issueDate) {
-          const emisionMs = new Date(bono.issueDate).getTime();
-          if (Number.isFinite(emisionMs)) {
-            let canjesRealizados = null;
-            try {
-              const redMax = await wixData.query(CMS_VOUCHER_REDEMPTIONS)
-                .eq('voucherId', bono._id)
-                .limit(1000)
-                .find({ suppressAuth: true });
-              canjesRealizados = (redMax.items || []).length;
-            } catch (e) {
-              canjesRealizados = null;
-              console.warn(`${TAG} ⚠️ plazo máximo bono ${safeCode}: query ledger falló (${e.message}) — no se penaliza`);
-            }
-            if (canjesRealizados !== null) {
-              const DIA_MS = 86400000;
-              const madridDayMs = (ms) => {
-                const s = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-                const p = s.split('-');
-                return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
-              };
-              diasDesdeEmision = Math.round((madridDayMs(ahora.getTime()) - madridDayMs(emisionMs)) / DIA_MS);
-              const ventanasVencidas = Math.floor(diasDesdeEmision / maxDias);
-              sesionesPerdidas = Math.max(0, ventanasVencidas - canjesRealizados);
-              if (sesionesPerdidas > remaining) sesionesPerdidas = remaining;
-              if (sesionesPerdidas > 0 && sesionesPerdidas >= remaining) {
-                return {
-                  ok: false,
-                  version: VERSION,
-                  error: {
-                    message: `Este bono admite un uso cada ${maxDias} días como máximo y han pasado ${diasDesdeEmision} desde su compra. Las ${remaining} sesión(es) pendiente(s) se pierden por demora y el bono queda agotado.`
-                  }
-                };
+          if (canjesRealizados !== null) {
+            const hoyDia = madridDayMs(ahora.getTime());
+            const avisos = [];
+
+            // Espera mínima: días naturales desde el último canje.
+            if (minDias > 0 && ultimoCanjeMs !== null) {
+              const ultimoDia = madridDayMs(ultimoCanjeMs);
+              const transcurridos = Math.round((hoyDia - ultimoDia) / DIA_MS);
+              if (transcurridos < minDias) {
+                avisos.push(`Este bono contempla dejar ${minDias} días entre sesiones y han pasado ${transcurridos}. Según sus condiciones estaría disponible el ${fmtFecha(ultimoDia + minDias * DIA_MS)}.`);
               }
+            }
+
+            // Plazo máximo: ventanas correlativas desde la emisión.
+            if (maxDias > 0 && bono.issueDate) {
+              const emisionMs = new Date(bono.issueDate).getTime();
+              if (Number.isFinite(emisionMs)) {
+                const dias = Math.round((hoyDia - madridDayMs(emisionMs)) / DIA_MS);
+                const ventanasVencidas = Math.floor(dias / maxDias);
+                const retrasadas = ventanasVencidas - canjesRealizados;
+                if (retrasadas > 0) {
+                  avisos.push(`Este bono contempla usar cada sesión antes de ${maxDias} días. Han pasado ${dias} desde la compra y lleva ${canjesRealizados} sesión(es) usada(s): va ${retrasadas} por detrás del ritmo previsto.`);
+                }
+              }
+            }
+
+            if (avisos.length) {
+              fueraDeCondiciones = true;
+              avisoCondiciones = avisos.join(' ');
+              console.log(`${TAG} ℹ️ Bono ${safeCode} fuera de condiciones (informativo, NO bloquea): ${avisoCondiciones}`);
             }
           }
         }
@@ -4890,16 +4846,13 @@ export const aplicarCanjeProducto = webMethod(
           nuevoImporte,
           descripcionToken: `Bono ${bono.code} cubre ${labelActual} (-${ahorro.toFixed(2)}€)`,
           usesBefore: remaining,
-          usesAfter: remaining - sesionesPerdidas - 1,
-          // v1.0.52 — la UI avisa ANTES de confirmar: con ventanas vencidas
-          // este canje resta la sesión usada MÁS las evaporadas.
-          frecuenciaMinDias: intervaloDias,
-          frecuenciaMaxDias: maxDias,
-          frecuenciaDiasDesdeEmision: diasDesdeEmision,
-          sesionesPerdidas,
-          avisoFrecuencia: sesionesPerdidas > 0
-            ? `Han pasado ${diasDesdeEmision} días desde la compra con un plazo de ${maxDias} por uso: se pierde(n) ${sesionesPerdidas} sesión(es) por demora.`
-            : ''
+          usesAfter: remaining - 1,
+          // v1.0.53 — condiciones de uso, SOLO INFORMATIVAS. El canje nunca
+          // se bloquea por ellas y nunca restan sesiones de más.
+          condicionMinDias: minDias,
+          condicionMaxDias: maxDias,
+          fueraDeCondiciones,
+          avisoCondiciones
         };
       }
 
@@ -5143,54 +5096,9 @@ export const confirmarCanjeProducto = webMethod(
           // amountSaved=0 como fallback (la trazabilidad fina vive en PaymentReservations.descripcion)
         }
 
-        // v1.0.52 — SESIONES EVAPORADAS POR VENTANA VENCIDA.
-        // Se RECALCULA aquí, no se confía en lo que mandó la UI: confirmar es
-        // el punto que escribe, y aplicarCanjeProducto pudo ejecutarse hace
-        // rato (o no ejecutarse). Misma regla exacta que allí: ventanas
-        // absolutas desde issueDate, perdidas = vencidas − canjes previos.
-        // Fail-open si el ledger o issueDate no se pueden leer.
-        let sesionesPerdidas = 0;
-        {
-          const maxDias = (typeof bono.bonusMaxIntervalDays === 'number' && bono.bonusMaxIntervalDays > 0)
-            ? Math.floor(bono.bonusMaxIntervalDays)
-            : 0;
-          if (maxDias > 0 && bono.issueDate) {
-            const emisionMs = new Date(bono.issueDate).getTime();
-            if (Number.isFinite(emisionMs)) {
-              let canjesRealizados = null;
-              try {
-                const redPrev = await wixData.query(CMS_VOUCHER_REDEMPTIONS)
-                  .eq('voucherId', bono._id)
-                  .limit(1000)
-                  .find({ suppressAuth: true });
-                canjesRealizados = (redPrev.items || []).length;
-              } catch (e) {
-                canjesRealizados = null;
-                console.warn(`${TAG} ⚠️ frecuencia bono ${safeCode}: ledger ilegible (${e.message}) — no se penaliza`);
-              }
-              if (canjesRealizados !== null) {
-                const DIA_MS = 86400000;
-                const madridDayMs = (ms) => {
-                  const s = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-                  const p = s.split('-');
-                  return Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
-                };
-                const dias = Math.round((madridDayMs(ahora.getTime()) - madridDayMs(emisionMs)) / DIA_MS);
-                const ventanasVencidas = Math.floor(dias / maxDias);
-                sesionesPerdidas = Math.max(0, ventanasVencidas - canjesRealizados);
-                const vivas = Number(bono.remainingUses) || 0;
-                if (sesionesPerdidas > vivas) sesionesPerdidas = vivas;
-                if (sesionesPerdidas > 0) {
-                  console.log(`${TAG} ⏳ Bono ${safeCode}: ${dias}d desde emisión, plazo ${maxDias}d/uso, ${ventanasVencidas} ventana(s) vencida(s) y ${canjesRealizados} canje(s) → pierde ${sesionesPerdidas} sesión(es)`);
-                }
-              }
-            }
-          }
-        }
-
         // READ-MERGE-UPDATE bono: decrementar usos + estado AGOTADO si llega a 0
         const usesBefore = Number(bono.remainingUses) || 0;
-        const usesAfter = Math.max(0, usesBefore - 1 - sesionesPerdidas);
+        const usesAfter = Math.max(0, usesBefore - 1);
         bono.remainingUses = usesAfter;
         if (usesAfter === 0) {
           bono.status = STATUS_VOUCHER_AGOTADO;
@@ -5213,7 +5121,7 @@ export const confirmarCanjeProducto = webMethod(
         };
         await wixData.insert(CMS_VOUCHER_REDEMPTIONS, redemption, { suppressAuth: true });
 
-        console.log(`${TAG} ✅ Bono ${safeCode} canjeado | reserva ${safeRes} | usos ${usesBefore}→${usesAfter}${sesionesPerdidas ? ` (+${sesionesPerdidas} perdida(s) por demora)` : ''} | ahorro ${amountSaved}€${usesAfter === 0 ? ' | AGOTADO' : ''}`);
+        console.log(`${TAG} ✅ Bono ${safeCode} canjeado | reserva ${safeRes} | usos ${usesBefore}→${usesAfter} | ahorro ${amountSaved}€${usesAfter === 0 ? ' | AGOTADO' : ''}`);
         return {
           ok: true,
           version: VERSION,
