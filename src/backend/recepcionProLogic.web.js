@@ -4673,7 +4673,7 @@ export const aplicarCanjeProducto = webMethod(
           }
         }
 
-        // ── v1.0.53 — DOS CONDICIONES DE USO, SOLO INFORMATIVAS ─────
+        // ── v1.0.53 — DOS CONDICIONES DE USO, SOLO INFORMATIVAS ─────────
         // Decisión de Jal (20-ago-2026): NINGÚN CANDADO. El sistema informa,
         // el salón decide. Un salón de barrio no es Netflix: enfermedad,
         // confusión, la clienta de toda la vida a la que se le niega el
@@ -4701,7 +4701,7 @@ export const aplicarCanjeProducto = webMethod(
         // prestado. Bloquear ahí no evitaba nada — solo impedía PAGAR con el
         // bono a quien ya se había cortado el pelo. El aviso útil va al
         // AGENDAR, y está pendiente (ver bitácora 20-ago).
-        // ──────────────────────────────────────────────────────────────
+        // ─────────────────────────────────────────────────────────────────
         const DIA_MS = 86400000;
         const madridDayMs = (ms) => {
           const t = new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' }); // YYYY-MM-DD
