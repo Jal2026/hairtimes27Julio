@@ -1,10 +1,60 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.7
-// TAG: facturacion-salon-v1.0.7
+// VERSION: 1.0.8
+// TAG: facturacion-salon-v1.0.8
 // =============================================================
 // CHANGELOG:
+// v1.0.8 (2026-08-27) — UN SOLO DOCUMENTO POR CITA: SERVICIOS + PRODUCTOS.
+//   PROBLEMA REPORTADO POR HAIR-TIMES (27-ago-2026): se vende un producto
+//   desde el modal de la cita y, al emitir la factura de esa cita, el
+//   producto no aparece ni suma. Causa: la venta se registra en
+//   PaymentReservations como fila INDEPENDIENTE (bookingId = orderId de la
+//   orden de tienda, staff 'TIENDA'), mientras que la emisión en modo
+//   reserva leía UNA sola fila, la del cobro de la cita
+//   (bookingId = KRI_<reservaId>). El producto quedaba fuera del importe y
+//   de las líneas.
+//
+//   CAMBIO: en modo reserva el documento agrupa AHORA todos los cobros
+//   vigentes de esa cita:
+//     · el cobro de la cita  → KRI_<reservaId>   (obligatorio, como antes)
+//     · las ventas de producto hechas DESDE esa cita → filas con
+//       `reservaId` = <reservaId> (campo escrito por tiendaProductos
+//       v1.5.14; REQUIERE esa versión desplegada y el campo CMS).
+//   `totalAmount` pasa a ser la suma de los importes vigentes, y las
+//   líneas del documento son la concatenación de las de cada cobro. El
+//   desglose de IVA y el reescalado proporcional siguen operando sobre ese
+//   total, así que la factura cuadra igual que antes.
+//
+//   MÉTODO DE PAGO: cada cobro conserva el suyo. Si todos coinciden, el
+//   documento muestra ese método, exactamente como hasta hoy. Si difieren
+//   (servicios con tarjeta, producto en efectivo), se compone un texto con
+//   el importe de cada método. Solo se imprime en el PDF; ningún otro
+//   módulo consume `Invoices.paymentMethod`.
+//
+//   FUERA DE ALCANCE, POR DECISIÓN DE JAL (27-ago-2026, hablado y
+//   confirmado antes de escribir este código):
+//     · Los ESPECIALES (bonos, PRIME, tarjetas) NO se agrupan.
+//     · Las ventas hechas desde el botón TIENDA (sin cita) siguen
+//       emitiendo su propio documento, como hasta ahora. El criterio de
+//       agrupación es "vendido desde esta cita", NUNCA "mismo cliente el
+//       mismo día": ese criterio es el que en su día colgó ventas de citas
+//       ya cerradas.
+//     · No cambia cuándo ni cómo se cobra: el producto se sigue cobrando
+//       en el acto y la cita después. El documento solo los agrupa.
+//
+//   LÍMITE CONOCIDO: un producto vendido DESPUÉS de emitir el documento no
+//   entra en él (la idempotencia lo devuelve como duplicado). Ese caso se
+//   factura desde el botón TIENDA.
+//
+//   RETROCOMPATIBILIDAD: las ventas anteriores a v1.5.14 no tienen
+//   `reservaId`, así que no se agrupan y las citas ya cobradas de días
+//   anteriores facturan solo los servicios, igual que hoy.
+//
+//   NO SE TOCA: numeración, series, idempotencia, upgrade ticket→factura,
+//   generación y subida del PDF, resolución de URL HTTPS, campos Verifactu,
+//   modo tienda (sourceType='tienda') ni la firma de los seis webMethods.
+//
 // v1.0.7 (2026-08-14) — ÍNDICE DE DOCUMENTOS para listados.
 //   NEW listarIndiceDocumentos(): devuelve UNA fila ligera por documento
 //   vigente {key, modo, invoiceNumber}, para que el Editor de Cobros
@@ -245,7 +295,7 @@ import { jsPDF } from 'jspdf';
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.7';
+const VERSION = '1.0.8';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -390,6 +440,43 @@ async function _leerPagoPorBookingId(bookingId) {
   return await _pagoVigente(bookingId);
 }
 
+// v1.0.8 — Ventas de producto hechas DESDE una cita.
+// tiendaProductos v1.5.14 graba en cada fila de venta el `reservaId` de la
+// cita en la que se vendió. Aquí se leen esas filas para que el documento
+// fiscal de la cita incluya el producto: es la misma visita del mismo
+// cliente y le corresponde un único documento.
+//
+// Criterio de vínculo: el campo `reservaId`, NO la coincidencia de cliente
+// y fecha. Una venta hecha desde el botón TIENDA no lo lleva y por tanto
+// nunca se cuela en la factura de una cita.
+//
+// Se descartan las filas no activas (anuladas y sus reversiones) con el
+// mismo criterio que `_pagoVigente`, y por seguridad también la propia fila
+// del cobro de la cita, por si algún día llevara este campo relleno: se
+// lee aparte y sumarla dos veces duplicaría el importe.
+async function _ventasDeReserva(reservaId) {
+  if (!reservaId) return [];
+  try {
+    const r = await wixData.query(COL_PAGOS)
+      .eq('reservaId', reservaId)
+      .find(CMS_OPTS);
+    const items = (r && r.items) ? r.items : [];
+    const out = items
+      .filter(_cobroActivo)
+      .filter(it => !String(it.bookingId || '').startsWith(PREFIJO_PAGO));
+    if (out.length) {
+      console.log(`${TAG} 🛒 Reserva ${String(reservaId).substring(0, 8)}: ${out.length} venta(s) de producto vinculada(s)`);
+    }
+    return out;
+  } catch (e) {
+    // Best-effort: si esta lectura falla, el documento se emite con los
+    // servicios, que es exactamente el comportamiento de v1.0.7. Nunca se
+    // bloquea una emisión por no poder leer los productos.
+    console.warn(`${TAG} Error leyendo ventas de la reserva: ${e.message}`);
+    return [];
+  }
+}
+
 // Lee contacto CRM v2 elevado. Devuelve null si falla.
 async function _leerContacto(contactId) {
   if (!contactId) return null;
@@ -493,6 +580,28 @@ function _parsearLineasFacturables(descripcion) {
     });
   }
   return out;
+}
+
+// v1.0.8 — Texto del método de pago del documento.
+// Con un único cobro, o con todos los cobros pagados de la misma forma,
+// devuelve ese método tal cual: idéntico a v1.0.7.
+// Si la cita se pagó de una forma y el producto de otra, el documento no
+// puede afirmar una sola, así que se enumeran con su importe
+// ("Tarjeta 45,00 € · Efectivo 24,95 €"). Solo se imprime en el PDF.
+function _componerMetodoPago(pago, ventas) {
+  const cobros = [pago].concat(Array.isArray(ventas) ? ventas : []);
+  const porMetodo = new Map();
+  for (const c of cobros) {
+    const m = String((c && c.tipoPago) || '').trim();
+    if (!m) continue;
+    const imp = Number(c.importeTotal) || 0;
+    porMetodo.set(m, _round2((porMetodo.get(m) || 0) + imp));
+  }
+  if (porMetodo.size === 0) return String(pago.tipoPago || '');
+  if (porMetodo.size === 1) return Array.from(porMetodo.keys())[0];
+  return Array.from(porMetodo.entries())
+    .map(([m, imp]) => `${m} ${_formatEUR(imp)}`)
+    .join(' · ');
 }
 
 // Desglosa un total con IVA incluido en base + cuota.
@@ -963,7 +1072,14 @@ async function _emitirDocumento({ reservaId, modo, vatId, legalName, sourceType,
       error: esVenta ? 'No se encontró el cobro de esta venta.' : 'No se encontró el cobro de esta reserva.'
     };
   }
-  const totalAmount = _round2(pago.importeTotal);
+  // v1.0.8 — Ventas de producto hechas desde esta cita. En modo tienda no
+  // aplica: ahí el cobro leído YA es la venta.
+  const ventas = esVenta ? [] : await _ventasDeReserva(reservaId);
+  const totalVentas = _round2(
+    ventas.reduce((acc, v) => acc + (Number(v.importeTotal) || 0), 0)
+  );
+
+  const totalAmount = _round2(_round2(pago.importeTotal) + totalVentas);
   if (totalAmount <= 0) {
     return { ok: false, version: VERSION, error: 'El importe cobrado es cero — no se puede emitir documento.' };
   }
@@ -987,6 +1103,32 @@ async function _emitirDocumento({ reservaId, modo, vatId, legalName, sourceType,
 
   // ── 7. Parsear líneas facturables ────────────────────────
   const lineas = _parsearLineasFacturables(pago.descripcion || '');
+  // v1.0.8 — Se añaden las líneas de cada venta de producto vinculada a la
+  // cita, en el mismo formato. `_parsearLineasFacturables` ya reconoce el
+  // token 🛒 y las marca con tipo 'producto', que es lo que Verifactu usa
+  // para elegir la descripción de la operación (servicios / productos /
+  // mixto). Van después de los servicios: primero lo que se hizo, luego lo
+  // que se llevó.
+  for (const v of ventas) {
+    const lv = _parsearLineasFacturables(v.descripcion || '');
+    if (lv.length) {
+      lineas.push(...lv);
+    } else {
+      // Venta sin descripción parseable: no se pierde el importe, entra
+      // como una línea genérica. Sin esto, el reescalado repartiría ese
+      // dinero entre los servicios y el detalle mentiría.
+      const imp = _round2(v.importeTotal);
+      if (imp > 0) {
+        lineas.push({
+          nombre: 'Producto',
+          cantidad: 1,
+          subtotal: imp,
+          precioUnit: imp,
+          tipo: 'producto'
+        });
+      }
+    }
+  }
   if (lineas.length === 0) {
     // Fallback: si la descripción está vacía, una línea genérica
     lineas.push({
@@ -1091,7 +1233,7 @@ async function _emitirDocumento({ reservaId, modo, vatId, legalName, sourceType,
     vatRate:     salonCfg.vatRate,
     vatAmount:   ivaDesglose.cuota,
     totalAmount,
-    paymentMethod: String(pago.tipoPago || ''),
+    paymentMethod: _componerMetodoPago(pago, ventas),
 
     issueDate,
     status: 'emitida',
