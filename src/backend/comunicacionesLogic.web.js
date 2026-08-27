@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  comunicacionesLogic.web.js — Centralita de Comunicaciones     ║
-// ║  KAMISUITE · v1.2.0                                            ║
+// ║  KAMISUITE · v1.3.0                                            ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: Orquestador único de todas las comunicaciones con clientes.
@@ -8,11 +8,28 @@
 // (confirmación, recordatorio, cancelación...) y esta centralita
 // decide qué canales disparar según SalonConfig.
 //
-// CANALES SOPORTADOS v1.2.0:
-//   - Email Wix Triggered (triggeredEmails)
-//   - WhatsApp Cloud API (vía whatsappLogic.web.js v1.2.0)
+// CANALES SOPORTADOS v1.3.0:
+//   - Email: enrutado por SalonConfig.emailProvider
+//       · 'brevo' → Brevo con plantilla de CMS (brevoLogic.web.js)
+//       · 'wix' / vacío → Wix Triggered Emails (comportamiento previo)
+//   - WhatsApp Cloud API (vía whatsappLogic.web.js)
 //
 // CHANGELOG:
+//   v1.3.0 (27-Ago-2026) — Enrutado de email Wix ⇄ Brevo (confirmación)
+//     - Nuevo canal _enviarEmailBrevo: envía la CONFIRMACIÓN usando la
+//       plantilla HTML de SalonConfig.layoutBooking vía brevoLogic
+//       (enviarEmailPlantilla). Reply-to a SalonConfig.generalEmail.
+//     - notificarConfirmacion decide el canal de email según
+//       SalonConfig.emailProvider: 'brevo' → Brevo, resto → Wix triggered.
+//       Hair-Times permanece en Wix hasta que su SalonConfig sea 'brevo'.
+//     - El filtro de email ficticio (_esEmailFicticio) se aplica también
+//       en el camino Brevo, antes de llamar al driver.
+//     - El log de CommunicationLog para el envío Brevo lo hace la propia
+//       centralita (campos ricos), no brevoLogic. Sin doble log.
+//     - notificarRecordatorio SIN CAMBIOS: su email lo gestiona
+//       reminderLogic (cascada) y llega con canalesExcluidos:['email'].
+//     - WhatsApp, cancelación y modificación: intactos.
+//
 //   v1.2.0 (10-May-2026) — Plantillas multi-tenant con 8 parámetros
 //     - El driver WhatsApp ahora espera `fechaHora` combinado en formato
 //       largo ("Martes 9 de junio a las 10:00") en lugar de `fecha` +
@@ -38,13 +55,18 @@ import {
   enviarTemplateConfirmacion,
   enviarTemplateRecordatorio
 } from 'backend/whatsappLogic.web.js';
+// v1.3.0: driver de email por plantilla (Brevo)
+import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 
 // ─── CONSTANTES ──────────────────────────────────────────────────
-const VERSION = '1.2.0';
-const TAG = '[COMMS v1.2.0]';
+const VERSION = '1.3.0';
+const TAG = '[COMMS v1.3.0]';
 const SALON_CONFIG_COLLECTION = 'SalonConfig';
 const COMMUNICATION_LOG_COLLECTION = 'CommunicationLog';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+
+// v1.3.0: campo de SalonConfig con la plantilla HTML de confirmación
+const TEMPLATE_FIELD_CONFIRMACION = 'layoutBooking';
 
 const CANALES_VALIDOS = new Set(['email', 'whatsapp']);
 
@@ -233,12 +255,64 @@ async function _enviarEmailTriggered({ contactId, email, templateId, variables, 
   }
 }
 
+// ─── CANAL: EMAIL BREVO (plantilla de CMS) ──────────────────────
+/**
+ * v1.3.0: envía email usando la plantilla HTML de SalonConfig
+ * (templateField) vía brevoLogic.enviarEmailPlantilla.
+ *
+ * - Respeta canalesExcluidos y emailActive (igual que el camino Wix).
+ * - Aplica el filtro de email ficticio ANTES de llamar al driver.
+ * - Reply-to = generalEmail (lo resuelve brevoLogic por defecto).
+ * - El log en CommunicationLog lo hace aquí la centralita (campos ricos);
+ *   enviarEmailPlantilla no loguea para evitar doble registro.
+ */
+async function _enviarEmailBrevo({ email, nombreCliente, templateField, subject, variables, event, logData, canalesExcluidosSet }, config) {
+  if (canalesExcluidosSet && canalesExcluidosSet.has('email')) {
+    console.log(TAG, 'Canal email excluido por el caller, no se envía (Brevo)');
+    return;
+  }
+
+  if (!config.emailActive) {
+    console.log(TAG, 'Canal email desactivado en SalonConfig (Brevo)');
+    return;
+  }
+
+  if (_esEmailFicticio(email, config)) {
+    console.log(TAG, 'Email ficticio/vacío, no se envía (Brevo):', email || '(vacío)');
+    return;
+  }
+
+  try {
+    const r = await enviarEmailPlantilla({
+      to:            email,
+      toName:        nombreCliente || '',
+      templateField: templateField,
+      subject:       subject,
+      variables:     variables || {},
+      replyTo:       config.generalEmail || '',
+      event:         event || (logData && logData.event) || 'email'
+    });
+
+    if (r && r.ok) {
+      console.log(TAG, 'Email Brevo enviado OK →', email);
+      await _registrarLog({ ...logData, channel: 'email', recipient: email, result: 'ok' });
+    } else {
+      const err = (r && r.error) || 'error desconocido Brevo';
+      console.error(TAG, 'Error enviando email Brevo:', err);
+      await _registrarLog({ ...logData, channel: 'email', recipient: email, result: 'error', errorDetail: err });
+    }
+  } catch (e) {
+    console.error(TAG, 'Excepción enviando email Brevo:', e.message);
+    await _registrarLog({ ...logData, channel: 'email', recipient: email, result: 'error', errorDetail: e.message });
+  }
+}
+
 // ─── CANAL: WHATSAPP ────────────────────────────────────────────
 /**
- * Envía WhatsApp vía whatsappLogic.web.js v1.2.0.
+ * Envía WhatsApp vía whatsappLogic.web.js.
  *
- * v1.2.0: el driver espera ahora `fechaHora` combinado (string único)
- * en lugar de `fecha` + `hora` separados. La centralita lo compone aquí.
+ * El driver espera `fechaHora` combinado (string único) en lugar de
+ * `fecha` + `hora` separados. La centralita lo compone aquí.
  * Los datos del salón (brandName, address, etc.) los lee el driver
  * directamente de SalonConfig, no se pasan en `datosTemplate`.
  */
@@ -258,7 +332,7 @@ async function _enviarWhatsApp({ telefono, tipo, datosTemplate, logData, canales
     return;
   }
 
-  // v1.2.0: componer fechaHora en formato largo
+  // Componer fechaHora en formato largo
   const fechaHora = _formatearFechaHoraLarga(datosTemplate.fecha, datosTemplate.hora);
 
   try {
@@ -290,17 +364,27 @@ async function _enviarWhatsApp({ telefono, tipo, datosTemplate, logData, canales
   }
 }
 
+// ─── SELECTOR DE CANAL EMAIL (Wix ⇄ Brevo) ──────────────────────
+// v1.3.0: decide el proveedor de email según SalonConfig.emailProvider.
+// Solo 'brevo' activa Brevo; cualquier otro valor (o vacío) → Wix.
+function _usarBrevo(config) {
+  return String(config.emailProvider || '').toLowerCase().trim() === 'brevo';
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // ║  FUNCIONES PÚBLICAS — API POR EVENTO DE NEGOCIO               ║
 // ═══════════════════════════════════════════════════════════════════
 
 /**
  * CONFIRMACIÓN DE RESERVA
- * Llamar desde coloracionLogic, tratamientosLogic, simplesLogic, akiraAcciones
- * después de confirmar el booking.
+ * Llamar desde recepcionProLogic, widgetPublicoLogic, simplesLogic,
+ * akiraAcciones, etc. después de confirmar el booking.
+ *
+ * v1.3.0: el email sale por Brevo (plantilla layoutBooking) o por Wix
+ * triggered según SalonConfig.emailProvider. WhatsApp igual que antes.
  *
  * @param {object} datos
- * @param {string} datos.contactId - Wix CRM contactId
+ * @param {string} datos.contactId - Wix CRM contactId (solo Wix triggered)
  * @param {string} datos.email - Email del cliente (puede ser ficticio)
  * @param {string} datos.telefono - Teléfono del cliente
  * @param {string} datos.nombreCliente - Nombre del cliente
@@ -308,7 +392,7 @@ async function _enviarWhatsApp({ telefono, tipo, datosTemplate, logData, canales
  * @param {string} datos.hora - Hora de la cita (ej: "10:30")
  * @param {string} datos.servicios - Descripción de servicios (ej: "Tinte + Corte")
  * @param {string} datos.estilista - Nombre del profesional
- * @param {object} [datos.emailVariables] - Variables adicionales para el template Wix
+ * @param {object} [datos.emailVariables] - Marcadores del email (${Fecha}, ${Nombre}...)
  * @param {string[]} [datos.canalesExcluidos] - Canales a omitir: ['email'], ['whatsapp']
  */
 export const notificarConfirmacion = webMethod(
@@ -345,15 +429,29 @@ export const notificarConfirmacion = webMethod(
       siteUrl:    config.siteUrl || ''
     };
 
+    // v1.3.0: seleccionar canal de email según emailProvider
+    const emailTask = _usarBrevo(config)
+      ? _enviarEmailBrevo({
+          email:         datos.email,
+          nombreCliente: datos.nombreCliente,
+          templateField: TEMPLATE_FIELD_CONFIRMACION,
+          subject:       config.subjectBooking || `Confirmación de tu cita · ${config.brandName || ''}`,
+          variables:     emailVariables,
+          event:         'confirmacion',
+          logData,
+          canalesExcluidosSet
+        }, config)
+      : _enviarEmailTriggered({
+          contactId:  datos.contactId,
+          email:      datos.email,
+          templateId: config.confirmationTemplateId,
+          variables:  emailVariables,
+          logData,
+          canalesExcluidosSet
+        }, config);
+
     await Promise.allSettled([
-      _enviarEmailTriggered({
-        contactId:  datos.contactId,
-        email:      datos.email,
-        templateId: config.confirmationTemplateId,
-        variables:  emailVariables,
-        logData,
-        canalesExcluidosSet
-      }, config),
+      emailTask,
 
       _enviarWhatsApp({
         telefono:      datos.telefono,
@@ -382,7 +480,8 @@ export const notificarConfirmacion = webMethod(
  *
  * NOTA: reminderLogic mantiene su propia lógica de cascada de candidatos
  * para email. Típicamente lo llama con canalesExcluidos: ['email'] para
- * que la centralita solo dispare WhatsApp.
+ * que la centralita solo dispare WhatsApp. Por eso este email sigue en
+ * Wix triggered y NO se ha migrado a Brevo en v1.3.0.
  */
 export const notificarRecordatorio = webMethod(
   Permissions.SiteMember,
