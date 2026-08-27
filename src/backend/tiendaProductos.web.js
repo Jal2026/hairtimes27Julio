@@ -2,7 +2,7 @@
 // KAMISUITE - Tienda Productos (Backend)
 // =====================================================
 // Archivo: tiendaProductos.web.js
-// Versión: 1.5.13
+// Versión: 1.5.14
 // =====================================================
 // v1.1: wixData Stores/Products + generalInfo pickup
 // v1.2: + contactos + buyerInfo + addPayments (order visible)
@@ -81,6 +81,30 @@
 //       NO se tocan registrarVenta, generarFacturaProducto,
 //       obtenerHistorialVentas, cargarContactosTienda ni el bloque
 //       CMS-first de PaymentReservations.
+// v1.5.14: VÍNCULO REAL VENTA ↔ CITA — campo `reservaId`.
+//       La venta hecha desde el modal de una cita se registraba en
+//       PaymentReservations SIN ninguna referencia a esa cita: el
+//       `bookingId` de la fila es el orderId de la orden de tienda y
+//       `packId` (que sí llega en la llamada) solo viajaba dentro del
+//       buyerNote de la orden de Wix Stores, inaccesible para el resto
+//       del sistema. Consecuencias en producción: la ficha de la cita no
+//       podía mostrar el producto sin recurrir a una heurística por
+//       cliente y fecha (retirada en recepcionProLogic v1.0.47 porque
+//       colgaba ventas de citas ya cerradas), y el documento fiscal de
+//       la cita se emitía solo con los servicios, dejando fuera el
+//       producto vendido en esa misma visita (reportado por Hair-Times
+//       el 27-ago-2026).
+//       Cambio: `venderProductosDesdeAgenda` escribe `packId` en el campo
+//       CMS nuevo `reservaId` (Texto) de PaymentReservations. Es el mismo
+//       identificador de KamisuiteReservations que usa el resto del
+//       sistema, sin prefijo KRI_ (el prefijo es de bookingId, no de este
+//       campo).
+//       `registrarVenta` (tienda standalone, staff TIENDA_POS) NO se toca:
+//       esa venta no pertenece a ninguna cita por definición.
+//       Aditivo puro: filas anteriores quedan con el campo vacío y se
+//       comportan exactamente como hasta ahora.
+//       REQUIERE campo `reservaId` (Texto) en PaymentReservations.
+//
 // v1.5.13: TRAZABILIDAD DEL VENDEDOR — campo `soldBy`.
 //       El registro de venta en PaymentReservations usa `staff` como
 //       DISCRIMINADOR de tipo ('TIENDA' desde la agenda, 'TIENDA_POS'
@@ -128,7 +152,7 @@ import { invoices } from 'wix-billing-backend';
 import { getProductVariants } from 'wix-stores-backend';
 
 const TAG = '[TiendaProductos]';
-const VERSION = "1.5.13";
+const VERSION = "1.5.14";
 
 // AppId de Wix Stores para catalogReference en eCommerce
 const STORES_APP_ID = '215238eb-22a5-4c36-9e7b-e7c08025e04e';
@@ -1427,7 +1451,12 @@ export const venderProductosDesdeAgenda = webMethod(
             contactId: contactId || '',
             desglosemetodopago: desglosemetodopago || '',
             invoiceId: invoiceId || '',
-            soldBy: String(soldBy || '').trim()   // v1.5.13
+            soldBy: String(soldBy || '').trim(),  // v1.5.13
+            // v1.5.14 — cita a la que pertenece esta venta. Vacío cuando
+            // la venta no nace de una cita. Lo consumen la ficha de la
+            // cita (recepcionProLogic) y el documento fiscal
+            // (facturacionSalonLogic), que ya no dependen de heurísticas.
+            reservaId: String(packId || '').trim()
           };
 
           await wixData.insert(COLECCION_PAGOS, registroPago);
