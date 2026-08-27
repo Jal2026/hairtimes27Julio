@@ -1,9 +1,32 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.54
+// VERSION: 1.0.55
 // FECHA: 26 de agosto de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.55: 🛒 EL PRODUCTO VUELVE A LA FICHA DE LA CITA, YA SIN HEURÍSTICA.
+//          La v1.0.47 eliminó el cruce de productos vendidos porque era
+//          heurístico —mismo cliente, mismo día, pegado a la cita más
+//          cercana en el tiempo— y colgaba de una cita ya cerrada una venta
+//          hecha después desde TIENDA. Ese diagnóstico era correcto; la
+//          solución no: borrar el dato de la pantalla dejó además el
+//          documento fiscal de la cita sin el producto (reportado por
+//          Hair-Times el 27-ago-2026).
+//          Ahora existe un vínculo real: tiendaProductos v1.5.14 graba el
+//          `reservaId` de la cita en la fila de venta. `getReservasPorFecha`
+//          cruza por ESE campo con UNA sola query `hasSome('reservaId', …)`
+//          sobre los ids del día, mismo patrón que el cruce de promociones.
+//          Una venta hecha desde el botón TIENDA no lleva el campo y por
+//          tanto NUNCA aparece en una cita.
+//          Devuelve `productosVendidos: [{nombre, cantidad, subtotal,
+//          metodoPago, fechaPago, staff}]` por reserva. El widget las pinta
+//          como ya cobradas y NO las suma al total pendiente de la cita:
+//          son un cobro independiente que ya entró en caja.
+//          Las filas anteriores a v1.5.14 no tienen `reservaId`: no
+//          aparecen, sin ruido ni falsos positivos.
+//          No-blocking: si la query falla, cada reserva conserva su array
+//          vacío y la agenda carga igual.
 //
 // v1.0.54: 🔎 BUSCAR ANTES DE CREAR en ensureContactInCRM.
 //          SÍNTOMA: en el modal de cita de Recepción PRO, el botón FICHA
@@ -1280,7 +1303,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.54';
+const VERSION = '1.0.55';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -2809,7 +2832,8 @@ export const getReservasPorFecha = webMethod(
         lineWeights: jsonIn(item.lineWeights, 'items'),
         tienePromoServicio: false,               // v1.0.19 — se rellena abajo si aplica
         descuentoServicioTotal: 0,               // v1.0.19 — suma del ahorro
-        serviciosPromo: []                       // v1.0.19 — detalle de servicios con promo
+        serviciosPromo: [],                      // v1.0.19 — detalle de servicios con promo
+        productosVendidos: []                    // v1.0.55 — se rellena abajo si aplica
       }));
 
 
@@ -2900,8 +2924,68 @@ export const getReservasPorFecha = webMethod(
         console.warn(`${TAG} ⚠ cruce promo (no-blocking):`, ePromo.message);
       }
 
+      // v1.0.55 — Cruce con las ventas de producto hechas DESDE estas citas.
+      // UNA sola query con `hasSome('reservaId', idsDelDia)`: el vínculo es
+      // el campo `reservaId` que escribe tiendaProductos v1.5.14, no una
+      // coincidencia de cliente y fecha. Las filas anteriores a esa versión
+      // no lo tienen y simplemente no salen.
+      // Se descartan las filas anuladas y sus reversiones con el mismo
+      // criterio que el resto del sistema: `estadoCobro` vacío = ACTIVO.
+      try {
+        const idsDia = reservas.map(r => r._id).filter(Boolean);
+        if (idsDia.length > 0) {
+          const ventasRes = await wixData.query(CMS_PAGOS)
+            .hasSome('reservaId', idsDia)
+            .limit(500)
+            .find({ suppressAuth: true });
+
+          const porReserva = {};
+          for (const it of (ventasRes.items || [])) {
+            const rid = String(it.reservaId || '').trim();
+            if (!rid) continue;
+            const estado = String(it.estadoCobro || '').trim().toUpperCase();
+            if (estado !== '' && estado !== 'ACTIVO') continue;
+
+            // La descripción llega como "🛒 Nombre (X€), 🛒 Otro x2 (Y€)".
+            // Mismo criterio de parseo que el cierre y que la facturación.
+            const desc = String(it.descripcion || '');
+            for (const raw of desc.split(/,\s*/)) {
+              const token = raw.trim();
+              if (!token.startsWith('🛒')) continue;
+              const m = token.match(/^🛒\s*(.+?)\s*\(\s*([\d.,]+)\s*€?\s*\)\s*$/);
+              if (!m) continue;
+              let nombre = m[1].trim();
+              const subtotal = parseFloat(m[2].replace(',', '.')) || 0;
+              let cantidad = 1;
+              const qty = nombre.match(/^(.+?)\s+x(\d+)\s*$/i);
+              if (qty) {
+                nombre = qty[1].trim();
+                cantidad = parseInt(qty[2], 10) || 1;
+              }
+              if (!porReserva[rid]) porReserva[rid] = [];
+              porReserva[rid].push({
+                nombre,
+                cantidad,
+                subtotal,
+                metodoPago: it.tipoPago || '',
+                fechaPago: it.fechaPago ? new Date(it.fechaPago).toISOString() : '',
+                staff: it.staff || ''
+              });
+            }
+          }
+
+          for (const r of reservas) {
+            if (porReserva[r._id]) r.productosVendidos = porReserva[r._id];
+          }
+        }
+      } catch (eProd) {
+        // No-blocking: cada reserva conserva su array vacío.
+        console.warn(`${TAG} ⚠ cruce productos (no-blocking):`, eProd.message);
+      }
+
       const promoCount = reservas.filter(r => r.tienePromoServicio).length;
-      console.log(`${TAG} ✅ getReservasPorFecha ${fecha}: ${reservas.length} packs, ${promoCount} con descuento promocional`);
+      const prodCount = reservas.reduce((acc, r) => acc + (r.productosVendidos ? r.productosVendidos.length : 0), 0);
+      console.log(`${TAG} ✅ getReservasPorFecha ${fecha}: ${reservas.length} packs, ${promoCount} con descuento promocional, ${prodCount} producto(s) vendido(s) en cita`);
       return { ok: true, version: VERSION, reservas };
 
     } catch (e) {
