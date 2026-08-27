@@ -1,9 +1,9 @@
 // =====================================================
-// [ReminderJob v1.4.0] - reminderLogic.web.js
+// [ReminderJob v1.6.0] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
 // Lee extendedBookings (Wix nativas) + SvExternalRecords (Externos)
-// Envía vía Triggered Email VGPVvYO replicando patrón de
-// enviarConfirmacionReserva (variables idénticas).
+// Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
+// según SalonConfig.emailProvider. WhatsApp vía centralita.
 // Idempotencia garantizada por colección ReminderLog.
 //
 // CHANGELOG:
@@ -17,29 +17,42 @@
 //            enviar via mapa inverso contactId → emails.
 //            Maneja info.emails como objeto {items:[]} o como array.
 //   v1.4.0 - Integración con centralita comunicacionesLogic.
+//   v1.5.0 - Toggle SalonConfig.reminderActive (Boolean).
+//   v1.6.0 - Email de recordatorio por Brevo si SalonConfig.emailProvider
+//            = 'brevo': en enviarRecordatorio se envía a clientEmail vía
+//            brevoLogic.enviarEmailPlantilla (plantilla reminderLayout),
+//            SIN cascada de contactIds (Brevo va al email directo). Si
+//            'wix' o vacío, la cascada Triggered VGPVvYO queda intacta.
+//            WhatsApp vía centralita sin cambios. Nuevo helper
+//            _getEmailProvider() (lectura defensiva, fail-safe → 'wix').
+//            NOTA: la v1.5.0 (reminderActive) nunca se desplegó; esta
+//            entrega salta de la v1.4.0 (producción) a la v1.6.0, que
+//            incluye AMBOS: reminderActive + Brevo.
 //
-// CAMBIOS v1.4.0:
-//   - Añadida llamada a notificarRecordatorio() de la centralita en
-//     paralelo al envío de email. Se invoca con canalesExcluidos:['email']
-//     para que la centralita NO duplique el email (la cascada de
-//     candidatos del reminder se mantiene como mecanismo defensivo
-//     por contactIds múltiples del legacy histórico).
-//   - Se llama EN AMBOS CASOS (email ok o email error) porque WhatsApp
-//     es canal paralelo. Si el email falló (cliente solo @hair-times.com),
-//     WhatsApp es el último recurso para llegar al cliente.
-//   - Extracción de teléfono añadida en leerCitasWix (de booking.contactDetails.phone)
-//     y leerCitasExternos (de SvExternalRecords.clientPhone si existe).
-//   - Propagación de teléfono al objeto agrupado por cliente.
-//   - DRY_RUN respetado: si está activo, tampoco se llama a la centralita.
-//   - Riesgo bajo: try/catch envolvente, no-blocking. Si la centralita
-//     falla, el email sigue funcionando como en v1.3.1.
+// CAMBIOS v1.5.0:
+//   - Nuevo helper _getReminderActive() lee SalonConfig.reminderActive
+//     ANTES de ejecutar las 3 queries pesadas (CRM + Wix Bookings +
+//     Externos). Si false → aborta limpiamente con resumen shape
+//     estable (todos los contadores a 0, skipped:true, reason).
+//   - Lectura DEFENSIVA: solo aborta si reminderActive === false
+//     EXPLÍCITO. null/undefined/true/error → procede normal. Hair-Times
+//     producción no se afecta hasta que su SalonConfig tenga el campo
+//     en false; cuentas nuevas clonadas o sin campo siguen enviando.
+//   - Motivo: en Salon Kami (demo V2) las reservas están clonadas de
+//     Hair-Times con teléfonos reales. Si se enciende el reminder en
+//     Salon Kami sin filtrar, los clientes de Hair-Times reciben doble
+//     WhatsApp (uno por cuenta). Con reminderActive=false en Salon
+//     Kami, el cron arranca y aborta antes de cualquier query a Wix
+//     externos. Confirmaciones WhatsApp (recepcionProLogic v1.0.18+)
+//     intactas — el toggle es exclusivo del cron de recordatorios.
 //
 //   No se toca:
-//     - Cascada de candidatos email (mecanismo defensivo activo)
-//     - enviarRecordatorio() — sigue usando triggeredEmails.emailContact
+//     - Cascada de candidatos email
+//     - enviarRecordatorio (triggeredEmails.emailContact + cascada)
+//     - notificarWhatsAppViaCentralita
 //     - Mapeo CRM, idempotencia, agrupación
-//     - Constantes hardcoded (PROFESIONAL_DEFAULT, DOMINIO_SALON, SITE_URL)
-//       — deuda técnica para multi-tenant en versión futura.
+//     - Constantes hardcoded (PROFESIONAL_DEFAULT, DOMINIO_SALON,
+//       SITE_URL) — deuda técnica multi-tenant para versión futura.
 // =====================================================
 
 import { webMethod, Permissions } from 'wix-web-module';
@@ -50,8 +63,10 @@ import { extendedBookings } from 'wix-bookings.v2';
 
 // v1.4.0: Centralita de comunicaciones
 import { notificarRecordatorio } from 'backend/comunicacionesLogic.web.js';
+// v1.6.0: driver de email por plantilla (Brevo)
+import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 
-const TAG = '[ReminderJob v1.4.0]';
+const TAG = '[ReminderJob v1.6.0]';
 const EMAIL_RECORDATORIO_ID = 'VGPVvYO';
 const PROFESIONAL_DEFAULT = 'Equipo Hair-Times';
 const DRY_RUN = false;
@@ -89,6 +104,46 @@ function formatearHora(d) {
 function esEmailSalon(email) {
   if (!email) return true;
   return email.toLowerCase().trim().endsWith(DOMINIO_SALON);
+}
+
+// ----------- v1.5.0: Toggle SalonConfig.reminderActive ---------
+// Lectura defensiva: solo apaga si === false EXPLÍCITO.
+// null/undefined/true/error de lectura → activo (fail-safe).
+// Esto garantiza que Hair-Times producción no se ve afectado hasta
+// que su SalonConfig tenga reminderActive=false explícitamente.
+async function _getReminderActive() {
+  try {
+    const res = await wixData.query('SalonConfig')
+      .limit(1)
+      .find({ suppressAuth: true });
+    if (res.items.length === 0) {
+      console.log(`${TAG} ℹ️ SalonConfig vacío — asumiendo reminderActive=true por defecto`);
+      return true;
+    }
+    const cfg = res.items[0];
+    if (cfg.reminderActive === false) return false;
+    return true;
+  } catch (e) {
+    console.error(`${TAG} ⚠️ Error leyendo SalonConfig.reminderActive (fail-safe → activo): ${e.message}`);
+    return true;
+  }
+}
+
+// ----------- v1.6.0: Proveedor de email (SalonConfig.emailProvider) -----
+// Lectura defensiva: solo 'brevo' activa Brevo. Vacío/otro/error → 'wix'
+// (fail-safe: no rompe el canal Triggered existente).
+async function _getEmailProvider() {
+  try {
+    const res = await wixData.query('SalonConfig')
+      .limit(1)
+      .find({ suppressAuth: true });
+    if (res.items.length === 0) return 'wix';
+    const p = String(res.items[0].emailProvider || '').toLowerCase().trim();
+    return p === 'brevo' ? 'brevo' : 'wix';
+  } catch (e) {
+    console.error(`${TAG} ⚠️ Error leyendo SalonConfig.emailProvider (fail-safe → wix): ${e.message}`);
+    return 'wix';
+  }
 }
 
 // ----------- Extraer TODOS los emails de un contacto CRM -----------
@@ -443,7 +498,52 @@ function agruparPorCliente(citas) {
 }
 
 // ----------- Envío email con reintentos por candidato -----------
-async function enviarRecordatorio(grupo, emailsDeContacto) {
+// v1.6.0: envío del recordatorio por Brevo (plantilla reminderLayout).
+// Va directo a grupo.clientEmail (email real ya resuelto en la agrupación),
+// SIN la cascada de contactIds (que es específica del Triggered de Wix).
+async function _enviarRecordatorioBrevo(grupo) {
+  const emailReal = grupo.clientEmail || '';
+  if (esEmailSalon(emailReal)) {
+    return { ok: false, error: `email @salon/vacío, no se envía por Brevo (${grupo.Nombre} ${grupo.Apellido})` };
+  }
+  const nombreCliente = `${grupo.Nombre || ''} ${grupo.Apellido || ''}`.trim();
+  const variables = {
+    Fecha:        grupo.Fecha,
+    Nombre:       grupo.Nombre,
+    Apellido:     grupo.Apellido,
+    servicios:    grupo.servicios,
+    profesional:  PROFESIONAL_DEFAULT,
+    horaInicio:   grupo.horaInicio,
+    horaFinal:    grupo.horaFinal,
+    importeTotal: grupo.importeTotal,
+    origen:       grupo.source === 'externo' ? 'Servicios Externos' : 'Reserva Online',
+    estadoPago:   grupo.estadoPago
+  };
+  try {
+    const r = await enviarEmailPlantilla({
+      to:            emailReal,
+      toName:        nombreCliente,
+      templateField: 'reminderLayout',
+      subject:       'Recordatorio de tu cita',
+      variables,
+      event:         'recordatorio'
+    });
+    if (r && r.ok) {
+      console.log(`${TAG} 📧 Recordatorio Brevo enviado a ${emailReal} (${r.messageId || ''})`);
+      return { ok: true, contactIdUsado: '', brevo: true };
+    }
+    return { ok: false, error: `Brevo: ${(r && r.error) || 'error desconocido'}` };
+  } catch (e) {
+    return { ok: false, error: `Brevo excepción: ${e.message}` };
+  }
+}
+
+async function enviarRecordatorio(grupo, emailsDeContacto, emailProvider) {
+  // v1.6.0: camino Brevo — envío directo a clientEmail (sin cascada de contactIds)
+  if (emailProvider === 'brevo') {
+    return await _enviarRecordatorioBrevo(grupo);
+  }
+
   if (!grupo._candidatos || grupo._candidatos.length === 0) {
     return { ok: false, error: `sin candidatos (${grupo.Nombre} ${grupo.Apellido})` };
   }
@@ -557,6 +657,29 @@ export const ejecutarRecordatoriosDiarios = webMethod(
     const { inicio, fin, fechaLegible } = ventanaManana();
     console.log(`${TAG} 📆 Ventana mañana: ${fechaLegible} (${inicio.toISOString()} → ${fin.toISOString()})`);
 
+    // v1.5.0: Toggle SalonConfig.reminderActive — abortar si === false explícito.
+    // Lectura defensiva: null/undefined/true/error → activo (fail-safe).
+    // Se comprueba ANTES de las 3 queries pesadas (CRM + Wix Bookings + Externos)
+    // para no consumir API quota innecesariamente cuando el cron está apagado.
+    const reminderActive = await _getReminderActive();
+    if (!reminderActive) {
+      console.log(`${TAG} ⏸️ Recordatorios DESACTIVADOS en SalonConfig.reminderActive=false — ejecución abortada limpiamente`);
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'reminderActive=false en SalonConfig',
+        dryRun: DRY_RUN,
+        fecha: fechaLegible,
+        totalCitas: 0,
+        clientesAgrupados: 0,
+        sinResolver: 0,
+        yaEnviados: 0,
+        enviadosOk: 0,
+        enviadosError: 0,
+        waInvocaciones: 0
+      };
+    }
+
     const [mapas, wix, externos] = await Promise.all([
       cargarMapaCRM(),
       leerCitasWix(inicio, fin),
@@ -579,6 +702,10 @@ export const ejecutarRecordatoriosDiarios = webMethod(
     let okCount = 0, errCount = 0;
     let waInvocaciones = 0;  // v1.4.0: métrica de invocaciones a centralita
 
+    // v1.6.0: proveedor de email leído una vez para todo el lote
+    const emailProvider = await _getEmailProvider();
+    console.log(`${TAG} ✉️ Proveedor de email: ${emailProvider}`);
+
     for (const grupo of agrupados) {
       if (DRY_RUN) {
         const validos = grupo._candidatos.filter(id => !contactoEnviaASalon(id, mapas.emailsDeContacto));
@@ -587,8 +714,8 @@ export const ejecutarRecordatoriosDiarios = webMethod(
         continue;
       }
 
-      // 1. Email vía cascada de candidatos (lógica v1.3.1 sin cambios)
-      const r = await enviarRecordatorio(grupo, mapas.emailsDeContacto);
+      // 1. Email: cascada Triggered (wix) o Brevo, según emailProvider
+      const r = await enviarRecordatorio(grupo, mapas.emailsDeContacto, emailProvider);
       await registrarLogGrupo(grupo, r);
       if (r.ok) {
         okCount++;
