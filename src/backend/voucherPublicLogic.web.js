@@ -1,8 +1,21 @@
 // =====================================================
 // KAMISUITE - Bonos (Página Pública) Backend
 // =====================================================
-// VERSION: 1.4.0
-// FECHA: 20 de agosto de 2026
+// VERSION: 1.5.2
+// FECHA: 27 de agosto de 2026
+//
+// v1.5.2 (27-Ago-2026): voucher_purchase_es se envía con language:'en'
+//   (la plantilla está aprobada en Meta como English; el texto es español).
+//   Requiere whatsappLogic v1.6.1 (language configurable).
+//
+// v1.5.1 (27-Ago-2026): WhatsApp de compra de bono vía enviarTemplateGenerico
+//   (plantilla voucher_purchase_es) al buyerPhone, en paralelo al email.
+//   Canal independiente: gatea waActive internamente. No bloqueante.
+//
+// v1.5.0 (27-Ago-2026): Email de compra por Brevo si SalonConfig.emailProvider
+//   = 'brevo' (plantilla specialpurchaseLayout, envío a updated.buyerEmail vía
+//   brevoLogic.enviarEmailPlantilla). Si 'wix' o vacío, el Triggered
+//   purchaseConfirmationTemplateId queda intacto. Variables sin cambios.
 //
 // v1.4.0: ⏳ PLAZO MÁXIMO POR USO — SNAPSHOT AL EMITIR.
 //   Nuevo campo ServiceCatalog.bonusMaxIntervalDays (Número, días). Define
@@ -237,8 +250,12 @@ import wixPayBackend from 'wix-pay-backend';
 import { currentMember } from 'wix-members-backend';
 // v1.0.1 — F7: email triggered de confirmación de compra
 import { triggeredEmails } from 'wix-crm-backend';
+// v1.5.0: driver de email por plantilla (Brevo)
+import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
+// v1.5.1: driver WhatsApp (plantilla genérica)
+import { enviarTemplateGenerico } from 'backend/whatsappLogic.web.js';
 
-const TAG = '[VoucherPublic][1.4.0]';
+const TAG = '[VoucherPublic][1.5.2]';
 
 const CMS_CATALOG = 'ServiceCatalog';
 const CMS_CONFIG = 'KamisuiteProductsConfig';
@@ -976,12 +993,8 @@ async function _enviarEmailCompraVoucher(updated) {
     // Lee SalonConfig: templateId + brandName + siteUrl. Una sola query.
     const cfgRes = await wixData.query(CMS_SALON).limit(1).find({ suppressAuth: true });
     const cfg = (cfgRes.items && cfgRes.items[0]) || {};
-    const templateId = cfg.purchaseConfirmationTemplateId || '';
-
-    if (!templateId) {
-      console.warn(`${TAG} ⚠️ SalonConfig.purchaseConfirmationTemplateId vacío — sin email`);
-      return;
-    }
+    // v1.5.0: proveedor de email — 'brevo' (plantilla CMS) o 'wix' (triggered)
+    const emailProvider = String(cfg.emailProvider || '').toLowerCase().trim();
 
     const brandName = cfg.brandName || '';
     const siteUrl   = cfg.siteUrl   || '';
@@ -1013,6 +1026,37 @@ async function _enviarEmailCompraVoucher(updated) {
       SITE_URL: siteUrl
     };
 
+    // v1.5.1: WhatsApp de compra (canal independiente; enviarTemplateGenerico
+    // gatea waActive y normaliza el teléfono). No bloqueante.
+    // voucher_purchase_es: {{1}}nombre {{2}}código {{3}}servicio {{4}}usos {{5}}validez {{6}}servicio
+    // v1.5.2: esta plantilla está aprobada en Meta como 'en' (idioma de catálogo,
+    // el texto es español). Se pasa language:'en' para que Meta la encuentre.
+    try {
+      await enviarTemplateGenerico({
+        telefono:     String(updated.buyerPhone || ''),
+        nombreCliente,
+        templateName: 'voucher_purchase_es',
+        parameters:   [nombreCliente, updated.code || '—', serviceLabel, String(usosTotal), fechaCaducidad || '—', serviceLabel],
+        eventType:    'compra_bono',
+        language:     'en'
+      });
+    } catch (waErr) { console.error(`${TAG} ⚠️ WhatsApp compra-bono (no bloqueante):`, waErr && waErr.message); }
+
+    // v1.5.0: Brevo (plantilla specialpurchaseLayout) o Wix triggered
+    if (emailProvider === 'brevo') {
+      const buyerEmail = String(updated.buyerEmail || '').trim();
+      if (!buyerEmail) { console.warn(`${TAG} ⚠️ sin buyerEmail — no se envía por Brevo`); return; }
+      const rB = await enviarEmailPlantilla({
+        to: buyerEmail, toName: nombreCliente, templateField: 'specialpurchaseLayout',
+        subject: `Confirmación de compra · ${variables.tituloProducto}`, variables, event: 'compra'
+      });
+      if (rB && rB.ok) console.log(`${TAG} 📧 Email compra-bono Brevo OK → ${buyerEmail} (${rB.messageId || ''})`);
+      else console.error(`${TAG} ⚠️ Email compra-bono Brevo error: ${(rB && rB.error) || '?'}`);
+      return;
+    }
+
+    const templateId = cfg.purchaseConfirmationTemplateId || '';
+    if (!templateId) { console.warn(`${TAG} ⚠️ SalonConfig.purchaseConfirmationTemplateId vacío — sin email`); return; }
     await triggeredEmails.emailContact(templateId, updated.contactId, { variables });
     console.log(`${TAG} 📧 Email compra-bono enviado OK → contactId=${updated.contactId} code=${updated.code}`);
   } catch (emailErr) {
