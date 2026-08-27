@@ -1,6 +1,27 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.106  ·  Aviso de condiciones del bono en el canje
+ *
+ *   Decisión de Jal (20-ago-2026): las condiciones del bono INFORMAN, no
+ *   bloquean. Un salón no es Netflix — enfermedad, confusión, la clienta de
+ *   toda la vida a la que se le niega el canje por un día. El mostrador
+ *   decide.
+ *
+ *   Cuando el bono está fuera de sus condiciones (espera mínima entre
+ *   sesiones no cumplida, o retraso sobre el plazo máximo por uso), el
+ *   bloque de canje ya aplicado añade debajo un aviso con el motivo
+ *   concreto en días, y deja el canje puesto y el cobro disponible.
+ *
+ *   El backend (recepcionProLogic v1.0.53) manda `fueraDeCondiciones` y
+ *   `avisoCondiciones` ya redactado dentro de la respuesta de canjeAplicado;
+ *   el page code lo reenvía entero, así que no requiere cambios.
+ *   Si el backend es anterior, ambos llegan vacíos y no se pinta nada:
+ *   degrada sin romper.
+ *
+ *   Sin rojo: el amarillo del propio bloque de canje, con borde discontinuo
+ *   para distinguirlo. No es un error, es una circunstancia.
+ *
  * VERSION: 1.1.105  ·  Marcas de FICHA y PRODUCTO en el buscador
  *
  * v1.1.105 (19 ago 2026) — SEGUNDA INSIGNIA: PRODUCTO ACTIVO 🎁.
@@ -3498,7 +3519,13 @@ button { font-family: inherit; cursor: pointer; }
               descuentoPct: Number(p.descuentoPct) || 0,
               precioPromo: Number(p.precioPromo) || 0,
               voucherId: p.voucherId || '',
-              promoCardId: p.promoCardId || ''
+              promoCardId: p.promoCardId || '',
+              // v1.1.106 — condiciones de uso del bono, SOLO INFORMATIVAS.
+              // El backend (recepcionProLogic v1.0.53) ya no bloquea ni
+              // descuenta sesiones por ellas: manda el aviso redactado y el
+              // salón decide. Vacío = el bono está en regla.
+              fueraDeCondiciones: !!p.fueraDeCondiciones,
+              avisoCondiciones: p.avisoCondiciones || ''
             };
             this._toast(`Canje aplicado · -${(p.ahorro || 0).toFixed(2)}€`);
             this._renderModal();
@@ -7103,12 +7130,21 @@ button { font-family: inherit; cursor: pointer; }
         const c = this._canjeActivo;
         const icon = c.tipo === 'tarjeta' ? '🎫' : '🎟️';
         const texto = c.descripcionToken || `${c.codigo}`;
+        // v1.1.106 — Aviso de condiciones. Informativo: el canje ya está
+        // aplicado y el botón de cobrar sigue vivo. Decide el salón.
+        const aviso = (c.fueraDeCondiciones && c.avisoCondiciones)
+          ? `<div style="margin-top:6px;padding:7px 9px;background:#fdf2e3;border:1px dashed #d8a85f;border-radius:6px;font-size:11px;font-weight:500;line-height:1.45;color:#7a4a00;">
+               <strong style="font-weight:700;">Fuera de las condiciones del bono.</strong>
+               ${this._escHTML(c.avisoCondiciones)}
+               <span style="display:block;margin-top:3px;opacity:.8;">El canje está aplicado igualmente. Vosotros decidís si lo mantenéis.</span>
+             </div>`
+          : '';
         box.innerHTML = `
           <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#fff7e0;border:1px solid #f0c879;border-radius:8px;font-size:12px;font-weight:600;color:#7a4a00;">
             <span style="font-size:14px;">${icon}</span>
             <span style="flex:1;">${this._escHTML(texto)} <span style="color:#a55b00;font-weight:700;">(-${(c.ahorro || 0).toFixed(2)}€)</span></span>
             <button id="canjeClear" style="background:none;border:1px solid #d8a85f;color:#7a4a00;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer;">✕ Quitar</button>
-          </div>`;
+          </div>${aviso}`;
         box.querySelector('#canjeClear').addEventListener('click', () => {
           this._canjeActivo = null;
           this._renderModal();
