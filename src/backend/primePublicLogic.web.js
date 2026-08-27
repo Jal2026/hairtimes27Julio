@@ -1,8 +1,17 @@
 // =====================================================
 // KAMISUITE - Tarjeta PRIME (Página Pública) Backend
 // =====================================================
-// VERSION: 1.0.3
-// FECHA: 27 de junio de 2026
+// VERSION: 1.0.5
+// FECHA: 27 de agosto de 2026
+//
+// v1.0.5 (27-Ago-2026): WhatsApp de compra PRIME vía enviarTemplateGenerico
+//   (plantilla prime_purchase_es) al buyerPhone, en paralelo al email.
+//   Canal independiente: gatea waActive internamente. No bloqueante.
+//
+// v1.0.4 (27-Ago-2026): Email de compra por Brevo si SalonConfig.emailProvider
+//   = 'brevo' (plantilla specialpurchaseLayout, envío a updated.buyerEmail vía
+//   brevoLogic.enviarEmailPlantilla). Si 'wix' o vacío, el Triggered
+//   purchaseConfirmationTemplateId queda intacto. Variables sin cambios.
 //
 // v1.0.3: F7 — Email triggered de confirmación de compra de Tarjeta
 //   PRIME. Mismo patrón que voucherPublicLogic v1.0.1 y
@@ -92,8 +101,12 @@ import { contacts } from 'wix-crm-backend';
 import { elevate } from 'wix-auth';
 // v1.0.3 — F7: email triggered de confirmación de compra
 import { triggeredEmails } from 'wix-crm-backend';
+// v1.0.4: driver de email por plantilla (Brevo)
+import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
+// v1.0.5: driver WhatsApp (plantilla genérica)
+import { enviarTemplateGenerico } from 'backend/whatsappLogic.web.js';
 
-const TAG = '[PrimePublic][1.0.3]';
+const TAG = '[PrimePublic][1.0.5]';
 
 const CMS_CONFIG = 'KamisuiteProductsConfig';
 const CMS_PRIME = 'KamisuitePrimeMemberships';
@@ -509,12 +522,8 @@ async function _enviarEmailCompraPrime(updated) {
 
     const cfgRes = await wixData.query(CMS_SALON).limit(1).find({ suppressAuth: true });
     const cfg = (cfgRes.items && cfgRes.items[0]) || {};
-    const templateId = cfg.purchaseConfirmationTemplateId || '';
-
-    if (!templateId) {
-      console.warn(`${TAG} ⚠️ SalonConfig.purchaseConfirmationTemplateId vacío — sin email`);
-      return;
-    }
+    // v1.0.4: proveedor de email — 'brevo' (plantilla CMS) o 'wix' (triggered)
+    const emailProvider = String(cfg.emailProvider || '').toLowerCase().trim();
 
     const brandName = cfg.brandName || '';
     const siteUrl   = cfg.siteUrl   || '';
@@ -543,6 +552,34 @@ async function _enviarEmailCompraPrime(updated) {
       SITE_URL: siteUrl
     };
 
+    // v1.0.5: WhatsApp de compra (canal independiente; enviarTemplateGenerico
+    // gatea waActive y normaliza el teléfono). No bloqueante.
+    // prime_purchase_es: {{1}}nombre {{2}}validez {{3}}importe {{4}}salón
+    try {
+      await enviarTemplateGenerico({
+        telefono:     String(updated.buyerPhone || ''),
+        nombreCliente,
+        templateName: 'prime_purchase_es',
+        parameters:   [nombreCliente, fechaCaducidad || '—', importeStr, brandName],
+        eventType:    'compra_prime'
+      });
+    } catch (waErr) { console.error(`${TAG} ⚠️ WhatsApp compra-PRIME (no bloqueante):`, waErr && waErr.message); }
+
+    // v1.0.4: Brevo (plantilla specialpurchaseLayout) o Wix triggered
+    if (emailProvider === 'brevo') {
+      const buyerEmail = String(updated.buyerEmail || '').trim();
+      if (!buyerEmail) { console.warn(`${TAG} ⚠️ sin buyerEmail — no se envía por Brevo`); return; }
+      const rB = await enviarEmailPlantilla({
+        to: buyerEmail, toName: nombreCliente, templateField: 'specialpurchaseLayout',
+        subject: `Confirmación de compra · ${variables.tituloProducto}`, variables, event: 'compra'
+      });
+      if (rB && rB.ok) console.log(`${TAG} 📧 Email compra-PRIME Brevo OK → ${buyerEmail} (${rB.messageId || ''})`);
+      else console.error(`${TAG} ⚠️ Email compra-PRIME Brevo error: ${(rB && rB.error) || '?'}`);
+      return;
+    }
+
+    const templateId = cfg.purchaseConfirmationTemplateId || '';
+    if (!templateId) { console.warn(`${TAG} ⚠️ SalonConfig.purchaseConfirmationTemplateId vacío — sin email`); return; }
     await triggeredEmails.emailContact(templateId, updated.contactId, { variables });
     console.log(`${TAG} 📧 Email compra-PRIME enviado OK → contactId=${updated.contactId}`);
   } catch (emailErr) {
