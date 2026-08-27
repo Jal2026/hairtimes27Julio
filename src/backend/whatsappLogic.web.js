@@ -2,12 +2,17 @@
  * ============================================================
  *  whatsappLogic.web.js  —  KAMISUITE WhatsApp Cloud API
  * ============================================================
- *  v1.6.0  ·  17 Mayo 2026
+ *  v1.6.1  ·  27 Agosto 2026
  * ------------------------------------------------------------
  *  Backend para envío de mensajes WhatsApp vía Meta Cloud API.
  *
  *  CHANGELOG
  *  ---------
+ *  v1.6.1 (27-Ago-2026) — Idioma de plantilla configurable
+ *    - enviarTemplateGenerico y _enviarTemplate aceptan `language`
+ *      opcional (por defecto 'es'). Permite enviar plantillas aprobadas
+ *      en otro idioma (p.ej. voucher_purchase_es en 'en') sin recrearlas.
+ *      Confirmación, recordatorio y campañas no pasan language → 'es'.
  *  v1.6.0 (17-May-2026) — Botón CTA dinámico en plantillas con imagen
  *    - _enviarTemplateConImagen: nuevo parámetro opcional buttonUrl;
  *      si se pasa, añade un componente button (sub_type url, index 0)
@@ -37,7 +42,7 @@ import { fetch } from 'wix-fetch';
 import { mediaManager } from 'wix-media-backend';
 
 // ── Constantes ──────────────────────────────────────────────
-const TAG = '[WhatsApp v1.6.0]';
+const TAG = '[WhatsApp v1.6.1]';
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
@@ -177,7 +182,7 @@ async function _callWhatsAppAPI({ phoneNumberId, endpoint, body }) {
     }
 }
 
-async function _enviarTemplate({ telefono, templateName, parameters }) {
+async function _enviarTemplate({ telefono, templateName, parameters, language }) {
     const config = await _getSalonWhatsAppConfig();
 
     if (!config) return { ok: false, error: 'SalonConfig no disponible' };
@@ -197,7 +202,7 @@ async function _enviarTemplate({ telefono, templateName, parameters }) {
         type: 'template',
         template: {
             name: templateName,
-            language: { code: 'es' },
+            language: { code: language || 'es' },
             components: [
                 {
                     type: 'body',
@@ -466,13 +471,14 @@ export const enviarMensajeBotones = webMethod(
 
 export const enviarTemplateGenerico = webMethod(
     Permissions.SiteMember,
-    async ({ telefono, nombreCliente, templateName, parameters, eventType }) => {
+    async ({ telefono, nombreCliente, templateName, parameters, eventType, language }) => {
         console.log(TAG, `Template genérico "${templateName}" → ${nombreCliente} (${telefono})`);
 
         const result = await _enviarTemplate({
             telefono,
             templateName,
-            parameters: parameters || []
+            parameters: parameters || [],
+            language: language || 'es'
         });
 
         _logEnvio({
@@ -968,4 +974,3 @@ export const actualizarCampaignUso = webMethod(
         }
     }
 );
-
