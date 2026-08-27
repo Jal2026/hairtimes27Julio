@@ -1,7 +1,50 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.106  ·  Aviso de condiciones del bono en el canje
+ * VERSION: 1.1.108  ·  El TOTAL del modal incluye el producto vendido
+ *
+ * v1.1.108 (27 ago 2026) — EL TOTAL DE LA CITA SUMA EL PRODUCTO.
+ *
+ *   La v1.1.107 pintaba el producto pero lo dejaba fuera del TOTAL, así que
+ *   una cita cobrada mostraba 21 € mientras su ticket decía 43 €. Decisión
+ *   de Jal: el TOTAL suma el producto SIEMPRE, cobrada o pendiente — el
+ *   estado del cobro ya se distingue de un vistazo por la insignia y por
+ *   la presencia de los botones de pago, así que no hace falta que el
+ *   número cambie de significado según el estado.
+ *
+ *   LO QUE NO CAMBIA: el importe que se envía al cobrar. El cobro sigue
+ *   calculando su propio neto solo con servicios, extras y descuentos; el
+ *   producto ya está cobrado aparte y volver a incluirlo lo duplicaría.
+ *   Aquí solo se toca lo que se PINTA.
+ *
+ *   El precio tachado de las citas con descuento suma también el producto,
+ *   para que la resta que se ve en pantalla siga cuadrando.
+ *
+ * v1.1.107 (27 ago 2026) — El producto vendido vuelve a la ficha de la cita
+ *
+ * v1.1.107 (27 ago 2026) — PRODUCTO VENDIDO VISIBLE EN LA FICHA DE LA CITA.
+ *
+ *   POR QUÉ. La v1.1.92 quitó el bloque porque la vinculación era
+ *   heurística (mismo cliente, mismo día) y colgaba de una cita ya cerrada
+ *   una venta hecha después desde TIENDA. El diagnóstico era bueno, la
+ *   solución no: al no verse el producto, tampoco entraba en el documento
+ *   fiscal de la cita, y Hair-Times lo reportó como fallo el 27-ago-2026.
+ *
+ *   QUÉ CAMBIA. El vínculo ya no se adivina: tiendaProductos v1.5.14 graba
+ *   la cita en la fila de venta y recepcionProLogic v1.0.55 la devuelve en
+ *   `productosVendidos`. El widget solo pinta lo que le llega. Una venta
+ *   hecha desde el botón TIENDA no viaja en ese array y no puede aparecer.
+ *
+ *   CÓMO SE VE. Debajo de las líneas de servicio, cada producto con marker
+ *   🛒 y badge VENDIDO, sin ✕: ya está cobrado y no se quita desde aquí.
+ *   NO se suma al TOTAL de la cita, que sigue siendo lo que queda por
+ *   cobrar. Las clases CSS (.is-prod, .ks-item-prodflag, .ks-prod-badge)
+ *   ya existían en el archivo; no se ha tocado ni una regla de estilo.
+ *
+ *   Requiere recepcionProLogic v1.0.55. Con un backend anterior el array
+ *   llega vacío y el modal se ve exactamente igual que en v1.1.106.
+ *
+ * v1.1.106 (21 ago 2026) — Aviso de condiciones del bono en el canje
  *
  *   Decisión de Jal (20-ago-2026): las condiciones del bono INFORMAN, no
  *   bloquean. Un salón no es Netflix — enfermedad, confusión, la clienta de
@@ -6653,12 +6696,16 @@ button { font-family: inherit; cursor: pointer; }
       };
 
       const itemsHTML = (items.length ? items : [{ label: r.title || 'Servicio', price: Number(r.precioTotal) || 0 }]).map((it, i) => `<div class="ks-modal-item ${i > 0 ? 'is-compl' : ''}" data-i="${i}"><span class="ks-item-label">${i > 0 ? '<span class="ks-item-complflag">⛓</span>' : ''}${esc(it.label)}</span><span class="ks-item-right">${_durLinea(it.label)}<span class="ks-item-price">${it.price}€</span>${items.length > 1 ? `<button class="ks-item-rm" data-i="${i}" title="Quitar este servicio" aria-label="Quitar">✕</button>` : ''}</span></div>${_pesoHTML(i)}`).join('');
-      // v1.1.92 — Los productos vendidos YA NO se pintan en la ficha de la
-      // cita. El cruce que los traía era heurístico (mismo contactId + mismo
-      // día, pegado a la cita más cercana en el tiempo), así que una venta
-      // hecha desde TIENDA después de cobrar acababa colgada de una cita ya
-      // cerrada. Las ventas se ven en el informe del día, con cliente,
-      // concepto, importe y vendedor.
+      // v1.1.107 — Productos vendidos DESDE esta cita. Llegan vinculados por
+      // el backend (recepcionProLogic v1.0.55) a través del campo que graba
+      // tiendaProductos v1.5.14; aquí no se cruza ni se adivina nada. Sin ✕:
+      // ya están cobrados y no se quitan desde el modal. No entran en el
+      // TOTAL, que es lo que queda por cobrar de la cita.
+      const productosVendidos = Array.isArray(r.productosVendidos) ? r.productosVendidos : [];
+      const productosHTML = productosVendidos.map(p => {
+        const qty = p.cantidad > 1 ? ` <span style="color:#9ca3af;font-size:10px;">×${p.cantidad}</span>` : '';
+        return `<div class="ks-modal-item is-prod"><span class="ks-item-label"><span class="ks-item-prodflag">🛒</span>${esc(p.nombre)}${qty} <span class="ks-prod-badge">VENDIDO</span></span><span class="ks-item-right"><span class="ks-item-price">${p.subtotal}€</span></span></div>`;
+      }).join('');
       // v1.1.26 — cálculo unificado del descuento (% o €)
       // v1.1.39 — soporta promo del servicio encadenada con manual operador.
       const { subtotal, discPct, discEur, subtotalOriginal, ahorroPromo, tienePromo } = this._calcDescuento();
@@ -6669,6 +6716,11 @@ button { font-family: inherit; cursor: pointer; }
         ? Math.round(this._canjeActivo.ahorro * 100) / 100
         : 0;
       const total = Math.max(0, Math.round((subtotal - discEur - ahorroCanje) * 100) / 100);
+      // v1.1.108 — Los productos ya cobrados suman en lo que se MUESTRA,
+      // para que el TOTAL de la cita cuadre con su ticket o factura. No
+      // tocan el importe que se envía al cobrar.
+      const totalProductosCita = this._totalProductosCita(r);
+      const _round2c = (n) => Math.round((Number(n) || 0) * 100) / 100;
       // Tokens del resumen del TOTAL: promo primero, manual después.
       // Mismo formato visual que el manual ya existente (color naranja).
       const _promoNote = tienePromo && ahorroPromo > 0 ? `-${ahorroPromo.toFixed(2)}€` : '';
@@ -6745,10 +6797,10 @@ button { font-family: inherit; cursor: pointer; }
         <div class="ks-modal-meta">${hhmm}${endH ? '–' + endH : ''}</div>
         ${contactRow}
         ${modalWarn}
-        <div class="ks-modal-items">${itemsHTML}</div>
+        <div class="ks-modal-items">${itemsHTML}${productosHTML}</div>
         ${paid ? '' : `<div class="ks-modal-disc" id="discBox"></div>`}
         ${paid ? '' : `<div class="ks-modal-canje" id="canjeBox" style="margin-top:6px"></div>`}
-        <div class="ks-modal-total"><span>TOTAL</span><span class="ks-total-wrap">${mostrarTachado ? `<span class="ks-total-strike">${subtotalOriginal}€</span> <span class="ks-total-discnote" style="font-size:11px;color:#d48a1a;font-weight:600">${noteText}</span>` : ''}<span class="ks-total-val">${total}€</span></span></div>
+        <div class="ks-modal-total"><span>TOTAL</span><span class="ks-total-wrap">${mostrarTachado ? `<span class="ks-total-strike">${_round2c(subtotalOriginal + totalProductosCita)}€</span> <span class="ks-total-discnote" style="font-size:11px;color:#d48a1a;font-weight:600">${noteText}</span>` : ''}<span class="ks-total-val">${_round2c(total + totalProductosCita)}€</span></span></div>
         ${paid ? '' : (
           (total === 0 && this._canjeActivo)
             ? `<div class="ks-modal-pays">
@@ -7048,7 +7100,11 @@ button { font-family: inherit; cursor: pointer; }
       if (tienePromo && ahorroPromo > 0) _tokens.push(`-${ahorroPromo.toFixed(2)}€`);
       if (pct > 0) _tokens.push(`-${pct}% (-${eurv}€)`);
       const noteText = _tokens.join(' · ');
-      wrap.innerHTML = `<span class="ks-total-strike">${subtotal}€</span> <span class="ks-total-discnote" style="font-size:11px;color:#d48a1a;font-weight:600">${noteText}</span><span class="ks-total-val">${importeNeto}€</span>`;
+      // v1.1.108 — el producto ya cobrado suma también aquí, en las dos
+      // cifras, para que el descuento que se ve siga cuadrando.
+      const _prodC = this._totalProductosCita(r);
+      const _r2c = (n) => Math.round((Number(n) || 0) * 100) / 100;
+      wrap.innerHTML = `<span class="ks-total-strike">${_r2c(subtotal + _prodC)}€</span> <span class="ks-total-discnote" style="font-size:11px;color:#d48a1a;font-weight:600">${noteText}</span><span class="ks-total-val">${_r2c(importeNeto + _prodC)}€</span>`;
     }
     _renderDiscBox() {
       const box = this.shadowRoot.getElementById('discBox'); if (!box) return;
@@ -7270,10 +7326,22 @@ button { font-family: inherit; cursor: pointer; }
       }
       return { subtotal, discPct, discEur, subtotalOriginal, ahorroPromo, tienePromo };
     }
+    // v1.1.108 — Importe de los productos vendidos DESDE esta cita. Solo
+    // para lo que se muestra en pantalla: nunca entra en el importe que se
+    // manda a cobrar, porque ese dinero ya está en caja.
+    _totalProductosCita(r) {
+      const arr = (r && Array.isArray(r.productosVendidos)) ? r.productosVendidos : [];
+      const suma = arr.reduce((acc, p) => acc + (Number(p.subtotal) || 0), 0);
+      return Math.round(suma * 100) / 100;
+    }
     _updateTotal() {
       const r = this._modalReserva; if (!r) return;
       const { subtotal, discPct, discEur, subtotalOriginal, ahorroPromo, tienePromo } = this._calcDescuento();
       const total = Math.max(0, subtotal - discEur);
+      // v1.1.108 — mismo criterio que _renderModal: el producto ya cobrado
+      // suma en lo que se ve.
+      const totalProductosCita = this._totalProductosCita(r);
+      const _round2c = (n) => Math.round((Number(n) || 0) * 100) / 100;
       const wrap = this.shadowRoot.querySelector('.ks-total-wrap');
       if (!wrap) return;
       // v1.1.39 — mismo render que _renderModal: tokens encadenados promo+manual
@@ -7285,7 +7353,7 @@ button { font-family: inherit; cursor: pointer; }
         : '';
       const noteText = [_promoNote, _manualNote].filter(Boolean).join(' · ');
       const mostrarTachado = tienePromo || discEur > 0;
-      wrap.innerHTML = `${mostrarTachado ? `<span class="ks-total-strike">${subtotalOriginal}€</span> <span class="ks-total-discnote" style="font-size:11px;color:#d48a1a;font-weight:600">${noteText}</span>` : ''}<span class="ks-total-val">${total}€</span>`;
+      wrap.innerHTML = `${mostrarTachado ? `<span class="ks-total-strike">${_round2c(subtotalOriginal + totalProductosCita)}€</span> <span class="ks-total-discnote" style="font-size:11px;color:#d48a1a;font-weight:600">${noteText}</span>` : ''}<span class="ks-total-val">${_round2c(total + totalProductosCita)}€</span>`;
     }
     // v1.1.16 — MODAL SECUNDARIO (genérico): scrim apilado encima del modal de cita
     _openSubModal(htmlContent) {
