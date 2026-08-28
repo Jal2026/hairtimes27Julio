@@ -178,6 +178,55 @@
 //         · actualizarProducto: deja de intentar escribir coste (no
 //           funcionaba); ignora campos.cost (lo gestiona la función
 //           dedicada).
+//
+// v1.3.0 (28 Ago 2026): FIX SECCIONES DE INFORMACIÓN ADICIONAL
+//         (Descripción corta, Componentes, Usos recomendados del
+//         producto, Ventajas del producto).
+//
+//         SÍNTOMA (Hair-Times): al DAR DE ALTA un producto desde el
+//         editor, esos cuatro bloques nunca aparecían en el producto
+//         de Wix Stores, y no se mostraba ningún error.
+//
+//         CAUSA 1 — ALTA: crearProductoNuevo montaba productInfo con
+//         name, productType, price, visible, brand, sku, ribbon,
+//         description y costAndProfitData. additionalInfoSections
+//         llegaba desde el widget y el page code, pero NO se incluía
+//         en la llamada a createProduct: se descartaba en silencio.
+//
+//         CAUSA 2 — EDICIÓN: actualizarProducto sí enviaba
+//         additionalInfoSections, pero dentro del UpdateProductInfo de
+//         wixStoresBackend.updateProductFields (Catalog V1), que no
+//         lo contempla entre sus campos escribibles. Mismo patrón ya
+//         diagnosticado en v1.2.4 con el coste: la llamada no falla,
+//         simplemente ignora el campo.
+//
+//         SOLUCIÓN: las secciones se escriben ahora por la API v2,
+//         storesProducts.updateProduct(_id, { additionalInfoSections }),
+//         con elevate() — la misma vía ya usada en este archivo para
+//         removeProductMedia, getProduct y createCollection.
+//         Doc: dev.wix.com/docs/velo/apis/wix-stores-v2/products/
+//         update-product ("Updates specified fields in a product",
+//         requiere permisos elevados y solo backend).
+//
+//         · NEW helper interno escribirInfoAdicional(productId,
+//           secciones) — normaliza {title, description} y escribe.
+//         · NEW webMethod setearInfoAdicionalProducto(productId,
+//           secciones) — expuesta por si el page code necesita
+//           escribir los bloques por separado. El page code actual
+//           NO necesita llamarla.
+//         · actualizarProducto: deja de meter additionalInfoSections
+//           en el update V1 y lo escribe con la vía v2 dentro de la
+//           misma llamada. El contrato con el page code no cambia.
+//         · crearProductoNuevo: tras crear el producto, escribe los
+//           bloques con la vía v2. El contrato con el page code no
+//           cambia (ya le llegaba additionalInfoSections en `info`).
+//         · Ambas funciones devuelven además infoAdicional:{ok,error,
+//           count} para que el fallo quede visible en el log en vez
+//           de perderse.
+//         · Sin cambios en lectura (listarProductosParaEdicion sigue
+//           leyendo los bloques desde la collection Stores/Products,
+//           que es de solo lectura y por eso nunca se escribe ahí).
+//         · Sin cambios en stock, coste, imágenes ni categorías.
 // =====================================================
 
 import { webMethod, Permissions } from 'wix-web-module';
@@ -189,7 +238,7 @@ import { products as storesProducts } from 'wix-stores.v2';
 import { mediaManager } from 'wix-media-backend';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.2.6';
+const VERSION = '1.3.0';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -252,6 +301,58 @@ async function obtenerVariantIdDefault(productId) {
   } catch (e) {
     console.warn(`${TAG} obtenerVariantIdDefault FAIL para ${productId}:`, e.message);
     return null;
+  }
+}
+
+// =====================================================
+// UTILIDAD v1.3.0: escribir las SECCIONES DE INFORMACIÓN
+// ADICIONAL de un producto (Catalog V1, vía API v2)
+// =====================================================
+// Los bloques viven DENTRO del producto, en el campo
+// additionalInfoSections, como array de {title, description}.
+//
+// No se pueden escribir con wixData sobre Stores/Products (esa
+// collection es de solo lectura), ni con
+// wixStoresBackend.updateProductFields (Catalog V1: el campo no
+// está entre los escribibles de su UpdateProductInfo — mismo
+// caso que el coste, ver v1.2.4).
+//
+// Vía correcta y única: storesProducts.updateProduct de
+// wix-stores.v2, con elevate(). Si el producto no tenía ninguna
+// sección, se crean; si ya tenía, se sustituyen por las que
+// llegan.
+//
+// AVISO DE COMPORTAMIENTO: el array se envía COMPLETO, así que
+// las secciones con títulos distintos a los que manda el widget
+// (por ejemplo "Detalles", heredada de productos antiguos) no se
+// conservan al guardar desde el editor. Es el comportamiento
+// actual del widget, que solo maneja sus cuatro bloques.
+//
+// Retorna siempre un objeto {ok, count, error} — nunca lanza,
+// para no tumbar el alta ni la edición del resto de campos.
+// =====================================================
+async function escribirInfoAdicional(productId, secciones) {
+  try {
+    if (!productId) return { ok: false, error: 'productId vacío' };
+    if (!Array.isArray(secciones)) return { ok: true, count: 0, skipped: true };
+
+    const limpias = secciones
+      .filter(s => s && typeof s === 'object')
+      .map(s => ({
+        title: String(s.title || '').trim(),
+        description: String(s.description || '').trim()
+      }))
+      .filter(s => s.title !== '');
+
+    const elevatedUpdate = elevate(storesProducts.updateProduct);
+    await elevatedUpdate(productId, { additionalInfoSections: limpias });
+
+    console.log(`${TAG} 📋 Info adicional escrita en ${productId}: ${limpias.length} sección(es) — ${limpias.map(s => s.title).join(' | ')}`);
+    return { ok: true, count: limpias.length };
+
+  } catch (e) {
+    console.error(`${TAG} ❌ escribirInfoAdicional FAIL para ${productId}:`, e.message);
+    return { ok: false, error: e.message };
   }
 }
 
@@ -588,36 +689,68 @@ export const actualizarProducto = webMethod(
       // dedicada nueva), llamada por separado desde el page code.
       // Aquí se ignora campos.cost para no romper el resto del update.
 
-      // v1.0.5: additionalInfoSections
-      if (Array.isArray(campos.additionalInfoSections)) {
-        updateInfo.additionalInfoSections = campos.additionalInfoSections
-          .filter(s => s && typeof s === 'object')
-          .map(s => ({
-            title: String(s.title || '').trim(),
-            description: String(s.description || '').trim()
-          }));
-        console.log(`${TAG} 📋 additionalInfoSections: ${updateInfo.additionalInfoSections.length} sección(es)`);
-      }
+      // v1.3.0: additionalInfoSections YA NO va dentro del update V1.
+      // updateProductFields lo ignoraba en silencio (mismo caso que el
+      // coste en v1.2.4). Se escribe aparte con la vía v2.
+      const hayInfoAdicional = Array.isArray(campos.additionalInfoSections);
 
-      if (Object.keys(updateInfo).length === 0) {
+      if (Object.keys(updateInfo).length === 0 && !hayInfoAdicional) {
         console.log(`${TAG} ℹ️ Sin campos que actualizar`);
         return { ok: true, productId, noChanges: true };
       }
 
-      const elevatedUpdate = elevate(wixStoresBackend.updateProductFields);
-      await elevatedUpdate(productId, updateInfo);
+      if (Object.keys(updateInfo).length > 0) {
+        const elevatedUpdate = elevate(wixStoresBackend.updateProductFields);
+        await elevatedUpdate(productId, updateInfo);
+        console.log(`${TAG} ✅ Producto actualizado: ${productId} — campos: ${Object.keys(updateInfo).join(', ')}`);
+      }
 
-      console.log(`${TAG} ✅ Producto actualizado: ${productId} — campos: ${Object.keys(updateInfo).join(', ')}`);
+      // v1.3.0: secciones de información adicional (vía v2)
+      let infoAdicional = null;
+      if (hayInfoAdicional) {
+        infoAdicional = await escribirInfoAdicional(productId, campos.additionalInfoSections);
+      }
 
       return {
         ok: true,
         productId,
         updatedFields: Object.keys(updateInfo),
+        infoAdicional,
         version: VERSION
       };
 
     } catch (e) {
       console.error(`${TAG} ❌ actualizarProducto FAIL:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
+
+// =====================================================
+// 2a. SECCIONES DE INFORMACIÓN ADICIONAL (v1.3.0)
+// =====================================================
+// Escribe SOLO los bloques de información adicional de un
+// producto, sin tocar ningún otro campo. El page code actual no
+// necesita llamarla: actualizarProducto y crearProductoNuevo ya
+// los escriben por su cuenta. Queda expuesta para poder repararlos
+// en lote o desde otra pantalla sin arrastrar el resto del update.
+//
+// secciones: [{ title, description }, ...]
+// =====================================================
+export const setearInfoAdicionalProducto = webMethod(
+  Permissions.Anyone,
+  async (productId, secciones) => {
+    try {
+      if (!productId) throw new Error('productId es requerido');
+      if (!Array.isArray(secciones)) throw new Error('secciones debe ser un array');
+
+      const res = await escribirInfoAdicional(productId, secciones);
+      if (!res.ok) return { ok: false, error: res.error, version: VERSION };
+
+      return { ok: true, productId, count: res.count, version: VERSION };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ setearInfoAdicionalProducto FAIL:`, e.message);
       return { ok: false, error: e.message };
     }
   }
@@ -1162,7 +1295,18 @@ export const crearProductoNuevo = webMethod(
       const newId = result?._id || result?.id || null;
       console.log(`${TAG} ✅ Producto creado: ${newId} — ${info.name}`);
 
-      return { ok: true, productId: newId, product: result, version: VERSION };
+      // v1.3.0: SECCIONES DE INFORMACIÓN ADICIONAL.
+      // createProduct (V1) no las acepta en productInfo — antes se
+      // perdían aquí sin aviso. Se escriben inmediatamente después,
+      // sobre el producto ya creado, con la vía v2. Mismo criterio que
+      // el coste, las imágenes, el stock y las categorías, que también
+      // se aplican después de crear.
+      let infoAdicional = null;
+      if (newId && Array.isArray(info.additionalInfoSections)) {
+        infoAdicional = await escribirInfoAdicional(newId, info.additionalInfoSections);
+      }
+
+      return { ok: true, productId: newId, product: result, infoAdicional, version: VERSION };
 
     } catch (e) {
       console.error(`${TAG} ❌ crearProductoNuevo FAIL:`, e.message);
