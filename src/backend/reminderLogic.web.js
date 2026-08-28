@@ -1,10 +1,30 @@
 // =====================================================
-// [ReminderJob v1.6.0] - reminderLogic.web.js
+// [ReminderJob v1.7.0] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
-// Lee extendedBookings (Wix nativas) + SvExternalRecords (Externos)
+// FUENTE V2: KamisuiteReservations (fuente de verdad de reservas)
 // Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
 // según SalonConfig.emailProvider. WhatsApp vía centralita.
 // Idempotencia garantizada por colección ReminderLog.
+//
+// ─────────────────────────────────────────────────────
+// AUDITORÍA DE CONEXIONES (obligatoria en cada entrega)
+// ─────────────────────────────────────────────────────
+//  LEE de:
+//    · KamisuiteReservations  → citas de mañana. FUENTE DE VERDAD V2.
+//    · SalonConfig            → reminderActive, emailProvider.
+//    · Wix Contacts (CRM)     → mapa email/nombre → contactId (cascada).
+//    · ReminderLog            → idempotencia (qué ya se envió).
+//  ESCRIBE en:
+//    · ReminderLog            → una fila por reserva notificada.
+//    · CommunicationLog       → indirectamente, vía la centralita.
+//  LE LLAMA:
+//    · reminderJob.js → jobs.config, cron "0 7 * * *" (07:00 UTC).
+//  LLAMA A:
+//    · comunicacionesLogic.notificarRecordatorio (v1.3.0) → WhatsApp
+//      (whatsappLogic v1.6.1, plantilla booking_reminder_es).
+//    · brevoLogic.enviarEmailPlantilla (plantilla reminderLayout).
+//    · wix-crm-backend triggeredEmails (plantilla VGPVvYO).
+//  FLUJO DE PUNTA A PUNTA: verificado. Ya NO hay tramo muerto.
 //
 // CHANGELOG:
 //   v1.0.x - Motor base, DRY_RUN, fixes de query y extracción.
@@ -28,6 +48,58 @@
 //            NOTA: la v1.5.0 (reminderActive) nunca se desplegó; esta
 //            entrega salta de la v1.4.0 (producción) a la v1.6.0, que
 //            incluye AMBOS: reminderActive + Brevo.
+//   v1.7.0 - FIX CRÍTICO DE FUENTE DE DATOS (28-Ago-2026).
+//
+// CAMBIOS v1.7.0 — el cron leía de V1 y no encontraba NADA:
+//   PROBLEMA: hasta la v1.6.0 este cron buscaba las citas de mañana en
+//   `extendedBookings` (Wix Bookings) y en `SvExternalRecords`. En V2
+//   las reservas NO se crean como bookings de Wix (recepcionProLogic
+//   usa sessions.createSession sobre el ancla y registra la reserva en
+//   `KamisuiteReservations`) y los externos también viven ahí. Desde la
+//   migración de Hair-Times a V2 el cron encontraba CERO citas y por
+//   tanto NO se enviaba ningún recordatorio, ni email ni WhatsApp.
+//   Explica además la incidencia abierta desde junio: "el recordatorio
+//   no genera logs en Salón Kami" (Salón Kami es V2 desde el principio).
+//
+//   SOLUCIÓN: se sustituyen `leerCitasWix` + `leerCitasExternos` por
+//   una única `leerCitasV2` que consulta `KamisuiteReservations` con el
+//   patrón productivo del proyecto (recepcionProLogic.getReservasPorFecha
+//   y clienteAreaLogic próximas citas):
+//     · rango sobre `fechaReserva` con colchón de ±3h y filtro final por
+//       fecha Madrid (evita el borde de zona horaria).
+//     · `.ne('status','CANCELADA')`.
+//     · filtrado de BLOQUEOS con el patrón literal de
+//       cierreLogicExtendido v1.1.4: family==='BLOQUEO' o clientName
+//       que empieza por 'BLOQUEO:'.
+//     · nombres de servicio desde `serviciosDetail` (separador ';;',
+//       item 'label|precio|cantidad'), quitando las fases técnicas
+//       (lavado / secado / proceso). Si queda vacío, cae a `title`.
+//     · hora fin = fechaReserva + duracionTotal + extensionMin.
+//   Devuelve EXACTAMENTE la misma forma de objeto que devolvían las dos
+//   funciones V1, así que TODO lo de aguas abajo queda intacto: mapeo
+//   CRM, cascada de candidatos, idempotencia, agrupación, email (Wix o
+//   Brevo) y WhatsApp por la centralita.
+//
+//   · Cada reserva V2 ya es el pack completo del cliente (una fila por
+//     cita, no una por fase), así que la agrupación normalmente deja el
+//     grupo tal cual; sigue viva para el caso de dos reservas del mismo
+//     cliente en el mismo día.
+//   · `resolverCandidatos` usa ahora como PRIMER candidato el contactId
+//     que ya trae la propia reserva, y después la cascada CRM de
+//     siempre. Sin esto, una reserva con el email genérico del salón y
+//     un nombre que no casa literalmente con el CRM se quedaba sin
+//     candidatos y no recibía NI email NI WhatsApp.
+//   · Se elimina el import de `extendedBookings` (ya no se usa).
+//   · `source` pasa a valer 'v2' en ReminderLog (antes 'wix'/'externo').
+//
+//   No se toca:
+//     - Cascada de candidatos email ni enviarRecordatorio
+//     - Camino Brevo (_enviarRecordatorioBrevo) ni _getEmailProvider
+//     - notificarWhatsAppViaCentralita
+//     - Toggle reminderActive
+//     - Idempotencia ReminderLog
+//     - Constantes hardcoded (PROFESIONAL_DEFAULT, DOMINIO_SALON,
+//       SITE_URL) — deuda técnica multi-tenant para versión futura.
 //
 // CAMBIOS v1.5.0:
 //   - Nuevo helper _getReminderActive() lee SalonConfig.reminderActive
@@ -59,14 +131,17 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 import { triggeredEmails, contacts } from 'wix-crm-backend';
-import { extendedBookings } from 'wix-bookings.v2';
 
 // v1.4.0: Centralita de comunicaciones
 import { notificarRecordatorio } from 'backend/comunicacionesLogic.web.js';
 // v1.6.0: driver de email por plantilla (Brevo)
 import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 
-const TAG = '[ReminderJob v1.6.0]';
+const TAG = '[ReminderJob v1.7.0]';
+
+// v1.7.0: colección fuente de verdad de reservas en V2
+const CMS_RESERVAS = 'KamisuiteReservations';
+const TIMEZONE = 'Europe/Madrid';
 const EMAIL_RECORDATORIO_ID = 'VGPVvYO';
 const PROFESIONAL_DEFAULT = 'Equipo Hair-Times';
 const DRY_RUN = false;
@@ -84,7 +159,8 @@ function ventanaManana() {
   const yyyy_mm_dd = manana.toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
   const inicio = new Date(`${yyyy_mm_dd}T00:00:00+02:00`);
   const fin = new Date(`${yyyy_mm_dd}T23:59:59+02:00`);
-  return { inicio, fin, fechaLegible: formatearFechaES(manana) };
+  // v1.7.0: fechaYMD (Madrid) para el filtro fino de leerCitasV2
+  return { inicio, fin, fechaYMD: yyyy_mm_dd, fechaLegible: formatearFechaES(manana) };
 }
 
 function formatearFechaES(d) {
@@ -268,91 +344,118 @@ async function cargarMapaCRM() {
   }
 }
 
-// ----------- Lectura Wix nativas -----------
-// v1.4.0: añadida extracción de teléfono desde contactDetails.phone
-async function leerCitasWix(inicio, fin) {
+// ----------- v1.7.0: Lectura de citas desde KamisuiteReservations -----------
+//
+// FUENTE DE VERDAD V2. Sustituye a leerCitasWix (extendedBookings) y a
+// leerCitasExternos (SvExternalRecords), ambas V1 y ambas vacías desde
+// la migración de Hair-Times a V2.
+//
+// Patrón de query copiado literalmente de recepcionProLogic
+// `getReservasPorFecha`: rango amplio sobre `fechaReserva` (±3h de
+// colchón) y filtro fino por fecha Madrid, para no perder ni colar
+// reservas por el borde de zona horaria.
+//
+// Devuelve EXACTAMENTE la misma forma de objeto que devolvían las dos
+// funciones V1, de modo que la agrupación, la cascada de candidatos, la
+// idempotencia y los dos canales de envío siguen funcionando sin tocar.
+async function leerCitasV2(inicio, fin, fechaYMD) {
   try {
-    const query = {
-      filter: {
-        "startDate": { "$gte": inicio.toISOString() },
-        "endDate": { "$lte": fin.toISOString() },
-        "status": { "$in": ["CONFIRMED", "PENDING"] }
-      },
-      sort: [{ fieldName: "startDate", order: "ASC" }],
-      cursorPaging: { limit: 100 }
-    };
-    const elevatedQuery = elevate(extendedBookings.queryExtendedBookings);
-    const response = await elevatedQuery(query);
-    const items = response?.extendedBookings || [];
-    console.log(`${TAG} 📅 Wix nativas encontradas: ${items.length}`);
-    return items.map(item => {
-      const b = item.booking || item;
-      const slot = b?.bookedEntity?.slot;
-      const startDate = slot?.startDate ? new Date(slot.startDate) : null;
-      const endDate = slot?.endDate ? new Date(slot.endDate) : null;
-      const contact = b?.contactDetails || item?.contactDetails || {};
-      return {
-        bookingId: b._id,
-        source: 'wix',
-        contactId: contact?.contactId || b?.contactId || '',
-        clientEmail: contact.email || '',
-        clientPhone: contact.phone || '',  // v1.4.0: extracción de teléfono
-        Nombre: contact.firstName || '',
-        Apellido: contact.lastName || '',
-        Fecha: startDate ? formatearFechaES(startDate) : '',
-        horaInicio: startDate ? formatearHora(startDate) : '',
-        horaFinal: endDate ? formatearHora(endDate) : '',
-        servicios: b?.bookedEntity?.title || '',
-        importeTotal: '',
-        estadoPago: 'Pago en salón',
-        _startMs: startDate ? startDate.getTime() : 0,
-        _endMs: endDate ? endDate.getTime() : 0
-      };
-    });
-  } catch (e) {
-    console.error(`${TAG} ❌ Error leerCitasWix:`, e.message);
-    return [];
-  }
-}
+    const startUTC = new Date(inicio.getTime() - 3 * 3600000);
+    const endUTC = new Date(fin.getTime() + 3 * 3600000);
 
-// ----------- Lectura Externos -----------
-// v1.4.0: añadida extracción de teléfono (si SvExternalRecords lo tiene)
-async function leerCitasExternos(inicio, fin) {
-  try {
-    const res = await wixData.query('SvExternalRecords')
-      .ge('date', inicio)
-      .le('date', fin)
-      .eq('status', 'CONFIRMADA')
-      .limit(100)
+    const res = await wixData.query(CMS_RESERVAS)
+      .ge('fechaReserva', startUTC)
+      .le('fechaReserva', endUTC)
+      .ne('status', 'CANCELADA')
+      .ascending('fechaReserva')
+      .limit(200)
       .find({ suppressAuth: true });
-    console.log(`${TAG} 📅 Externos encontrados: ${res.items.length}`);
-    return res.items.map(r => {
-      const start = new Date(r.date);
-      const end = new Date(start.getTime() + (r.totalDuration || 0) * 60000);
-      const partes = (r.clientName || '').trim().split(' ');
-      return {
+
+    let bloqueosFiltrados = 0;
+    let fueraDeDia = 0;
+
+    const citas = [];
+
+    for (const r of (res.items || [])) {
+      if (!r.fechaReserva) continue;
+
+      const start = r.fechaReserva instanceof Date
+        ? r.fechaReserva : new Date(r.fechaReserva);
+
+      // Filtro fino por día Madrid (patrón getReservasPorFecha)
+      const diaMadrid = start.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+      if (diaMadrid !== fechaYMD) { fueraDeDia++; continue; }
+
+      // Bloqueos del calendario: NO son clientes.
+      // Patrón literal de cierreLogicExtendido v1.1.4.
+      if (r.family === 'BLOQUEO') { bloqueosFiltrados++; continue; }
+      if (typeof r.clientName === 'string' && r.clientName.startsWith('BLOQUEO:')) {
+        bloqueosFiltrados++; continue;
+      }
+
+      const minutos = (Number(r.duracionTotal) || 0) + (Number(r.extensionMin) || 0);
+      const end = new Date(start.getTime() + minutos * 60000);
+
+      const partes = String(r.clientName || '').trim().split(' ');
+
+      const servicios = _nombresServicioVisibles(r);
+
+      citas.push({
         bookingId: r._id,
-        source: 'externo',
-        contactId: r.contactId,
+        source: 'v2',
+        contactId: r.contactId || '',
         clientEmail: r.clientEmail || '',
-        clientPhone: r.clientPhone || '',  // v1.4.0: si existe en CMS
+        clientPhone: r.clientPhone || '',
         Nombre: partes[0] || '',
         Apellido: partes.slice(1).join(' ') || '',
         Fecha: formatearFechaES(start),
         horaInicio: formatearHora(start),
         horaFinal: formatearHora(end),
-        servicios: r.title || '',
-        importeTotal: r.totalPrice ? `${r.totalPrice} €` : '',
+        servicios: servicios,
+        importeTotal: r.precioTotal ? `${r.precioTotal} €` : '',
         estadoPago: r.status === 'PAGADO' ? 'Pagado' : 'Pago en salón',
         _startMs: start.getTime(),
         _endMs: end.getTime()
-      };
-    });
+      });
+    }
+
+    console.log(`${TAG} 📅 Reservas V2 encontradas: ${citas.length} (bloqueos descartados: ${bloqueosFiltrados} | fuera del día: ${fueraDeDia})`);
+    return citas;
+
   } catch (e) {
-    console.error(`${TAG} ❌ Error leerCitasExternos:`, e.message);
+    console.error(`${TAG} ❌ Error leerCitasV2:`, e.message);
     return [];
   }
 }
+
+// v1.7.0: nombres de servicio legibles para el cliente.
+// `serviciosDetail` se construye en recepcionProLogic como
+// 'Label|precio|cantidad' separado por ';;'. Se quitan las fases
+// técnicas (lavado / secado / proceso) que no aportan nada al cliente.
+// Si tras el filtrado no queda ninguna línea, se cae al `title` de la
+// reserva para no mandar nunca un recordatorio con el servicio vacío.
+function _nombresServicioVisibles(reserva) {
+  const detalle = String(reserva.serviciosDetail || '');
+
+  const nombres = detalle
+    .split(';;')
+    .map(item => String(item).split('|')[0].trim())
+    .filter(Boolean)
+    .filter(nombre => !SERVICIOS_OCULTOS.some(s => nombre.toLowerCase().startsWith(s)));
+
+  if (nombres.length > 0) {
+    // Sin duplicados, respetando el orden de la cita
+    const unicos = [];
+    for (const n of nombres) {
+      if (!unicos.includes(n)) unicos.push(n);
+    }
+    return unicos.join(', ');
+  }
+
+  const titulo = String(reserva.title || '').split(' — ')[0].trim();
+  return titulo || 'Tu cita';
+}
+
 
 // ----------- Filtro idempotencia -----------
 async function filtrarYaEnviados(citas) {
@@ -377,7 +480,12 @@ function resolverCandidatos(cita, mapas) {
   if (!esGenerico) {
     const candidatos = mapas.porEmail[emailCliente];
     if (candidatos && candidatos.length > 0) {
-      return { candidatos: [...candidatos], claveAgrupacion: `email_${emailCliente}` };
+      // v1.7.0: el contactId de la propia reserva va primero si existe
+      const lista = [...candidatos];
+      if (cita.contactId && !lista.includes(cita.contactId)) {
+        lista.unshift(cita.contactId);
+      }
+      return { candidatos: lista, claveAgrupacion: `email_${emailCliente}` };
     }
   }
 
@@ -386,8 +494,32 @@ function resolverCandidatos(cita, mapas) {
   if (fullName && fullName.length > 1) {
     const idPorNombre = mapas.porNombre[fullName];
     if (idPorNombre) {
-      return { candidatos: [idPorNombre], claveAgrupacion: `nombre_${fullName}` };
+      const lista = [idPorNombre];
+      if (cita.contactId && !lista.includes(cita.contactId)) {
+        lista.unshift(cita.contactId);
+      }
+      return { candidatos: lista, claveAgrupacion: `nombre_${fullName}` };
     }
+  }
+
+  // 3) v1.7.0 — ÚLTIMO RECURSO: la reserva V2 ya trae su propio
+  //    contactId. Antes, si el email era el genérico del salón y el
+  //    nombre no casaba literalmente con el CRM, la cita caía en
+  //    "sin resolver" y el cliente se quedaba SIN email y SIN WhatsApp,
+  //    aun teniendo su teléfono delante en la reserva.
+  if (cita.contactId) {
+    return {
+      candidatos: [cita.contactId],
+      claveAgrupacion: `contacto_${cita.contactId}`
+    };
+  }
+
+  // 4) v1.7.0 — sin contactId pero con teléfono: se agrupa igualmente
+  //    para que al menos salga el WhatsApp. El email no se enviará
+  //    (la cascada no tiene candidatos), y así queda registrado.
+  const telefono = String(cita.clientPhone || '').trim();
+  if (telefono) {
+    return { candidatos: [], claveAgrupacion: `tel_${telefono}` };
   }
 
   return { candidatos: [], claveAgrupacion: null };
@@ -408,7 +540,11 @@ function agruparPorCliente(citas) {
   const sinResolver = [];
 
   for (const cita of citas) {
-    if (!cita._claveAgrupacion || cita._candidatos.length === 0) {
+    // v1.7.0: basta con tener clave de agrupación. Antes se exigía
+    // además al menos un candidato de CRM, y eso dejaba fuera del
+    // WhatsApp a clientes de los que SÍ tenemos el teléfono en la
+    // reserva pero cuyo contactId no se pudo resolver.
+    if (!cita._claveAgrupacion) {
       sinResolver.push(cita);
       continue;
     }
@@ -654,13 +790,14 @@ export const ejecutarRecordatoriosDiarios = webMethod(
   Permissions.Admin,
   async () => {
     console.log(`${TAG} ▶️ Inicio ejecución | DRY_RUN=${DRY_RUN}`);
-    const { inicio, fin, fechaLegible } = ventanaManana();
+    const { inicio, fin, fechaYMD, fechaLegible } = ventanaManana();
     console.log(`${TAG} 📆 Ventana mañana: ${fechaLegible} (${inicio.toISOString()} → ${fin.toISOString()})`);
 
     // v1.5.0: Toggle SalonConfig.reminderActive — abortar si === false explícito.
     // Lectura defensiva: null/undefined/true/error → activo (fail-safe).
     // Se comprueba ANTES de las 3 queries pesadas (CRM + Wix Bookings + Externos)
     // para no consumir API quota innecesariamente cuando el cron está apagado.
+    // v1.7.0: ahora son 2 queries (CRM + KamisuiteReservations).
     const reminderActive = await _getReminderActive();
     if (!reminderActive) {
       console.log(`${TAG} ⏸️ Recordatorios DESACTIVADOS en SalonConfig.reminderActive=false — ejecución abortada limpiamente`);
@@ -680,13 +817,12 @@ export const ejecutarRecordatoriosDiarios = webMethod(
       };
     }
 
-    const [mapas, wix, externos] = await Promise.all([
+    // v1.7.0: una sola fuente de citas — KamisuiteReservations.
+    const [mapas, todas] = await Promise.all([
       cargarMapaCRM(),
-      leerCitasWix(inicio, fin),
-      leerCitasExternos(inicio, fin)
+      leerCitasV2(inicio, fin, fechaYMD)
     ]);
 
-    const todas = [...wix, ...externos];
     console.log(`${TAG} 📊 Total citas mañana: ${todas.length}`);
 
     // Resolver candidatos para cada cita
