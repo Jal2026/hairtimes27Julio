@@ -1,8 +1,35 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.11
+   salonConfigLogic.web.js  v1.0.12
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.12 · 28 Ago 2026 · bookingBufferMinutes — antelación mínima de
+     las reservas ONLINE
+     - ALL_FIELDS    += bookingBufferMinutes
+     - NUMBER_FIELDS += bookingBufferMinutes
+     - Minutos de antelación que debe respetar una reserva hecha por el
+       cliente desde la web. Nace del bug de producción del 28-ago-2026
+       en Hair-Times: a las 19:21 el widget público ofreció y aceptó una
+       cita para ese mismo día a las 19:15, porque el motor de huecos
+       nunca había comparado los slots con la hora real y la creación de
+       la reserva tampoco exigía que la hora fuese futura.
+     - Semántica: vacío / null / no numérico → 15 min (valor por defecto
+       aplicado por el consumidor). 0 explícito → solo se bloquea el
+       pasado estricto, sin colchón. La asimetría con closingGraceMin
+       (que cae a 0) es deliberada: allí el default es el comportamiento
+       histórico; aquí el default protege a los salones que todavía no
+       hayan configurado el campo.
+     - Sin NUMBER_FIELDS el valor se guardaría como texto, el consumidor
+       lo descartaría por no numérico y siempre caería al default.
+     - CMS: hay que crear en SalonConfig el campo `bookingBufferMinutes`
+       como Número, con ese ID exacto.
+     - LO CONSUME: widgetPublicoLogic.web.js v0.9.7 (motor de huecos +
+       guardia de creación de reserva). El Área de Cliente hereda la
+       protección: getHuecosCambioReserva y moverCitaCliente delegan en
+       ese mismo motor para ofrecer y para revalidar.
+     - Pareja widget: widget_salon_config v1.0.15 (campo en la sección
+       Horarios, debajo del margen de extensión de cierre).
+     - Page code sin cambios: pasa el payload completo tal cual.
    v1.0.11 · 28 Ago 2026 · Recordatorio de cita gobernable por canal
      - ALL_FIELDS     += emailReminder, whatsappReminder
      - BOOLEAN_FIELDS += emailReminder, whatsappReminder
@@ -149,7 +176,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[SalonConfig v1.0.9]';
+const TAG = '[SalonConfig v1.0.12]';
 const COLLECTION = 'SalonConfig';
 
 // ── Lista completa de field IDs (53 user fields) ──
@@ -217,6 +244,8 @@ const ALL_FIELDS = [
   'wixAnclaId',
   // v1.0.6 — Margen extensión horario (min) para reservas ONLINE
   'closingGraceMin',
+  // v1.0.12 — Antelación mínima (min) exigida a las reservas ONLINE
+  'bookingBufferMinutes',
   // v1.0.9 — textos de aviso de caducidad (bonos / prime / tarjetas promo)
   'textVoucherAlert',
   'textPrimeAlert',
@@ -262,6 +291,9 @@ const NUMBER_FIELDS = [
   // v1.0.6 — margen extensión horario (min) para reservas ONLINE.
   // Aplicado por widgetPublicoLogic.web.js v0.8.0. Vacío/null → 0.
   'closingGraceMin',
+  // v1.0.12 — antelación mínima (min) para reservas ONLINE.
+  // Aplicada por widgetPublicoLogic.web.js v0.9.7. Vacío/null → 15.
+  'bookingBufferMinutes',
 ];
 
 /**
