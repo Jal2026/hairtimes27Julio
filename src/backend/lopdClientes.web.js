@@ -1,7 +1,20 @@
 // =====================================================
 // backend/lopdClientes.web.js
-// VERSION: v1.2.0
+// VERSION: v1.3.0
 // CHANGELOG:
+//   v1.3.0 (28 Ago 2026)
+//     · Se persiste el cuarto consentimiento del widget: autorización
+//       de uso de imágenes del resultado del trabajo (redes sociales y
+//       medios promocionales). Campo booleano `aceptaUsoimagen` de
+//       ClientLopdSignatures, escrito con la misma normalización
+//       estricta (=== true) que los tres anteriores.
+//     · NO entra en validarPayload: es opcional, su valor puede ser
+//       false sin bloquear el alta. Altas antiguas sin el campo quedan
+//       como false por la normalización.
+//     · No se toca nada más: obtenerLegalSalon, crearContactoWix
+//       (patrón V1 de marisaBilling), subirFirmaPng, validarPayload ni
+//       normalizarTelefono quedan igual.
+//     · Pareja: widget `Alta LOPD Cliente.html` v1.1.0.
 //   v1.2.0 (20 Jun 2026)
 //     · Migrado a wix-crm-backend (V1), patrón idéntico a
 //       marisaBilling.web.js (producción, escribe direcciones OK).
@@ -20,7 +33,7 @@ import { Permissions, webMethod } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 
 const COLLECTION_ID = 'ClientLopdSignatures';
 const SALON_CONFIG_COLLECTION_ID = 'SalonConfig';
@@ -79,6 +92,7 @@ export const registrarAltaLopd = webMethod(
         aceptaPrivacidad: payload.aceptaPrivacidad === true,
         aceptaTerminos: payload.aceptaTerminos === true,
         aceptaComunicaciones: payload.aceptaComunicaciones === true,
+        aceptaUsoimagen: payload.aceptaUsoimagen === true,
         origenFirma: payload.origenFirma || 'recepcion',
         estado: payload.estado || 'vigente'
       };
