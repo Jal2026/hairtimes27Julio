@@ -9,10 +9,41 @@
 <title>KAMISUITE · Configuración Salón</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   widget_salon_config.html  v1.0.14
+   widget_salon_config.html  v1.0.15
    KAMISUITE — Widget Edición Configuración Salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.15 · 28 Ago 2026 · bookingBufferMinutes — antelación mínima de
+     las reservas online
+     - SECTIONS[horarios].fields += bookingBufferMinutes (type 'number'),
+       inmediatamente DESPUÉS de closingGraceMin: los dos son márgenes en
+       minutos que gobiernan el motor de reservas ONLINE, misma naturaleza
+       y misma lectura visual (uno abre el final del día, el otro cierra
+       el principio).
+     - Origen: bug de producción del 28-ago-2026 en Hair-Times. A las
+       19:21 el widget público ofreció y aceptó una cita para ese mismo
+       día a las 19:15. El motor de huecos nunca había comparado los
+       slots con la hora real, y la creación de la reserva tampoco
+       exigía que la hora fuese futura.
+     - Semántica del campo: minutos de antelación que debe respetar una
+       reserva hecha por el cliente desde la web. VACÍO = 15 min (el
+       consumidor aplica ese valor por defecto para que ningún salón
+       quede desprotegido sin haberlo configurado). 0 explícito = solo
+       se bloquea el pasado estricto, sin colchón.
+     - Diferencia con closingGraceMin: aquel es un margen que RELAJA el
+       cierre (permite terminar N min después). Este RESTRINGE el
+       arranque (no se puede empezar antes de ahora + N).
+     - El campo hay que crearlo en el CMS SalonConfig como Número, con
+       el ID exacto `bookingBufferMinutes`.
+     - Sin cambios de maquetación ni de CSS: los campos numéricos se
+       pintan con el render genérico por SECTIONS (misma ruta que
+       closingGraceMin y timeOut).
+     - Pareja backend: salonConfigLogic v1.0.12 (ALL_FIELDS +
+       NUMBER_FIELDS). Consumidor real: widgetPublicoLogic v0.9.7
+       (motor de huecos + guardia de creación de reserva). El Área de
+       Cliente hereda la protección: al mover una cita consulta ese
+       mismo motor.
+     - Page code sin cambios: pasa el payload completo tal cual.
    v1.0.14 · 28 Ago 2026 · Recordatorio de cita: un toggle por canal
      - SECTIONS[comunicaciones].fields += emailReminder, whatsappReminder
        (type 'boolean'), justo debajo de waActive / emailActive: los dos
@@ -1049,7 +1080,7 @@ select.field-input {
     <div>
       <span class="header-brand">KAMISUITE</span>
       <span class="header-title"> · CONFIGURACIÓN SALÓN</span>
-      <span class="header-version">v1.0.12</span>
+      <span class="header-version">v1.0.15</span>
     </div>
   </div>
   <div class="header-right">
@@ -1293,6 +1324,8 @@ const SECTIONS = [
       { id: 'hoursFriday',    label: 'Viernes',   type: 'text', placeholder: '10:00-20:00' },
       { id: 'hoursSaturday',  label: 'Sábado',    type: 'text', placeholder: '10:00-14:00' },
       { id: 'closingGraceMin', label: 'Margen extensión horario (min)', type: 'number', placeholder: '0', desc: 'Permite que una reserva ONLINE termine hasta N minutos después del cierre del staff. Vacío o 0 = corte estricto. Solo aplica al widget público; Recepción PRO decide manualmente.' },
+      // v1.0.15 — antelación mínima de las reservas online
+      { id: 'bookingBufferMinutes', label: 'Antelación mínima reserva online (min)', type: 'number', placeholder: '15', desc: 'Tiempo mínimo entre el momento de la reserva y la hora de la cita. Vacío = 15 minutos. 0 = solo se bloquean las horas ya pasadas. Solo aplica a las reservas hechas desde la web; Recepción PRO decide manualmente.' },
     ]
   },
   {
