@@ -9,11 +9,45 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Alta y Edición Productos v3.0
+       KAMISUITE — Alta y Edición Productos v3.4.0
        Dark theme (same as Catálogo / Checkout)
        v3.0: + módulo Almacén (descontar unidad, stock editable,
               lectura coste real). Sin venta, sin cliente,
               sin historial.
+       v3.3.0: coste solo lectura en el editor (se gestiona
+              desde Almacén).
+       v3.5.1 (28 Ago 2026): leyendas de redacción bajo la
+              descripción larga y la descripción corta, para
+              orientar al salón sobre extensión y tono.
+       v3.5.0 (28 Ago 2026): los cuatro bloques de INFORMACIÓN
+              ADICIONAL pasan de cuadros de texto plano a
+              editores con formato (negrita, cursiva, viñetas y
+              saltos de línea). Antes, el HTML que el salón o
+              Jal maquetaban desde el Dashboard de Wix Stores se
+              abría aquí como código a la vista (<ul>, <li>…),
+              y cualquier salto de línea escrito en el cuadro se
+              perdía al mostrarse porque el campo se pinta como
+              HTML. Ahora el contenido se ve maquetado, se edita
+              con botones, y lo que se guarda es el mismo HTML
+              que entiende el Dashboard: los dos lados editan lo
+              mismo sin pisarse.
+              · Al pegar texto se pega en limpio, sin arrastrar
+                formato de Word ni de una web.
+              · Al guardar se depuran las etiquetas: solo salen
+                ul, ol, li, b, strong, i, em, u y br. El resto se
+                descarta conservando el texto.
+              · Un bloque que quede sin texto se guarda vacío,
+                sin etiquetas sueltas.
+       v3.4.0 (28 Ago 2026): FIX — el filtro de categoría se
+              perdía al guardar. Cada refresco del listado
+              reconstruía el desplegable de categorías desde
+              cero, y al reescribir sus opciones el navegador
+              dejaba la selección en "Todas las categorías".
+              Ahora se guarda la categoría elegida antes de
+              reconstruir el desplegable y se restaura después,
+              siempre que esa categoría siga existiendo. El
+              buscador y el filtro de visibilidad no se veían
+              afectados porque no se reconstruyen.
        ═══════════════════════════════════════════════════ */
     :root {
       --bg: #0f1117;
@@ -343,6 +377,36 @@
     .modal-textarea:focus { border-color: var(--accent); }
     .modal-textarea::placeholder { color: var(--muted); }
 
+    /* ═══ v3.5.0: editor con formato (información adicional) ═══ */
+    .rt-toolbar {
+      display: flex; gap: 4px; margin-bottom: 4px;
+    }
+    .rt-btn {
+      background: var(--surface3); border: 1px solid var(--border);
+      color: var(--text-secondary); border-radius: var(--radius-sm);
+      min-width: 26px; height: 24px; padding: 0 7px;
+      font-family: inherit; font-size: 11px; font-weight: 700;
+      cursor: pointer; transition: border-color .2s, color .2s;
+    }
+    .rt-btn:hover { border-color: var(--border-hover); color: var(--text); }
+    .rt-btn-i { font-style: italic; }
+    .rt-btn-u { text-decoration: underline; }
+    .rt-editor {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); border-radius: var(--radius-sm);
+      padding: 8px 10px; font-family: inherit; font-size: 12px;
+      font-weight: 500; outline: none; min-height: 60px;
+      max-height: 220px; overflow-y: auto;
+      transition: border-color .2s;
+    }
+    .rt-editor:focus { border-color: var(--accent); }
+    .rt-editor:empty:before {
+      content: attr(data-placeholder);
+      color: var(--muted);
+    }
+    .rt-editor ul, .rt-editor ol { margin: 4px 0; padding-left: 18px; }
+    .rt-editor li { margin: 2px 0; }
+
     .modal-section-sep {
       border: none;
       border-top: 1px solid var(--border);
@@ -490,7 +554,7 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
-    <span class="header-version">v3.3.0</span>
+    <span class="header-version">v3.5.1</span>
   </div>
 
   <!-- TOOLBAR -->
@@ -584,6 +648,7 @@
         <div class="modal-field">
           <label class="modal-label">DESCRIPCIÓN (texto largo)</label>
           <textarea class="modal-textarea" id="editDescripcion" rows="3" placeholder="Descripción del producto..."></textarea>
+          <span class="modal-hint">Usa máx. 75-100 palabras y tono comercial.</span>
         </div>
         <div class="modal-field">
           <label class="modal-label">RIBBON (ETIQUETA)</label>
@@ -595,19 +660,44 @@
         <div class="modal-section-title">📋 Información adicional</div>
         <div class="modal-field">
           <label class="modal-label">DESCRIPCIÓN CORTA</label>
-          <textarea class="modal-textarea" id="editDescCorta" rows="3" placeholder="Resumen breve del producto, para quién es y qué resultado ofrece..."></textarea>
+          <div class="rt-toolbar" data-rt-for="editDescCorta">
+            <button type="button" class="rt-btn" data-rt-cmd="bold" title="Negrita">B</button>
+            <button type="button" class="rt-btn rt-btn-i" data-rt-cmd="italic" title="Cursiva">I</button>
+            <button type="button" class="rt-btn rt-btn-u" data-rt-cmd="underline" title="Subrayado">U</button>
+            <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Lista de viñetas">•</button>
+          </div>
+          <div class="rt-editor" id="editDescCorta" contenteditable="true" data-placeholder="Resumen breve del producto, para quién es y qué resultado ofrece..."></div>
+          <span class="modal-hint">Máximo 35-40 palabras y tono más técnico.</span>
         </div>
         <div class="modal-field">
           <label class="modal-label">COMPONENTES</label>
-          <textarea class="modal-textarea" id="editComponentes" rows="2" placeholder="Ingredientes activos separados por · "></textarea>
+          <div class="rt-toolbar" data-rt-for="editComponentes">
+            <button type="button" class="rt-btn" data-rt-cmd="bold" title="Negrita">B</button>
+            <button type="button" class="rt-btn rt-btn-i" data-rt-cmd="italic" title="Cursiva">I</button>
+            <button type="button" class="rt-btn rt-btn-u" data-rt-cmd="underline" title="Subrayado">U</button>
+            <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Lista de viñetas">•</button>
+          </div>
+          <div class="rt-editor" id="editComponentes" contenteditable="true" data-placeholder="Ingredientes activos, uno por línea o en viñetas..."></div>
         </div>
         <div class="modal-field">
           <label class="modal-label">USOS RECOMENDADOS DEL PRODUCTO</label>
-          <textarea class="modal-textarea" id="editUsos" rows="3" placeholder="Instrucciones de aplicación..."></textarea>
+          <div class="rt-toolbar" data-rt-for="editUsos">
+            <button type="button" class="rt-btn" data-rt-cmd="bold" title="Negrita">B</button>
+            <button type="button" class="rt-btn rt-btn-i" data-rt-cmd="italic" title="Cursiva">I</button>
+            <button type="button" class="rt-btn rt-btn-u" data-rt-cmd="underline" title="Subrayado">U</button>
+            <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Lista de viñetas">•</button>
+          </div>
+          <div class="rt-editor" id="editUsos" contenteditable="true" data-placeholder="Instrucciones de aplicación..."></div>
         </div>
         <div class="modal-field">
           <label class="modal-label">VENTAJAS DEL PRODUCTO</label>
-          <textarea class="modal-textarea" id="editVentajas" rows="3" placeholder="Beneficios y ventajas del producto..."></textarea>
+          <div class="rt-toolbar" data-rt-for="editVentajas">
+            <button type="button" class="rt-btn" data-rt-cmd="bold" title="Negrita">B</button>
+            <button type="button" class="rt-btn rt-btn-i" data-rt-cmd="italic" title="Cursiva">I</button>
+            <button type="button" class="rt-btn rt-btn-u" data-rt-cmd="underline" title="Subrayado">U</button>
+            <button type="button" class="rt-btn" data-rt-cmd="insertUnorderedList" title="Lista de viñetas">•</button>
+          </div>
+          <div class="rt-editor" id="editVentajas" contenteditable="true" data-placeholder="Beneficios y ventajas del producto..."></div>
         </div>
         <hr class="modal-section-sep">
 
@@ -736,11 +826,25 @@
     allCollections = data.collections || [];
 
     if (allCollections.length > 0) {
+      // v3.4.0: conservar la categoría seleccionada al refrescar.
+      // render() se llama en cada recarga del listado (también tras
+      // guardar un producto). Al reescribir el innerHTML del
+      // desplegable se perdía la selección y el listado volvía a
+      // "Todas las categorías".
+      const categoriaSeleccionada = el.filterCol.value;
+
       el.filterCol.innerHTML = '<option value="">Todas las categorías</option>';
       allCollections.sort((a, b) => a.name.localeCompare(b.name));
       allCollections.forEach(c => {
         el.filterCol.innerHTML += `<option value="${esc(c.id)}">${esc(c.name)}</option>`;
       });
+
+      // Restaurar solo si esa categoría sigue existiendo. Si se
+      // eliminó, el desplegable queda en "Todas las categorías".
+      if (categoriaSeleccionada && allCollections.some(c => c.id === categoriaSeleccionada)) {
+        el.filterCol.value = categoriaSeleccionada;
+      }
+
       el.filterCol.style.display = '';
     }
 
@@ -1011,6 +1115,124 @@
     e.target.value = '';
   });
 
+  // ═══════════════════════════════════════════════════
+  // v3.5.0 — EDITOR CON FORMATO (información adicional)
+  // ═══════════════════════════════════════════════════
+  // Los cuatro bloques de información adicional guardan HTML en
+  // Wix Stores (viñetas, negritas, saltos). Se editan con
+  // contenteditable para que el salón vea el texto maquetado y
+  // nunca las etiquetas.
+  //
+  // Etiquetas que se conservan al guardar. Cualquier otra se
+  // descarta conservando su texto, para no meter en el producto
+  // estilos ni marcado ajeno.
+  const RT_TAGS_OK = { 'UL':1, 'OL':1, 'LI':1, 'B':1, 'STRONG':1, 'I':1, 'EM':1, 'U':1, 'BR':1 };
+  const RT_IDS = ['editDescCorta', 'editComponentes', 'editUsos', 'editVentajas'];
+
+  function rtEscaparTexto(txt) {
+    return String(txt || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // Serializa el contenido del editor a HTML depurado.
+  function rtSerializar(node) {
+    let out = '';
+    node.childNodes.forEach(n => {
+      if (n.nodeType === 3) { out += rtEscaparTexto(n.nodeValue); return; }
+      if (n.nodeType !== 1) return;
+
+      const tag = n.tagName;
+      if (tag === 'BR') { out += '<br>'; return; }
+
+      if (RT_TAGS_OK[tag]) {
+        const t = tag.toLowerCase();
+        out += '<' + t + '>' + rtSerializar(n) + '</' + t + '>';
+        return;
+      }
+
+      // DIV y P: el navegador los genera al escribir. Se convierten
+      // en salto de línea para no ensuciar el producto.
+      const dentro = rtSerializar(n);
+      if (tag === 'DIV' || tag === 'P') {
+        out += dentro + (dentro && !/<br>$/i.test(dentro) ? '<br>' : '');
+      } else {
+        out += dentro;
+      }
+    });
+    return out;
+  }
+
+  // Lee un bloque. Devuelve '' si no hay texto real (evita guardar
+  // etiquetas sueltas de un bloque que el usuario ha vaciado).
+  function getRich(id) {
+    const ed = document.getElementById(id);
+    if (!ed) return '';
+    const texto = (ed.textContent || '').replace(/\u00a0/g, ' ').trim();
+    const tieneLista = !!ed.querySelector('li');
+    if (!texto && !tieneLista) return '';
+    return rtSerializar(ed).replace(/(<br>\s*)+$/i, '').trim();
+  }
+
+  // Escribe un bloque con el HTML que llega de Wix Stores.
+  function setRich(id, html) {
+    const ed = document.getElementById(id);
+    if (!ed) return;
+    ed.innerHTML = html || '';
+    // Si venía con etiquetas no permitidas, se normaliza ya al abrir
+    // para que lo que se ve sea exactamente lo que se guardará.
+    const limpio = rtSerializar(ed).replace(/(<br>\s*)+$/i, '').trim();
+    ed.innerHTML = limpio;
+  }
+
+  // Bindings de la barra de formato. Se hace en mousedown y con
+  // preventDefault para no perder la selección del texto al pulsar.
+  function initRichEditors() {
+    document.querySelectorAll('.rt-toolbar').forEach(bar => {
+      const destino = document.getElementById(bar.dataset.rtFor);
+      bar.querySelectorAll('.rt-btn').forEach(btn => {
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          if (!destino) return;
+          destino.focus();
+          try { document.execCommand(btn.dataset.rtCmd, false, null); }
+          catch (err) { console.warn('rt cmd fail', btn.dataset.rtCmd, err); }
+        });
+      });
+    });
+
+    RT_IDS.forEach(id => {
+      const ed = document.getElementById(id);
+      if (!ed) return;
+
+      // Pegar SIEMPRE en limpio (sin formato de Word ni de una web).
+      ed.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const cd = e.clipboardData || window.clipboardData;
+        const texto = cd ? cd.getData('text/plain') : '';
+        document.execCommand('insertText', false, texto);
+      });
+
+      // Intro = salto de línea. Dentro de una viñeta se deja el
+      // comportamiento nativo (crear la viñeta siguiente).
+      ed.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        let n = window.getSelection && window.getSelection().anchorNode;
+        while (n && n !== ed) {
+          if (n.nodeType === 1 && n.tagName === 'LI') return;
+          n = n.parentNode;
+        }
+        e.preventDefault();
+        let ok = false;
+        try { ok = document.execCommand('insertLineBreak'); } catch (err) { ok = false; }
+        if (!ok) document.execCommand('insertHTML', false, '<br>');
+      });
+    });
+  }
+
+  initRichEditors();
+
   // helper: encontrar sección en additionalInfoSections
   function findSection(sections, title) {
     const s = (sections || []).find(s => s.title === title);
@@ -1076,10 +1298,11 @@
 
     // additionalInfoSections
     const sections = prod.additionalInfoSections || [];
-    document.getElementById('editDescCorta').value = findSection(sections, 'Descripción corta');
-    document.getElementById('editComponentes').value = findSection(sections, 'Componentes');
-    document.getElementById('editUsos').value = findSection(sections, 'Usos recomendados del producto');
-    document.getElementById('editVentajas').value = findSection(sections, 'Ventajas del producto');
+    // v3.5.0: el contenido llega como HTML y se pinta maquetado
+    setRich('editDescCorta',   findSection(sections, 'Descripción corta'));
+    setRich('editComponentes', findSection(sections, 'Componentes'));
+    setRich('editUsos',        findSection(sections, 'Usos recomendados del producto'));
+    setRich('editVentajas',    findSection(sections, 'Ventajas del producto'));
 
     renderImageGallery();
     populateCategoryCheckboxes(prod.collections || []);
@@ -1124,10 +1347,10 @@
     stockInput.placeholder = '0';
     stockHint.textContent = 'Stock inicial. Déjalo vacío si no aplica.';
 
-    document.getElementById('editDescCorta').value = '';
-    document.getElementById('editComponentes').value = '';
-    document.getElementById('editUsos').value = '';
-    document.getElementById('editVentajas').value = '';
+    setRich('editDescCorta', '');
+    setRich('editComponentes', '');
+    setRich('editUsos', '');
+    setRich('editVentajas', '');
 
     renderImageGallery();
     populateCategoryCheckboxes([]);
@@ -1238,10 +1461,10 @@
     btnSave.textContent = '⏳ Guardando…';
 
     const additionalInfoSections = [
-      { title: 'Descripción corta',              description: document.getElementById('editDescCorta').value.trim() },
-      { title: 'Componentes',                    description: document.getElementById('editComponentes').value.trim() },
-      { title: 'Usos recomendados del producto', description: document.getElementById('editUsos').value.trim() },
-      { title: 'Ventajas del producto',          description: document.getElementById('editVentajas').value.trim() }
+      { title: 'Descripción corta',              description: getRich('editDescCorta') },
+      { title: 'Componentes',                    description: getRich('editComponentes') },
+      { title: 'Usos recomendados del producto', description: getRich('editUsos') },
+      { title: 'Ventajas del producto',          description: getRich('editVentajas') }
     ].filter(s => s.description !== '');
 
     const campos = {
