@@ -1,5 +1,5 @@
 // =====================================================
-// [ReminderJob v1.7.0] - reminderLogic.web.js
+// [ReminderJob v1.8.0] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
 // FUENTE V2: KamisuiteReservations (fuente de verdad de reservas)
 // Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
@@ -49,6 +49,31 @@
 //            entrega salta de la v1.4.0 (producción) a la v1.6.0, que
 //            incluye AMBOS: reminderActive + Brevo.
 //   v1.7.0 - FIX CRÍTICO DE FUENTE DE DATOS (28-Ago-2026).
+//   v1.7.1 - Solo comentarios: corregida la nota sobre los teléfonos de
+//            Salon Kami (son ficticios, no clonados reales). Sin cambios
+//            funcionales respecto a la v1.7.0.
+//   v1.8.0 - Un interruptor por canal para el recordatorio de cita.
+//
+// CAMBIOS v1.8.0:
+//   - Nuevo helper _getCanalesRecordatorio(): lee de SalonConfig los
+//     campos `emailReminder` y `whatsappReminder` (Booleanos) y decide
+//     qué canales del recordatorio están abiertos.
+//   - Lectura DEFENSIVA, idéntica al patrón de reminderActive: solo
+//     cierra un canal si el valor es false EXPLÍCITO. vacío / null /
+//     true / error de lectura → canal ABIERTO. Así ninguna cuenta que
+//     todavía no tenga los campos creados se queda muda.
+//   - Si los DOS canales están cerrados, el cron aborta antes de las
+//     queries pesadas, igual que con reminderActive=false.
+//   - Si solo está cerrado el email: no se envía email (ni Wix ni
+//     Brevo) y no se lee el proveedor, pero el WhatsApp sale.
+//   - Si solo está cerrado el WhatsApp: no se invoca la centralita.
+//   - La fila de ReminderLog (idempotencia) se sigue escribiendo
+//     siempre que se haya intentado algo por algún canal, para que una
+//     segunda ejecución el mismo día no duplique avisos.
+//   - reminderActive sigue siendo el interruptor MAESTRO: si está en
+//     false explícito, no sale nada por ningún canal aunque los dos
+//     toggles nuevos estén encendidos.
+//   - Pareja: salonConfigLogic v1.0.11 + widget_salon_config v1.0.14.
 //
 // CAMBIOS v1.7.0 — el cron leía de V1 y no encontraba NADA:
 //   PROBLEMA: hasta la v1.6.0 este cron buscaba las citas de mañana en
@@ -110,12 +135,14 @@
 //     EXPLÍCITO. null/undefined/true/error → procede normal. Hair-Times
 //     producción no se afecta hasta que su SalonConfig tenga el campo
 //     en false; cuentas nuevas clonadas o sin campo siguen enviando.
-//   - Motivo: en Salon Kami (demo V2) las reservas están clonadas de
-//     Hair-Times con teléfonos reales. Si se enciende el reminder en
-//     Salon Kami sin filtrar, los clientes de Hair-Times reciben doble
-//     WhatsApp (uno por cuenta). Con reminderActive=false en Salon
-//     Kami, el cron arranca y aborta antes de cualquier query a Wix
-//     externos. Confirmaciones WhatsApp (recepcionProLogic v1.0.18+)
+//   - Motivo: poder apagar el cron por cuenta sin tocar código.
+//     CORRECCIÓN 28-Ago-2026: la nota anterior decía que Salon Kami
+//     tenía teléfonos reales clonados de Hair-Times. NO es así: los
+//     contactos de Salon Kami son ficticios, salvo los números reales
+//     del propio Jal. El riesgo real es otro y sigue vigente: esos
+//     números ficticios tienen formato de móvil español asignable
+//     (+34 600 8x xx xx), así que pueden corresponder a líneas de
+//     terceros. Confirmaciones WhatsApp (recepcionProLogic v1.0.18+)
 //     intactas — el toggle es exclusivo del cron de recordatorios.
 //
 //   No se toca:
@@ -137,7 +164,7 @@ import { notificarRecordatorio } from 'backend/comunicacionesLogic.web.js';
 // v1.6.0: driver de email por plantilla (Brevo)
 import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 
-const TAG = '[ReminderJob v1.7.0]';
+const TAG = '[ReminderJob v1.8.0]';
 
 // v1.7.0: colección fuente de verdad de reservas en V2
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -341,6 +368,33 @@ async function cargarMapaCRM() {
   } catch (e) {
     console.error(`${TAG} ❌ Error cargarMapaCRM:`, e.message);
     return { porEmail: {}, porNombre: {}, emailsDeContacto: {} };
+  }
+}
+
+// ----------- v1.8.0: Canales abiertos del recordatorio ---------
+// Lee SalonConfig.emailReminder y SalonConfig.whatsappReminder.
+// Lectura defensiva: solo cierra el canal con false EXPLÍCITO.
+// vacío / null / true / error → canal abierto (fail-safe).
+async function _getCanalesRecordatorio() {
+  try {
+    const res = await wixData.query('SalonConfig')
+      .limit(1)
+      .find({ suppressAuth: true });
+
+    if (res.items.length === 0) {
+      console.log(`${TAG} ℹ️ SalonConfig vacío — ambos canales de recordatorio activos por defecto`);
+      return { email: true, whatsapp: true };
+    }
+
+    const cfg = res.items[0];
+    const email    = cfg.emailReminder    !== false;
+    const whatsapp = cfg.whatsappReminder !== false;
+    console.log(`${TAG} 🔀 Canales de recordatorio → email: ${email ? 'ON' : 'OFF'} | WhatsApp: ${whatsapp ? 'ON' : 'OFF'}`);
+    return { email, whatsapp };
+
+  } catch (e) {
+    console.error(`${TAG} ⚠️ Error leyendo canales de recordatorio (se asumen activos): ${e.message}`);
+    return { email: true, whatsapp: true };
   }
 }
 
@@ -818,6 +872,28 @@ export const ejecutarRecordatoriosDiarios = webMethod(
     }
 
     // v1.7.0: una sola fuente de citas — KamisuiteReservations.
+    // v1.8.0: canales del recordatorio. Si los dos están cerrados,
+    // se aborta igual que con reminderActive=false, antes de gastar
+    // quota en las queries pesadas.
+    const canales = await _getCanalesRecordatorio();
+    if (!canales.email && !canales.whatsapp) {
+      console.log(`${TAG} ⏸️ Recordatorio por email Y por WhatsApp desactivados en la configuración del salón — ejecución abortada limpiamente`);
+      return {
+        ok: true,
+        skipped: true,
+        reason: 'emailReminder=false y whatsappReminder=false en SalonConfig',
+        dryRun: DRY_RUN,
+        fecha: fechaLegible,
+        totalCitas: 0,
+        clientesAgrupados: 0,
+        sinResolver: 0,
+        yaEnviados: 0,
+        enviadosOk: 0,
+        enviadosError: 0,
+        waInvocaciones: 0
+      };
+    }
+
     const [mapas, todas] = await Promise.all([
       cargarMapaCRM(),
       leerCitasV2(inicio, fin, fechaYMD)
@@ -839,8 +915,14 @@ export const ejecutarRecordatoriosDiarios = webMethod(
     let waInvocaciones = 0;  // v1.4.0: métrica de invocaciones a centralita
 
     // v1.6.0: proveedor de email leído una vez para todo el lote
-    const emailProvider = await _getEmailProvider();
-    console.log(`${TAG} ✉️ Proveedor de email: ${emailProvider}`);
+    // v1.8.0: solo si el canal email del recordatorio está abierto
+    let emailProvider = 'wix';
+    if (canales.email) {
+      emailProvider = await _getEmailProvider();
+      console.log(`${TAG} ✉️ Proveedor de email: ${emailProvider}`);
+    } else {
+      console.log(`${TAG} ✉️ Recordatorio por email DESACTIVADO — no se lee proveedor`);
+    }
 
     for (const grupo of agrupados) {
       if (DRY_RUN) {
@@ -850,15 +932,18 @@ export const ejecutarRecordatoriosDiarios = webMethod(
         continue;
       }
 
-      // 1. Email: cascada Triggered (wix) o Brevo, según emailProvider
-      const r = await enviarRecordatorio(grupo, mapas.emailsDeContacto, emailProvider);
-      await registrarLogGrupo(grupo, r);
-      if (r.ok) {
-        okCount++;
-        console.log(`${TAG} ✅ ${grupo.Nombre} ${grupo.Apellido} → ${grupo.servicios} (${grupo._totalFases} fases)`);
-      } else {
-        errCount++;
-        console.error(`${TAG} ❌ ${grupo.Nombre} ${grupo.Apellido}: ${r.error}`);
+      // 1. Email: cascada Triggered (wix) o Brevo, según emailProvider.
+      //    v1.8.0: solo si el canal email del recordatorio está abierto.
+      let r = { ok: false, error: 'recordatorio por email desactivado en la configuración del salón' };
+      if (canales.email) {
+        r = await enviarRecordatorio(grupo, mapas.emailsDeContacto, emailProvider);
+        if (r.ok) {
+          okCount++;
+          console.log(`${TAG} ✅ ${grupo.Nombre} ${grupo.Apellido} → ${grupo.servicios} (${grupo._totalFases} citas)`);
+        } else {
+          errCount++;
+          console.error(`${TAG} ❌ ${grupo.Nombre} ${grupo.Apellido}: ${r.error}`);
+        }
       }
 
       // 2. v1.4.0: WhatsApp vía centralita (en paralelo, no-blocking)
@@ -866,8 +951,21 @@ export const ejecutarRecordatoriosDiarios = webMethod(
       // paralelo. Si el email falló por contactos solo @hair-times.com,
       // WhatsApp es el último recurso para llegar al cliente.
       // Si no hay teléfono, la centralita lo detecta y se salta.
-      await notificarWhatsAppViaCentralita(grupo, r.contactIdUsado || (grupo._candidatos[0] || ''));
-      waInvocaciones++;
+      // v1.8.0: solo si el canal WhatsApp del recordatorio está abierto.
+      let waLanzado = false;
+      if (canales.whatsapp) {
+        await notificarWhatsAppViaCentralita(grupo, r.contactIdUsado || (grupo._candidatos[0] || ''));
+        waInvocaciones++;
+        waLanzado = true;
+      }
+
+      // 3. Idempotencia: se registra si se intentó algo por algún canal.
+      //    Con el email cerrado, el ok del registro lo marca el WhatsApp;
+      //    así una segunda ejecución el mismo día no duplica el aviso.
+      await registrarLogGrupo(
+        grupo,
+        (r.ok || waLanzado) ? { ok: true, error: r.ok ? '' : r.error } : r
+      );
     }
 
     const resumen = {
@@ -880,7 +978,9 @@ export const ejecutarRecordatoriosDiarios = webMethod(
       yaEnviados: todas.length - pendientes.length,
       enviadosOk: okCount,
       enviadosError: errCount,
-      waInvocaciones: waInvocaciones  // v1.4.0
+      waInvocaciones: waInvocaciones,  // v1.4.0
+      canalEmail: canales.email,       // v1.8.0
+      canalWhatsapp: canales.whatsapp  // v1.8.0
     };
     console.log(`${TAG} 🏁 Resumen:`, resumen);
     return resumen;
