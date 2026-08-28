@@ -9,10 +9,28 @@
 <title>KAMISUITE · Configuración Salón</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   widget_salon_config.html  v1.0.12
+   widget_salon_config.html  v1.0.13
    KAMISUITE — Widget Edición Configuración Salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.13 · 28 Ago 2026 · emailActive — toggle del canal email
+     - SECTIONS[comunicaciones].fields += emailActive (type 'boolean',
+       label "Email activo"), situado inmediatamente DESPUÉS de
+       waActive: los dos canales de envío quedan juntos al final de la
+       sección, misma naturaleza y misma lectura visual.
+     - El campo emailActive YA EXISTE en el CMS SalonConfig desde la
+       ampliación posterior a la reconstrucción de mayo, pero nunca
+       estuvo expuesto en el editor: no había forma de activarlo ni
+       desactivarlo desde la aplicación.
+     - Render, detección de cambios y recogida del payload son
+       genéricos por SECTIONS (misma ruta que waActive): no se toca
+       ninguna función del widget, solo la definición de la sección.
+     - Pareja backend: salonConfigLogic v1.0.10 (ALL_FIELDS +
+       BOOLEAN_FIELDS += emailActive). Sin ese cambio el backend
+       descartaría el campo en el merge y el toggle no guardaría.
+     - LO CONSUME: comunicacionesLogic.web.js — corta el envío por
+       email (vía triggered de Wix y vía Brevo) cuando está
+       desactivado. Page code sin cambios.
    v1.0.12 · 8 Jul 2026 · closingGraceMin — margen extensión horario
      - SECTIONS[horarios].fields += closingGraceMin
        (type 'number', label "Margen extensión horario (min)",
@@ -1306,6 +1324,7 @@ const SECTIONS = [
       { id: 'waPhoneId',    label: 'WhatsApp Phone ID',  type: 'text', placeholder: 'Meta Phone Number ID' },
       { id: 'waAccountId',  label: 'WhatsApp Account ID', type: 'text', placeholder: 'Meta WABA ID' },
       { id: 'waActive',     label: 'WhatsApp activo',    type: 'boolean', desc: 'Envío de mensajes por WhatsApp' },
+      { id: 'emailActive',  label: 'Email activo',       type: 'boolean', desc: 'Envío de mensajes por email' },
     ]
   },
   {
