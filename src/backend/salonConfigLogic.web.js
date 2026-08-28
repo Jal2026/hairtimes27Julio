@@ -1,8 +1,29 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.10
+   salonConfigLogic.web.js  v1.0.11
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.11 · 28 Ago 2026 · Recordatorio de cita gobernable por canal
+     - ALL_FIELDS     += emailReminder, whatsappReminder
+     - BOOLEAN_FIELDS += emailReminder, whatsappReminder
+     - Dos interruptores independientes para el recordatorio de cita:
+       uno para el email y otro para el WhatsApp. Hasta ahora el cron de
+       recordatorios solo tenía el interruptor maestro reminderActive,
+       que además NUNCA estuvo en ALL_FIELDS y por tanto no era
+       gobernable desde la aplicación.
+     - LO CONSUME: reminderLogic.web.js v1.8.0. Semántica defensiva
+       idéntica a la del resto de toggles del proyecto: solo corta el
+       canal si el valor es false EXPLÍCITO; vacío / null / true / error
+       de lectura → canal activo (fail-safe, ninguna cuenta existente
+       se queda muda por no tener el campo creado).
+     - CMS: hay que crear los 2 campos en SalonConfig como Booleano con
+       IDs exactos `emailReminder` y `whatsappReminder`. Sin ellos en
+       ALL_FIELDS el merge de updateSalonConfig los descartaría; sin
+       ellos en BOOLEAN_FIELDS se guardarían como texto y el corte
+       dejaría de evaluarse como booleano.
+     - Pareja widget: widget_salon_config v1.0.14 (los dos toggles en la
+       sección Comunicaciones, debajo de WhatsApp activo / Email activo).
+     - Page code sin cambios: pasa el payload completo tal cual.
    v1.0.10 · 28 Ago 2026 · emailActive — canal email gobernable
      - ALL_FIELDS     += emailActive
      - BOOLEAN_FIELDS += emailActive
@@ -177,6 +198,10 @@ const ALL_FIELDS = [
   'waPhoneId',
   // v1.0.10 — canal email activo/inactivo (lo consume comunicacionesLogic)
   'emailActive',
+  // v1.0.11 — recordatorio de cita, un interruptor por canal
+  //           (lo consume reminderLogic v1.8.0)
+  'emailReminder',
+  'whatsappReminder',
   'whatsappPro',
   'widgetSkin',
   // v1.0.3 — Accesos (sistema de login de Recepción PRO)
@@ -209,6 +234,9 @@ const BOOLEAN_FIELDS = [
   'usersActivation',
   // v1.0.10 — toggle del canal email
   'emailActive',
+  // v1.0.11 — toggles del recordatorio de cita por canal
+  'emailReminder',
+  'whatsappReminder',
 ];
 
 // ── Campos numéricos ──
