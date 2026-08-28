@@ -1,7 +1,41 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.6
+// VERSION: 0.9.7
+//
+// v0.9.7 — ⛔ NO SE PUEDE RESERVAR EN EL PASADO (antelación mínima).
+//   BUG DE PRODUCCIÓN (28-ago-2026, Hair-Times): a las 19:21 el widget
+//   público ofreció y aceptó una cita para HOY a las 19:15. El motor de
+//   huecos generaba los slots del día desde la apertura hasta el cierre
+//   SIN comparar nunca con la hora actual, y crearReservaPublica tampoco
+//   exigía que la fecha/hora fuese futura. Ni el bundle ni el page code
+//   filtraban por su cuenta. Existía desde el origen del motor.
+//
+//   TRES PIEZAS:
+//   (a) `leerConfigMotor()` sustituye a `leerClosingGraceMin()`: MISMA
+//       query única a SalonConfig, ahora devuelve { graceMin, bufferMin }.
+//       Evita una segunda lectura de SalonConfig por invocación (el
+//       diagnóstico de rendimiento del 26-ago midió ~341 ms por llamada).
+//   (b) getHuecosDisponibles: si la fecha pedida es HOY (Europe/Madrid),
+//       se descartan los slots cuyo inicio sea anterior a `ahora +
+//       bookingBufferMinutes`. Si la fecha es ANTERIOR a hoy → 0 huecos.
+//       El bucle sigue arrancando en minFrom: la rejilla de horas no se
+//       desplaza, solo se filtran los slots ya pasados.
+//   (c) crearReservaPublica: guardia defensiva con el mismo criterio,
+//       ANTES de tocar catálogo, staff o CMS. Protege contra payloads
+//       rezagados (pestaña abierta hace una hora) y manipulados.
+//
+//   `bookingBufferMinutes` (Número) en SalonConfig — minutos de antelación
+//   mínima exigidos a una reserva ONLINE. Vacío / null / no numérico /
+//   error de lectura → 15 (BUFFER_DEFAULT_MIN). 0 explícito → solo se
+//   bloquea el pasado estricto. Requiere salonConfigLogic v1.0.11.
+//
+//   ALCANCE: solo la vía ONLINE. Recepción PRO (Desktop, Móvil y Lite)
+//   NO se toca — ahí la decisión es manual del salón y anotar una cita
+//   ya empezada es legítimo. El Área de Cliente ("mover cita") hereda
+//   la protección sin cambios: getHuecosCambioReserva y moverCitaCliente
+//   (clienteAreaLogic v1.6.6) delegan ambas en getHuecosDisponibles,
+//   tanto para ofrecer los huecos como para revalidar antes de mover.
 //
 // v0.9.6 — El catálogo público dice si el servicio se vende en bono.
 //   Nuevo campo `tieneBono` (Boolean) en cada servicio devuelto por
@@ -676,13 +710,19 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.6';
+const VERSION = '0.9.7';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
 const CMS_CATEGORIAS = 'HairSalonServices';
 const CMS_STAFF      = 'StaffConfig';
 const CMS_CONFIG     = 'SalonConfig';
+
+// v0.9.7 — Antelación mínima por defecto para reservas ONLINE, en minutos.
+// Se usa cuando SalonConfig.bookingBufferMinutes viene vacío, no numérico,
+// negativo, o la lectura de SalonConfig falla. Un salón que quiera permitir
+// reservar "para ya mismo" debe escribir un 0 explícito en el campo.
+const BUFFER_DEFAULT_MIN = 15;
 
 const USOS_PUBLICOS     = ['publico', 'ambos'];
 const TIPOS_PRINCIPALES = ['principal', 'ambos'];
@@ -793,20 +833,71 @@ function generarIniciales(nombre) {
 // si algo va mal se registra warning y se cae a 0.
 // NO se cachea entre invocaciones (el salón puede cambiarlo entre
 // reservas). Sí se lee UNA sola vez por webMethod invocado.
-async function leerClosingGraceMin() {
+// v0.9.7 — Sustituye a `leerClosingGraceMin()` (v0.8.0). MISMA query
+// única a SalonConfig; ahora devuelve los DOS parámetros que gobiernan el
+// motor de reservas online, para no pagar una segunda lectura del CMS:
+//
+//   graceMin  = closingGraceMin      → vacío/null/error → 0
+//   bufferMin = bookingBufferMinutes → vacío/null/error → BUFFER_DEFAULT_MIN
+//
+// La asimetría del fallback es deliberada: el margen de cierre por defecto
+// es 0 (nadie sale peor que antes de v0.8.0), mientras que la antelación
+// mínima por defecto es 15 min (nadie puede reservar en el pasado aunque
+// el salón no haya configurado nada todavía).
+async function leerConfigMotor() {
   try {
     const rCfg = await wixData.query(CMS_CONFIG)
       .limit(1)
       .find({ suppressAuth: true });
     const cfg = rCfg.items?.[0];
-    if (!cfg) return 0;
-    const raw = Number(cfg.closingGraceMin);
-    if (!Number.isFinite(raw) || raw < 0) return 0;
-    return raw;
+    if (!cfg) return { graceMin: 0, bufferMin: BUFFER_DEFAULT_MIN };
+
+    const rawGrace = Number(cfg.closingGraceMin);
+    const graceMin = (Number.isFinite(rawGrace) && rawGrace >= 0) ? rawGrace : 0;
+
+    const rawBuffer = Number(cfg.bookingBufferMinutes);
+    const bufferMin = (Number.isFinite(rawBuffer) && rawBuffer >= 0)
+      ? rawBuffer
+      : BUFFER_DEFAULT_MIN;
+
+    return { graceMin, bufferMin };
   } catch (e) {
-    console.warn(`${TAG} ⚠️ leerClosingGraceMin falló (${e.message}) → 0`);
-    return 0;
+    console.warn(`${TAG} ⚠️ leerConfigMotor falló (${e.message}) → grace 0 / buffer ${BUFFER_DEFAULT_MIN}`);
+    return { graceMin: 0, bufferMin: BUFFER_DEFAULT_MIN };
   }
+}
+
+// v0.9.7 — Reloj del salón (Europe/Madrid), con los MISMOS patrones de
+// conversión que ya usa el resto del archivo para cruzar reservas:
+// 'en-CA' da YYYY-MM-DD y 'es-ES' con hour12:false da HH:mm.
+// Devuelve { ymd: 'YYYY-MM-DD', min: minutos desde medianoche }.
+function ahoraMadrid() {
+  const now = new Date();
+  const ymd = now.toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+  const hhmm = now.toLocaleTimeString('es-ES', {
+    timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hour12: false
+  });
+  const min = parseHHMM(hhmm);
+  if (min == null) {
+    // No debería ocurrir: es el mismo patrón de conversión que el motor
+    // ya usa para cruzar las reservas del día. Se deja rastro en logs
+    // porque, si ocurriera, la antelación mínima quedaría sin efecto.
+    console.warn(`${TAG} ⚠️ ahoraMadrid: hora no parseable ("${hhmm}") → 0`);
+  }
+  return { ymd, min: (min == null ? 0 : min) };
+}
+
+// v0.9.7 — Minuto mínimo admisible para una reserva ONLINE en `fecha`.
+// Devuelve:
+//   null  → la fecha ya pasó por completo (no cabe ninguna hora).
+//   0     → la fecha es futura (sin restricción por hora).
+//   N > 0 → la fecha es HOY: solo se admiten inicios a partir del minuto N
+//           (ahora + antelación mínima).
+function minimoInicioAdmisible(fecha, bufferMin) {
+  const { ymd, min } = ahoraMadrid();
+  if (String(fecha) < ymd) return null;
+  if (String(fecha) > ymd) return 0;
+  return min + (Number(bufferMin) || 0);
 }
 
 // v0.8.0 — Devuelve la duración (min) de la CASCADA BASE del servicio,
@@ -1731,7 +1822,24 @@ export const getHuecosDisponibles = webMethod(
       // v0.8.0 — margen del salón (SalonConfig.closingGraceMin). Aplicado
       // como extensión del `to` del horario del staff en el filtro/loop
       // de slots. Vacío / null / error → 0 (comportamiento estricto).
-      const graceMin = await leerClosingGraceMin();
+      // v0.9.7 — una sola lectura de SalonConfig devuelve también la
+      // antelación mínima (bookingBufferMinutes).
+      const { graceMin, bufferMin } = await leerConfigMotor();
+
+      // v0.9.7 — ⛔ NADA EN EL PASADO.
+      // Día ya vencido → ni una consulta más al CMS: no hay huecos que
+      // ofrecer. Día de hoy → `minAdmisible` marca el primer minuto
+      // admisible (ahora + antelación mínima) y el bucle de slots lo
+      // aplica más abajo. Día futuro → 0, sin restricción por hora.
+      const minAdmisible = minimoInicioAdmisible(fecha, bufferMin);
+      if (minAdmisible === null) {
+        console.log(`${TAG} ⛔ ${fecha} ya pasó → 0 huecos.`);
+        return {
+          ok: true, version: VERSION,
+          fecha, proId, durationMin: dur,
+          huecos: [], abreA: null, cierraA: null
+        };
+      }
 
       // v0.6.0 — filtro de staff permitidos para este servicio.
       // idStaffPermitidos viene de ServiceCatalog.idStaff.ids del servicio
@@ -1948,6 +2056,13 @@ export const getHuecosDisponibles = webMethod(
 
       const huecos = [];
       for (let m = minFrom; m + dur <= maxTo + graceMin; m += SLOT_STEP) {
+        // v0.9.7 — el bucle sigue arrancando en minFrom para NO desplazar
+        // la rejilla de horas (los slots siguen cayendo en :00 :15 :30 :45
+        // relativos a la apertura). Lo único que cambia es que, si el día
+        // pedido es hoy, se descartan los inicios anteriores a
+        // `ahora + antelación mínima`.
+        if (minAdmisible > 0 && m < minAdmisible) continue;
+
         const mCorte = dual ? (m + durPrincipal) : (m + dur);
 
         // ── TRAMO A · profesional principal ──
@@ -1982,7 +2097,10 @@ export const getHuecosDisponibles = webMethod(
       const modoLog = dual
         ? ` | 👥 DOS TRAMOS: principal ${durPrincipal}min + complementos ${durExtra}min con ${staffExtraRow.displayName || staffExtraRow.canonicalName || sidExtra}`
         : '';
-      console.log(`${TAG} ✅ huecos ${fecha} dow=${dow} proId=${proId || 'any'} dur=${dur}min: ${huecos.length} slots (abre ${fmtHHMM(minFrom)}, cierra ${fmtHHMM(maxTo)}, grace ${graceMin}min)${modoLog}. ${elapsed}s`);
+      const bufferLog = (minAdmisible > 0)
+        ? ` | ⏱️ hoy: desde ${fmtHHMM(minAdmisible)} (antelación ${bufferMin}min)`
+        : '';
+      console.log(`${TAG} ✅ huecos ${fecha} dow=${dow} proId=${proId || 'any'} dur=${dur}min: ${huecos.length} slots (abre ${fmtHHMM(minFrom)}, cierra ${fmtHHMM(maxTo)}, grace ${graceMin}min)${bufferLog}${modoLog}. ${elapsed}s`);
 
       return {
         ok: true, version: VERSION,
@@ -2113,7 +2231,35 @@ export const crearReservaPublica = webMethod(
       // a resolverStaffLibre y se usa en la guardia defensiva final que
       // valida que la reserva NO desborde el `to` del staff + este margen.
       // Vacío / null / error → 0 (comportamiento estricto v0.7.9).
-      const graceMin = await leerClosingGraceMin();
+      // v0.9.7 — la misma lectura trae la antelación mínima.
+      const { graceMin, bufferMin } = await leerConfigMotor();
+
+      // ─────────────────────────────────────────────────────────────
+      // v0.9.7 — ⛔ GUARDIA: NADA EN EL PASADO
+      // ─────────────────────────────────────────────────────────────
+      // El motor de huecos ya no ofrece horas pasadas, pero esta guardia
+      // es imprescindible: entre que el cliente ve la rejilla y pulsa
+      // "Reservar" pueden pasar minutos u horas (pestaña abierta, móvil
+      // en el bolsillo), y el payload también puede llegar manipulado.
+      // Se comprueba ANTES de tocar catálogo, staff o CMS: es aritmética
+      // pura sobre datos ya leídos.
+      {
+        const minAdmisible = minimoInicioAdmisible(fecha, bufferMin);
+        const inicioMin = parseHHMM(horaHHmm);
+
+        if (minAdmisible === null || (inicioMin != null && inicioMin < minAdmisible)) {
+          console.warn(`${TAG} ⛔ Reserva rechazada por hora pasada: ${fecha} ${horaHHmm} (antelación mínima ${bufferMin}min).`);
+          return {
+            ok: false,
+            version: VERSION,
+            error: {
+              message: bufferMin > 0
+                ? `Esa hora ya no está disponible. Las reservas online necesitan al menos ${bufferMin} minutos de antelación.`
+                : 'Esa hora ya ha pasado. Elige otro horario.'
+            }
+          };
+        }
+      }
 
       // Validación de identidad mínima:
       // o memberContactId, o contactDetails con nombre + (telefono o email).
