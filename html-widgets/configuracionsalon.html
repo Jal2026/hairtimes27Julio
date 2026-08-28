@@ -9,10 +9,29 @@
 <title>KAMISUITE · Configuración Salón</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   widget_salon_config.html  v1.0.13
+   widget_salon_config.html  v1.0.14
    KAMISUITE — Widget Edición Configuración Salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.14 · 28 Ago 2026 · Recordatorio de cita: un toggle por canal
+     - SECTIONS[comunicaciones].fields += emailReminder, whatsappReminder
+       (type 'boolean'), justo debajo de waActive / emailActive: los dos
+       canales de envío primero, y debajo qué se manda por cada uno en
+       el recordatorio de cita.
+     - Diferencia con waActive / emailActive: aquellos abren o cierran
+       el canal ENTERO (confirmaciones, compras, recordatorios). Estos
+       dos afectan SOLO al recordatorio automático de 24h antes. Si el
+       canal está cerrado arriba, el recordatorio no sale aunque su
+       toggle esté encendido.
+     - Los dos campos hay que crearlos en el CMS SalonConfig como
+       Booleano, con los IDs exactos `emailReminder` y
+       `whatsappReminder`.
+     - Sin cambios de maquetación ni de CSS: los toggles booleanos se
+       pintan con el render genérico por SECTIONS (misma ruta que
+       waActive y emailActive).
+     - Pareja backend: salonConfigLogic v1.0.11 (ALL_FIELDS +
+       BOOLEAN_FIELDS). Consumidor real: reminderLogic v1.8.0.
+     - Page code sin cambios: pasa el payload completo tal cual.
    v1.0.13 · 28 Ago 2026 · emailActive — toggle del canal email
      - SECTIONS[comunicaciones].fields += emailActive (type 'boolean',
        label "Email activo"), situado inmediatamente DESPUÉS de
@@ -1325,6 +1344,9 @@ const SECTIONS = [
       { id: 'waAccountId',  label: 'WhatsApp Account ID', type: 'text', placeholder: 'Meta WABA ID' },
       { id: 'waActive',     label: 'WhatsApp activo',    type: 'boolean', desc: 'Envío de mensajes por WhatsApp' },
       { id: 'emailActive',  label: 'Email activo',       type: 'boolean', desc: 'Envío de mensajes por email' },
+      // v1.0.14 — recordatorio de cita (24h antes), un interruptor por canal
+      { id: 'whatsappReminder', label: 'Recordatorio por WhatsApp', type: 'boolean', desc: 'Aviso automático de la cita del día siguiente por WhatsApp' },
+      { id: 'emailReminder',    label: 'Recordatorio por email',    type: 'boolean', desc: 'Aviso automático de la cita del día siguiente por email' },
     ]
   },
   {
