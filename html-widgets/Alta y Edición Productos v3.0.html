@@ -1,0 +1,1459 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KAMISUITE — Alta y Edición Productos</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    /* ═══════════════════════════════════════════════════
+       KAMISUITE — Alta y Edición Productos v3.0
+       Dark theme (same as Catálogo / Checkout)
+       v3.0: + módulo Almacén (descontar unidad, stock editable,
+              lectura coste real). Sin venta, sin cliente,
+              sin historial.
+       ═══════════════════════════════════════════════════ */
+    :root {
+      --bg: #0f1117;
+      --surface: #181b23;
+      --surface2: #1e222c;
+      --surface3: #252a36;
+      --border: rgba(255,255,255,.08);
+      --border-hover: rgba(255,255,255,.18);
+      --text: #e8e9ed;
+      --text-secondary: rgba(255,255,255,.65);
+      --muted: rgba(255,255,255,.40);
+      --accent: #c9a44a;
+      --accent-dim: rgba(201,164,74,.15);
+      --green: #36c06a;
+      --green-dim: rgba(54,192,106,.12);
+      --red: #e85454;
+      --red-dim: rgba(232,84,84,.12);
+      --blue: #4a9ec9;
+      --blue-dim: rgba(74,158,201,.12);
+      --yellow: #e5c44a;
+      --radius: 10px;
+      --radius-sm: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Bai Jamjuree", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 12px 14px;
+    }
+
+    /* ═══ HEADER ═══ */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .header-brand {
+      font-size: 12px; font-weight: 600;
+      letter-spacing: 2px; text-transform: uppercase;
+      color: var(--accent);
+    }
+    .header-version {
+      font-size: 10px; color: var(--muted); letter-spacing: .5px;
+    }
+
+    /* ═══ TOOLBAR ═══ */
+    .toolbar {
+      display: flex; gap: 8px; align-items: center;
+      flex-wrap: wrap; margin-bottom: 10px;
+    }
+    .search-box {
+      flex: 1; min-width: 180px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text);
+      font-family: inherit; font-size: 12px;
+      padding: 8px 10px 8px 32px; outline: none;
+      transition: border-color .2s;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='rgba(255,255,255,.35)' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cline x1='9.5' y1='9.5' x2='13' y2='13'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: 10px center;
+    }
+    .search-box:focus { border-color: var(--accent); }
+    .search-box::placeholder { color: var(--muted); }
+
+    .filter-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      padding: 7px 28px 7px 10px;
+      font-family: inherit;
+      font-weight: 500;
+      font-size: 11px;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,.3)'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      transition: border-color .2s;
+    }
+    .filter-select:focus { border-color: var(--accent); }
+
+    .toolbar-sep {
+      width: 1px; height: 20px; background: var(--border); flex-shrink: 0;
+    }
+    .counter {
+      font-size: 11px; font-weight: 600;
+      color: var(--muted); letter-spacing: .3px; white-space: nowrap;
+    }
+    .counter strong { color: var(--accent); }
+
+    .btn-toolbar-action {
+      background: var(--surface2); border: 1px solid var(--accent);
+      color: var(--accent); border-radius: var(--radius-sm);
+      padding: 6px 14px; font-family: inherit; font-size: 11px;
+      font-weight: 700; cursor: pointer; white-space: nowrap;
+      transition: all .15s;
+    }
+    .btn-toolbar-action:hover { background: var(--accent-dim); }
+
+    /* ═══ LOADING ═══ */
+    .loading {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 12px; padding: 60px 20px;
+      color: var(--muted); font-size: 13px;
+    }
+    .spinner {
+      width: 28px; height: 28px;
+      border: 2.5px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-msg {
+      background: var(--red-dim); border: 1px solid rgba(232,84,84,.25);
+      border-radius: var(--radius); padding: 16px 20px;
+      color: var(--red); font-size: 12px; font-weight: 500;
+    }
+
+    /* ═══ PRODUCT GRID ═══ */
+    .products {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 10px;
+    }
+
+    .prod-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color .2s, box-shadow .2s;
+      display: flex;
+      flex-direction: column;
+    }
+    .prod-card:hover {
+      border-color: var(--border-hover);
+      box-shadow: 0 2px 12px rgba(0,0,0,.25);
+    }
+    .prod-card.not-visible { border-color: rgba(201,164,74,.35); }
+    .prod-card.not-visible .prod-name { color: var(--accent); }
+    .prod-card.not-visible .hidden-chip { display: inline-block; }
+
+    .prod-img-wrap {
+      width: 100%; height: 140px;
+      background: var(--surface2);
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; position: relative;
+    }
+    .prod-img { width: 100%; height: 100%; object-fit: cover; }
+    .prod-img-placeholder { font-size: 32px; color: var(--muted); opacity: .3; }
+    .hidden-chip {
+      display: none; position: absolute; top: 8px; right: 8px;
+      font-size: 8px; font-weight: 700; letter-spacing: 1px;
+      color: var(--red); background: var(--red-dim);
+      border: 1px solid rgba(232,84,84,.30); padding: 2px 6px; border-radius: 3px;
+    }
+    .ribbon-chip {
+      position: absolute; top: 8px; left: 8px;
+      font-size: 8px; font-weight: 700; letter-spacing: .5px;
+      color: #fff; background: var(--accent);
+      padding: 2px 7px; border-radius: 3px;
+    }
+    .media-count-chip {
+      position: absolute; bottom: 6px; left: 6px;
+      font-size: 8px; font-weight: 700; color: #fff;
+      background: rgba(0,0,0,.6);
+      padding: 1px 5px; border-radius: 3px;
+    }
+
+    .prod-body {
+      padding: 12px 14px;
+      display: flex; flex-direction: column; gap: 6px; flex: 1;
+    }
+    .prod-name { font-size: 13px; font-weight: 700; color: var(--text); line-height: 1.3; }
+    .prod-sku { font-size: 9px; font-family: 'Courier New', monospace; color: var(--muted); letter-spacing: .3px; }
+    .prod-price-row {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: auto; padding-top: 4px;
+    }
+    .prod-price { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -.3px; }
+    .prod-type {
+      font-size: 9px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+      color: var(--muted); padding: 2px 6px; background: var(--surface3);
+      border-radius: 3px; align-self: flex-start;
+    }
+
+    /* v3.0: stock line */
+    .prod-stock {
+      font-size: 10px; font-weight: 700; margin-top: 2px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .prod-stock.stock-ok   { color: var(--green); }
+    .prod-stock.stock-low  { color: var(--yellow); }
+    .prod-stock.stock-zero { color: var(--red); }
+    .prod-stock.stock-untracked { color: var(--muted); font-weight: 500; }
+    .prod-stock-num {
+      background: var(--surface3); padding: 1px 6px; border-radius: 3px;
+      font-family: 'Courier New', monospace; font-size: 11px;
+    }
+
+    /* Edit + Decrement actions */
+    .prod-action {
+      padding: 0 14px 12px;
+      display: flex; gap: 6px; align-items: center;
+    }
+    .btn-edit {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--accent); font-size: 13px; padding: 8px 10px;
+      border-radius: var(--radius-sm); cursor: pointer;
+      transition: all .15s; flex-shrink: 0;
+    }
+    .btn-edit:hover { border-color: var(--accent); background: var(--accent-dim); }
+
+    /* v3.0: botón DESCONTAR sustituye al antiguo VENTA */
+    .btn-decrement {
+      flex: 1; background: var(--red); border: none; color: #fff;
+      font-family: inherit; font-size: 11px; font-weight: 700;
+      letter-spacing: .8px; text-transform: uppercase;
+      padding: 8px 12px; border-radius: var(--radius-sm);
+      cursor: pointer; transition: all .15s;
+    }
+    .btn-decrement:hover { filter: brightness(1.15); }
+    .btn-decrement:active { transform: translateY(1px); }
+    .btn-decrement:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+    .btn-decrement.processing { background: var(--accent); }
+
+    /* ═══ TOAST ═══ */
+    .toast {
+      position: fixed; bottom: 20px; left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: var(--surface3);
+      border: 1px solid var(--border-hover);
+      color: var(--text); font-family: inherit;
+      font-size: 12px; font-weight: 600;
+      padding: 8px 18px; border-radius: var(--radius);
+      opacity: 0; transition: all .3s ease;
+      pointer-events: none; z-index: 999;
+      max-width: 90%;
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .toast.toast-error { border-color: rgba(232,84,84,.4); color: var(--red); }
+
+    /* ═══ EMPTY / FOOTER ═══ */
+    .empty-state {
+      text-align: center; padding: 40px 20px;
+      color: var(--muted); font-size: 13px;
+    }
+    .footer {
+      margin-top: 14px; padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    }
+    .footer-item {
+      font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .3px;
+    }
+    .footer-item strong { color: var(--text-secondary); }
+
+    /* ═══════════════════════════════════════════════════
+       MODALES
+       ═══════════════════════════════════════════════════ */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.7);
+      z-index: 1000; display: flex; align-items: flex-start;
+      justify-content: center; padding: 30px 12px;
+      overflow-y: auto;
+    }
+    .modal-box {
+      background: var(--surface); border: 1px solid var(--border-hover);
+      border-radius: var(--radius); width: 100%; max-width: 520px;
+      box-shadow: 0 8px 40px rgba(0,0,0,.5);
+    }
+    .modal-box-sm { max-width: 380px; }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px; border-bottom: 1px solid var(--border);
+    }
+    .modal-title { font-size: 14px; font-weight: 700; color: var(--accent); }
+    .modal-close {
+      background: none; border: none; color: var(--muted); font-size: 18px;
+      cursor: pointer; padding: 4px 8px; transition: color .15s;
+    }
+    .modal-close:hover { color: var(--red); }
+    .modal-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+    .modal-footer {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 18px; border-top: 1px solid var(--border);
+    }
+    .modal-row { display: flex; gap: 10px; }
+    .modal-row > .modal-field { flex: 1; }
+    .modal-field { display: flex; flex-direction: column; gap: 3px; }
+    .modal-label {
+      font-size: 9px; font-weight: 700; color: var(--accent);
+      letter-spacing: .5px; text-transform: uppercase;
+    }
+    .modal-input {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); border-radius: var(--radius-sm);
+      padding: 8px 10px; font-family: inherit; font-size: 12px;
+      font-weight: 500; outline: none; transition: border-color .2s;
+    }
+    .modal-input:focus { border-color: var(--accent); }
+    .modal-input::placeholder { color: var(--muted); }
+    .modal-input:disabled {
+      opacity: .55; cursor: not-allowed; background: var(--surface3);
+    }
+    .modal-textarea {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--text); border-radius: var(--radius-sm);
+      padding: 8px 10px; font-family: inherit; font-size: 12px;
+      font-weight: 500; outline: none; resize: vertical; min-height: 60px;
+      transition: border-color .2s;
+    }
+    .modal-textarea:focus { border-color: var(--accent); }
+    .modal-textarea::placeholder { color: var(--muted); }
+
+    .modal-section-sep {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 2px 0;
+    }
+    .modal-section-title {
+      font-size: 9px; font-weight: 700; color: var(--blue);
+      letter-spacing: 1px; text-transform: uppercase;
+      padding: 4px 0 2px;
+    }
+
+    .modal-hint {
+      font-size: 10px; color: var(--muted); font-weight: 500;
+      margin-top: 2px;
+    }
+
+    .btn-modal-save {
+      background: var(--green); border: none; color: #fff;
+      font-family: inherit; font-size: 11px; font-weight: 700;
+      padding: 8px 18px; border-radius: var(--radius-sm);
+      cursor: pointer; letter-spacing: .5px;
+    }
+    .btn-modal-save:hover { filter: brightness(1.15); }
+    .btn-modal-save:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-modal-cancel {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--muted); font-family: inherit; font-size: 11px;
+      font-weight: 600; padding: 8px 14px; border-radius: var(--radius-sm); cursor: pointer;
+    }
+    .btn-modal-cancel:hover { border-color: var(--red); color: var(--red); }
+    .btn-delete-product {
+      background: var(--red-dim); border: 1px solid rgba(232,84,84,.3);
+      color: var(--red); font-family: inherit; font-size: 10px;
+      font-weight: 700; padding: 7px 12px; border-radius: var(--radius-sm); cursor: pointer;
+    }
+    .btn-delete-product:hover { border-color: var(--red); background: rgba(232,84,84,.2); }
+    .btn-delete-confirm {
+      background: var(--red); border: none; color: #fff;
+      font-family: inherit; font-size: 11px; font-weight: 700;
+      padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer;
+    }
+    .btn-delete-confirm:disabled { opacity: .4; cursor: not-allowed; }
+
+    .cat-checkboxes {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      max-height: 120px; overflow-y: auto;
+      padding: 6px; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+    }
+    .cat-checkbox {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 11px; color: var(--text-secondary); font-weight: 500;
+      padding: 3px 8px; background: var(--surface3);
+      border-radius: 3px; cursor: pointer; white-space: nowrap;
+    }
+    .cat-checkbox input { cursor: pointer; accent-color: var(--accent); }
+
+    .toggle-wrap {
+      display: flex; align-items: center; gap: 6px; padding: 8px 0;
+    }
+    .toggle-wrap label {
+      font-size: 11px; color: var(--text-secondary); cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .toggle-wrap input {
+      cursor: pointer; accent-color: var(--accent);
+      width: 16px; height: 16px;
+    }
+
+    /* GALERÍA MULTI-IMAGEN */
+    .img-gallery {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      min-height: 50px;
+      align-items: center;
+    }
+    .img-gallery-empty {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .img-thumb {
+      width: 80px;
+      height: 80px;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+      border: 2px solid var(--border);
+      flex-shrink: 0;
+    }
+    .img-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .img-thumb.marked {
+      opacity: .3;
+      border-color: var(--red);
+    }
+    .img-thumb.new-img {
+      border-color: var(--green);
+    }
+    .img-thumb-x {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 20px;
+      height: 20px;
+      background: rgba(0,0,0,.75);
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    .img-thumb-x:hover { background: var(--red); }
+    .img-thumb.marked .img-thumb-x { background: var(--green); }
+    .btn-add-images {
+      background: var(--surface3);
+      border: 1px dashed var(--border);
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      margin-top: 4px;
+      transition: all .15s;
+    }
+    .btn-add-images:hover { border-color: var(--accent); color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <div class="header">
+    <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
+    <span class="header-version">v3.3.0</span>
+  </div>
+
+  <!-- TOOLBAR -->
+  <div class="toolbar" id="toolbar" style="display:none;">
+    <input type="text" class="search-box" id="searchBox" placeholder="Buscar producto...">
+    <select class="filter-select" id="filterCollection" style="display:none;">
+      <option value="">Todas las categorías</option>
+    </select>
+    <select class="filter-select" id="filterVisibility">
+      <option value="">Todos</option>
+      <option value="visible">Solo VISIBLES</option>
+      <option value="hidden">Solo OCULTOS</option>
+    </select>
+    <div class="toolbar-sep"></div>
+    <span class="counter" id="counter"></span>
+    <div class="toolbar-sep"></div>
+    <button class="btn-toolbar-action" id="btnNuevoProducto">+ PRODUCTO</button>
+    <button class="btn-toolbar-action" id="btnNuevaCategoria" style="border-color:var(--blue);color:var(--blue);">+ CATEGORÍA</button>
+  </div>
+
+  <!-- CONTENT (product grid) -->
+  <div id="content">
+    <div class="loading">
+      <div class="spinner"></div>
+      <span>Cargando productos…</span>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer" id="footer" style="display:none;"></div>
+
+  <!-- ═══════════════════════════════════════════════════
+       MODAL PRODUCTO (Editar / Nuevo)
+       ═══════════════════════════════════════════════════ -->
+  <div class="modal-overlay" id="modalProducto" style="display:none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span class="modal-title" id="modalProductoTitle">Editar Producto</span>
+        <button class="modal-close" id="modalProductoClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label class="modal-label">NOMBRE *</label>
+          <input type="text" class="modal-input" id="editNombre" placeholder="Nombre del producto">
+        </div>
+        <div class="modal-row">
+          <div class="modal-field">
+            <label class="modal-label">PRECIO (€) *</label>
+            <input type="number" class="modal-input" id="editPrecio" step="0.01" min="0">
+          </div>
+          <div class="modal-field">
+            <label class="modal-label">COSTE (€) · solo lectura</label>
+            <input type="number" class="modal-input" id="editCoste" step="0.01" min="0" placeholder="Cargando…" readonly>
+            <div style="font-size:10px;color:var(--text-dim);margin-top:4px;">El coste se gestiona desde Almacén.</div>
+          </div>
+        </div>
+
+        <!-- v3.1: STOCK + SEGUIMIENTO + DISPONIBILIDAD -->
+        <div class="modal-row">
+          <div class="modal-field">
+            <label class="modal-label">STOCK (UNIDADES)</label>
+            <input type="number" class="modal-input" id="editStock" step="1" min="0" placeholder="—">
+            <span class="modal-hint" id="stockHint"></span>
+          </div>
+          <div class="modal-field">
+            <label class="modal-label">SEGUIMIENTO STOCK</label>
+            <div class="toggle-wrap">
+              <label><input type="checkbox" id="editTrackInventory"> Activar contador</label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-row">
+          <div class="modal-field">
+            <label class="modal-label">DISPONIBILIDAD</label>
+            <div class="toggle-wrap">
+              <label><input type="checkbox" id="editVisible" checked> Disponible en tienda</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-row">
+          <div class="modal-field">
+            <label class="modal-label">SKU</label>
+            <input type="text" class="modal-input" id="editSku" placeholder="Código SKU">
+          </div>
+          <div class="modal-field">
+            <label class="modal-label">MARCA</label>
+            <input type="text" class="modal-input" id="editMarca" placeholder="Marca">
+          </div>
+        </div>
+        <div class="modal-field">
+          <label class="modal-label">DESCRIPCIÓN (texto largo)</label>
+          <textarea class="modal-textarea" id="editDescripcion" rows="3" placeholder="Descripción del producto..."></textarea>
+        </div>
+        <div class="modal-field">
+          <label class="modal-label">RIBBON (ETIQUETA)</label>
+          <input type="text" class="modal-input" id="editRibbon" placeholder="Ej: Nuevo, Oferta...">
+        </div>
+
+        <!-- ═══ INFORMACIÓN ADICIONAL ═══ -->
+        <hr class="modal-section-sep">
+        <div class="modal-section-title">📋 Información adicional</div>
+        <div class="modal-field">
+          <label class="modal-label">DESCRIPCIÓN CORTA</label>
+          <textarea class="modal-textarea" id="editDescCorta" rows="3" placeholder="Resumen breve del producto, para quién es y qué resultado ofrece..."></textarea>
+        </div>
+        <div class="modal-field">
+          <label class="modal-label">COMPONENTES</label>
+          <textarea class="modal-textarea" id="editComponentes" rows="2" placeholder="Ingredientes activos separados por · "></textarea>
+        </div>
+        <div class="modal-field">
+          <label class="modal-label">USOS RECOMENDADOS DEL PRODUCTO</label>
+          <textarea class="modal-textarea" id="editUsos" rows="3" placeholder="Instrucciones de aplicación..."></textarea>
+        </div>
+        <div class="modal-field">
+          <label class="modal-label">VENTAJAS DEL PRODUCTO</label>
+          <textarea class="modal-textarea" id="editVentajas" rows="3" placeholder="Beneficios y ventajas del producto..."></textarea>
+        </div>
+        <hr class="modal-section-sep">
+
+        <!-- Galería multi-imagen -->
+        <div class="modal-field">
+          <label class="modal-label">IMÁGENES</label>
+          <div class="img-gallery" id="imgGallery">
+            <span class="img-gallery-empty">Sin imágenes</span>
+          </div>
+          <button type="button" class="btn-add-images" id="btnAddImages">📷 + Añadir fotos</button>
+          <input type="file" id="imgFileInput" accept="image/*" multiple style="display:none;">
+        </div>
+        <div class="modal-field">
+          <label class="modal-label">CATEGORÍAS</label>
+          <div class="cat-checkboxes" id="editCategorias">
+            <span style="color:var(--muted);font-size:10px;">Cargando...</span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-delete-product" id="btnEliminarProducto" style="display:none;">🗑️ ELIMINAR</button>
+        <div style="flex:1;"></div>
+        <button class="btn-modal-cancel" id="btnCancelarProducto">CANCELAR</button>
+        <button class="btn-modal-save" id="btnGuardarProducto">💾 GUARDAR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL CATEGORÍA NUEVA -->
+  <div class="modal-overlay" id="modalCategoria" style="display:none;">
+    <div class="modal-box modal-box-sm">
+      <div class="modal-header">
+        <span class="modal-title">📂 Nueva Categoría</span>
+        <button class="modal-close" id="modalCategoriaClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label class="modal-label">NOMBRE DE LA CATEGORÍA *</label>
+          <input type="text" class="modal-input" id="inputNuevaCategoria" placeholder="Ej: Champús, Mascarillas...">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div style="flex:1;"></div>
+        <button class="btn-modal-cancel" id="btnCancelarCategoria">CANCELAR</button>
+        <button class="btn-modal-save" id="btnCrearCategoria">✓ CREAR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL CONFIRMACIÓN ELIMINAR -->
+  <div class="modal-overlay" id="modalConfirmDelete" style="display:none;">
+    <div class="modal-box modal-box-sm">
+      <div class="modal-header">
+        <span class="modal-title" style="color:var(--red);">⚠️ Eliminar Producto</span>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--text-secondary);font-size:12px;margin-bottom:8px;" id="deleteProductName"></p>
+        <p style="color:var(--muted);font-size:11px;margin-bottom:10px;">
+          Esta acción no se puede deshacer. Escribe <strong style="color:var(--red);">ELIMINAR</strong> para confirmar.
+        </p>
+        <input type="text" class="modal-input" id="inputConfirmDelete" placeholder="Escribe ELIMINAR...">
+      </div>
+      <div class="modal-footer">
+        <div style="flex:1;"></div>
+        <button class="btn-modal-cancel" id="btnCancelarDelete">CANCELAR</button>
+        <button class="btn-delete-confirm" id="btnConfirmDelete" disabled>🗑️ ELIMINAR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v3.0: MODAL CONFIRMAR DESCUENTO DE 1 UNIDAD -->
+  <div class="modal-overlay" id="modalConfirmDescuento" style="display:none;">
+    <div class="modal-box modal-box-sm">
+      <div class="modal-header">
+        <span class="modal-title">🗑️ Descontar unidad</span>
+        <button class="modal-close" id="modalDescuentoClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--text-secondary);font-size:13px;line-height:1.4;" id="descuentoTexto"></p>
+        <p style="color:var(--muted);font-size:11px;margin-top:6px;">Esta acción resta <strong style="color:var(--accent);">1 unidad</strong> del stock del producto.</p>
+      </div>
+      <div class="modal-footer">
+        <div style="flex:1;"></div>
+        <button class="btn-modal-cancel" id="btnCancelarDescuento">CANCELAR</button>
+        <button class="btn-delete-confirm" id="btnConfirmarDescuento">CONFIRMAR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+<script>
+  // ═══════════════════════════════════════════════════
+  // STATE
+  // ═══════════════════════════════════════════════════
+  let allProductos = [];
+  let allCollections = [];
+
+  // Estado edición multi-imagen
+  let modalMode = null;       // 'edit' | 'new'
+  let editingProductId = null;
+  let currentMediaItems = []; // [{src, type}] del producto actual
+  let imagesToRemove = [];    // srcs marcados para eliminar
+  let imagesToAdd = [];       // [{base64, fileName}] nuevas
+
+  // v3.0: pending decrement target
+  let pendingDecrementProductId = null;
+
+  const el = {
+    toolbar: document.getElementById('toolbar'),
+    content: document.getElementById('content'),
+    footer: document.getElementById('footer'),
+    search: document.getElementById('searchBox'),
+    filterCol: document.getElementById('filterCollection'),
+    filterVis: document.getElementById('filterVisibility'),
+    counter: document.getElementById('counter'),
+    toast: document.getElementById('toast')
+  };
+
+  // ═══════════════════════════════════════════════════
+  // RENDER LISTADO
+  // ═══════════════════════════════════════════════════
+  function render(data) {
+    allProductos = data.productos || [];
+    allCollections = data.collections || [];
+
+    if (allCollections.length > 0) {
+      el.filterCol.innerHTML = '<option value="">Todas las categorías</option>';
+      allCollections.sort((a, b) => a.name.localeCompare(b.name));
+      allCollections.forEach(c => {
+        el.filterCol.innerHTML += `<option value="${esc(c.id)}">${esc(c.name)}</option>`;
+      });
+      el.filterCol.style.display = '';
+    }
+
+    el.toolbar.style.display = 'flex';
+    applyFilters();
+    renderFooter();
+  }
+
+  function applyFilters() {
+    const q = (el.search.value || '').toLowerCase().trim();
+    const colF = el.filterCol.value;
+    const visF = el.filterVis.value;  // '', 'visible', 'hidden'
+
+    const filtered = allProductos.filter(p => {
+      if (q && !p.name.toLowerCase().includes(q) && !(p.sku || '').toLowerCase().includes(q)) return false;
+      if (colF) {
+        const inCol = (p.collections || []).some(c => c.id === colF);
+        if (!inCol) return false;
+      }
+      // v3.2.0: filtro robusto. Con backend v1.2.3, visible llega
+      // true/false para los 231 productos (doble query A). Defensa
+      // ante null (si la query de visibilidad fallara): un producto
+      // con visible:null NO se oculta en "Solo OCULTOS" — se trata
+      // como desconocido y se muestra, en vez de desaparecer de los
+      // dos filtros como pasaba antes.
+      if (visF === 'visible' && p.visible === false) return false;
+      if (visF === 'hidden' && p.visible !== false) return false;
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      if (a.visible !== b.visible) return a.visible === false ? 1 : -1;
+      if (a.inStock !== b.inStock) return a.inStock ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    el.counter.innerHTML = `<strong>${filtered.length}</strong> de ${allProductos.length} productos`;
+
+    if (filtered.length === 0) {
+      el.content.innerHTML = '<div class="empty-state">Sin resultados</div>';
+      return;
+    }
+
+    let html = '<div class="products">';
+    filtered.forEach(p => { html += buildProductCard(p); });
+    html += '</div>';
+    el.content.innerHTML = html;
+    bindCardEvents();
+  }
+
+  function convertWixImageUrl(wixUrl) {
+    if (!wixUrl) return '';
+    if (!wixUrl.startsWith('wix:image://')) return wixUrl;
+    try {
+      const match = wixUrl.match(/wix:image:\/\/v1\/([^\/]+)/);
+      if (match && match[1]) return 'https://static.wixstatic.com/media/' + match[1];
+    } catch (e) {}
+    return '';
+  }
+
+  // v3.0: build stock line in card
+  function buildStockHTML(p) {
+    if (p.trackInventory === false) {
+      return '<div class="prod-stock stock-untracked">Sin seguimiento de stock</div>';
+    }
+    const q = p.quantityInStock;
+    if (q === null || q === undefined) {
+      return '<div class="prod-stock stock-untracked">— sin dato</div>';
+    }
+    let cls = 'stock-ok';
+    if (q === 0) cls = 'stock-zero';
+    else if (q <= 3) cls = 'stock-low';
+    return `<div class="prod-stock ${cls}">
+      <span>Stock:</span>
+      <span class="prod-stock-num">${q}</span>
+    </div>`;
+  }
+
+  function buildProductCard(p) {
+    const visCls = (p.visible === false) ? ' not-visible' : '';
+
+    let imgHTML = '';
+    const imgUrl = convertWixImageUrl(p.mainMedia);
+    if (imgUrl) {
+      imgHTML = `<img class="prod-img" src="${esc(imgUrl)}" alt="${esc(p.name)}" loading="lazy">`;
+    } else {
+      imgHTML = '<span class="prod-img-placeholder">📦</span>';
+    }
+
+    let ribbonHTML = p.ribbon ? `<span class="ribbon-chip">${esc(p.ribbon)}</span>` : '';
+    const hiddenText = p.visible === false ? 'OCULTO' : '';
+    const priceDisplay = p.formattedPrice || (p.price !== null && p.price !== undefined ? Number(p.price).toFixed(2) + ' €' : '—');
+
+    // v3.0: solo se puede descontar si trackInventory=true y stock > 0
+    const stockNum = (p.trackInventory && typeof p.quantityInStock === 'number') ? p.quantityInStock : null;
+    const canDecrement = stockNum !== null && stockNum > 0;
+
+    const mediaCount = (p.mediaItems || []).length;
+    const mediaChip = mediaCount > 1 ? `<span class="media-count-chip">📷 ${mediaCount}</span>` : '';
+
+    return `
+      <div class="prod-card${visCls}" data-id="${p.id}">
+        <div class="prod-img-wrap">
+          ${imgHTML}
+          ${ribbonHTML}
+          ${mediaChip}
+          ${hiddenText ? `<span class="hidden-chip">${hiddenText}</span>` : ''}
+        </div>
+        <div class="prod-body">
+          <div class="prod-name">${esc(p.name)}</div>
+          ${(p.collections || []).length > 0
+            ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">' +
+              (p.collections || []).map(c =>
+                `<span style="font-size:8px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:2px 6px;border-radius:3px;background:var(--accent-dim);color:var(--accent);">${esc(c.name)}</span>`
+              ).join('') + '</div>'
+            : ''}
+          ${p.sku ? `<div class="prod-sku">SKU: ${esc(p.sku)}</div>` : ''}
+          <div class="prod-price-row">
+            <span><span class="prod-price">${priceDisplay}</span></span>
+            <span class="prod-type">${esc(p.productType)}</span>
+          </div>
+          ${buildStockHTML(p)}
+        </div>
+        <div class="prod-action" id="action-${p.id}">
+          <button class="btn-edit" data-id="${p.id}" title="Editar producto">✏️</button>
+          <button class="btn-decrement" data-id="${p.id}" data-name="${esc(p.name)}" ${canDecrement ? '' : 'disabled'} title="${canDecrement ? 'Descontar 1 unidad' : 'No se puede descontar (sin stock o sin seguimiento)'}">
+            🗑️ DESCONTAR
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindCardEvents() {
+    el.content.querySelectorAll('.btn-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openEditModal(btn.dataset.id);
+      });
+    });
+
+    // v3.0: DESCONTAR con confirmación previa
+    el.content.querySelectorAll('.btn-decrement').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        const id = btn.dataset.id;
+        const name = btn.dataset.name || '';
+        openConfirmDescuento(id, name);
+      });
+    });
+  }
+
+  function renderFooter() {
+    const total = allProductos.length;
+    const visible = allProductos.filter(p => p.visible === true).length;
+    const hidden = allProductos.filter(p => p.visible === false).length;
+    el.footer.style.display = 'flex';
+    el.footer.innerHTML = `
+      <span class="footer-item">Total: <strong>${total}</strong></span>
+      <span class="footer-item">Visibles: <strong>${visible}</strong></span>
+      <span class="footer-item">Ocultos: <strong>${hidden}</strong></span>
+      <span class="footer-item">Categorías: <strong>${allCollections.length}</strong></span>
+    `;
+  }
+
+  // ═══════════════════════════════════════════════════
+  // TOAST
+  // ═══════════════════════════════════════════════════
+  let toastTimer;
+  function showToast(msg, isError, actionHtml) {
+    clearTimeout(toastTimer);
+    el.toast.innerHTML = msg + (actionHtml || '');
+    el.toast.className = 'toast show' + (isError ? ' toast-error' : '');
+    toastTimer = setTimeout(() => { el.toast.className = 'toast'; }, actionHtml ? 8000 : 2500);
+  }
+
+  function esc(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  function stripHtml(html) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    return tmp.textContent || tmp.innerText || '';
+  }
+
+  // ═══════════════════════════════════════════════════
+  // FILTER EVENTS
+  // ═══════════════════════════════════════════════════
+  el.search.addEventListener('input', applyFilters);
+  el.filterCol.addEventListener('change', applyFilters);
+  el.filterVis.addEventListener('change', applyFilters);
+
+  // v3.1: toggle Seguimiento de stock → habilita/deshabilita input
+  document.getElementById('editTrackInventory').addEventListener('change', (e) => {
+    const on = e.target.checked;
+    const stockInput = document.getElementById('editStock');
+    const stockHint = document.getElementById('stockHint');
+    if (on) {
+      stockInput.disabled = false;
+      stockInput.placeholder = '0';
+      stockHint.textContent = 'Escribe la cantidad total y guarda.';
+    } else {
+      stockInput.disabled = true;
+      stockInput.value = '';
+      stockInput.placeholder = '— sin seguimiento';
+      stockHint.textContent = 'Activa el seguimiento para poder gestionar unidades.';
+    }
+  });
+
+  // ═══════════════════════════════════════════════════
+  // MODALES — bindings
+  // ═══════════════════════════════════════════════════
+
+  document.getElementById('btnNuevoProducto').addEventListener('click', openNewProductModal);
+  document.getElementById('btnNuevaCategoria').addEventListener('click', openNewCategoryModal);
+
+  document.getElementById('modalProductoClose').addEventListener('click', closeProductModal);
+  document.getElementById('btnCancelarProducto').addEventListener('click', closeProductModal);
+  document.getElementById('btnGuardarProducto').addEventListener('click', saveProduct);
+  document.getElementById('btnEliminarProducto').addEventListener('click', startDeleteProduct);
+
+  document.getElementById('modalCategoriaClose').addEventListener('click', () => {
+    document.getElementById('modalCategoria').style.display = 'none';
+  });
+  document.getElementById('btnCancelarCategoria').addEventListener('click', () => {
+    document.getElementById('modalCategoria').style.display = 'none';
+  });
+  document.getElementById('btnCrearCategoria').addEventListener('click', createCategory);
+
+  document.getElementById('btnCancelarDelete').addEventListener('click', () => {
+    document.getElementById('modalConfirmDelete').style.display = 'none';
+  });
+  document.getElementById('inputConfirmDelete').addEventListener('input', (e) => {
+    document.getElementById('btnConfirmDelete').disabled = e.target.value.trim() !== 'ELIMINAR';
+  });
+  document.getElementById('btnConfirmDelete').addEventListener('click', confirmDeleteProduct);
+
+  // v3.0: bindings descuento
+  document.getElementById('modalDescuentoClose').addEventListener('click', closeConfirmDescuento);
+  document.getElementById('btnCancelarDescuento').addEventListener('click', closeConfirmDescuento);
+  document.getElementById('btnConfirmarDescuento').addEventListener('click', confirmarDescuento);
+
+  document.getElementById('btnAddImages').addEventListener('click', () => {
+    document.getElementById('imgFileInput').click();
+  });
+
+  document.getElementById('imgFileInput').addEventListener('change', (e) => {
+    const files = Array.from(e.target.files);
+    let pending = files.length;
+
+    files.forEach(file => {
+      if (file.size > 10 * 1024 * 1024) {
+        pending--;
+        showToast(`⚠️ ${file.name} demasiado grande (máx 10MB)`, true);
+        if (pending <= 0) renderImageGallery();
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        imagesToAdd.push({ base64: ev.target.result, fileName: file.name });
+        pending--;
+        if (pending <= 0) renderImageGallery();
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  });
+
+  // helper: encontrar sección en additionalInfoSections
+  function findSection(sections, title) {
+    const s = (sections || []).find(s => s.title === title);
+    return s ? s.description : '';
+  }
+
+  // ═══════════════════════════════════════════════════
+  // MODAL — EDITAR
+  // ═══════════════════════════════════════════════════
+  function openEditModal(productId) {
+    const prod = allProductos.find(p => p.id === productId);
+    if (!prod) return;
+
+    modalMode = 'edit';
+    editingProductId = productId;
+    currentMediaItems = prod.mediaItems || [];
+    imagesToRemove = [];
+    imagesToAdd = [];
+
+    document.getElementById('modalProductoTitle').textContent = '✏️ Editar: ' + prod.name;
+    document.getElementById('btnEliminarProducto').style.display = '';
+    document.getElementById('editNombre').value = prod.name || '';
+    document.getElementById('editPrecio').value = prod.price || '';
+
+    // v3.0.2: el coste ya viene en el listado masivo (backend
+    // v1.2.0 lo cruza desde storesProducts.queryProducts). Si es
+    // null, el producto no tiene coste configurado.
+    // v3.2.0: el listado masivo YA NO trae el coste (backend v1.2.3:
+    // queryProducts v2 no lo devolvía — todos los samples cost:null).
+    // El coste se pide ahora al backend al abrir el modal, vía
+    // 'obtener-coste'. Mientras llega, el campo queda vacío; el
+    // handler 'costeCargado' lo rellena cuando responde el backend.
+    const costeInput = document.getElementById('editCoste');
+    costeInput.value = '';
+    costeInput.placeholder = 'Cargando…';
+    parent.postMessage({
+      type: 'obtener-coste',
+      payload: { productId: productId }
+    }, '*');
+
+    document.getElementById('editSku').value = prod.sku || '';
+    document.getElementById('editMarca').value = prod.brand || '';
+    document.getElementById('editDescripcion').value = stripHtml(prod.description || '');
+    document.getElementById('editRibbon').value = prod.ribbon || '';
+    document.getElementById('editVisible').checked = prod.visible === true;
+
+    // v3.1: stock + seguimiento sincronizados
+    const stockInput = document.getElementById('editStock');
+    const stockHint = document.getElementById('stockHint');
+    const trackInput = document.getElementById('editTrackInventory');
+    trackInput.checked = prod.trackInventory === true;
+    if (prod.trackInventory === true) {
+      stockInput.disabled = false;
+      stockInput.value = (typeof prod.quantityInStock === 'number') ? prod.quantityInStock : '';
+      stockInput.placeholder = '0';
+      stockHint.textContent = 'Escribe la cantidad total y guarda.';
+    } else {
+      stockInput.disabled = true;
+      stockInput.value = '';
+      stockInput.placeholder = '— sin seguimiento';
+      stockHint.textContent = 'Activa el seguimiento para poder gestionar unidades.';
+    }
+
+    // additionalInfoSections
+    const sections = prod.additionalInfoSections || [];
+    document.getElementById('editDescCorta').value = findSection(sections, 'Descripción corta');
+    document.getElementById('editComponentes').value = findSection(sections, 'Componentes');
+    document.getElementById('editUsos').value = findSection(sections, 'Usos recomendados del producto');
+    document.getElementById('editVentajas').value = findSection(sections, 'Ventajas del producto');
+
+    renderImageGallery();
+    populateCategoryCheckboxes(prod.collections || []);
+
+    document.getElementById('modalProducto').style.display = 'flex';
+    document.getElementById('btnGuardarProducto').disabled = false;
+    document.getElementById('btnGuardarProducto').textContent = '💾 GUARDAR';
+  }
+
+  // ═══════════════════════════════════════════════════
+  // MODAL — NUEVO PRODUCTO
+  // ═══════════════════════════════════════════════════
+  function openNewProductModal() {
+    modalMode = 'new';
+    editingProductId = null;
+    currentMediaItems = [];
+    imagesToRemove = [];
+    imagesToAdd = [];
+
+    document.getElementById('modalProductoTitle').textContent = '➕ Nuevo Producto';
+    document.getElementById('btnEliminarProducto').style.display = 'none';
+    document.getElementById('editNombre').value = '';
+    document.getElementById('editPrecio').value = '';
+
+    const costeInput = document.getElementById('editCoste');
+    costeInput.value = '';
+    costeInput.placeholder = '';
+
+    document.getElementById('editSku').value = '';
+    document.getElementById('editMarca').value = '';
+    document.getElementById('editDescripcion').value = '';
+    document.getElementById('editRibbon').value = '';
+    document.getElementById('editVisible').checked = true;
+
+    // v3.1: stock + seguimiento (por defecto activo para alta)
+    const stockInput = document.getElementById('editStock');
+    const stockHint = document.getElementById('stockHint');
+    const trackInput = document.getElementById('editTrackInventory');
+    trackInput.checked = true;
+    stockInput.disabled = false;
+    stockInput.value = '';
+    stockInput.placeholder = '0';
+    stockHint.textContent = 'Stock inicial. Déjalo vacío si no aplica.';
+
+    document.getElementById('editDescCorta').value = '';
+    document.getElementById('editComponentes').value = '';
+    document.getElementById('editUsos').value = '';
+    document.getElementById('editVentajas').value = '';
+
+    renderImageGallery();
+    populateCategoryCheckboxes([]);
+
+    document.getElementById('modalProducto').style.display = 'flex';
+    document.getElementById('btnGuardarProducto').disabled = false;
+    document.getElementById('btnGuardarProducto').textContent = '💾 CREAR';
+    document.getElementById('editNombre').focus();
+  }
+
+  function closeProductModal() {
+    document.getElementById('modalProducto').style.display = 'none';
+    modalMode = null;
+    editingProductId = null;
+    currentMediaItems = [];
+    imagesToRemove = [];
+    imagesToAdd = [];
+  }
+
+  function openNewCategoryModal() {
+    document.getElementById('inputNuevaCategoria').value = '';
+    document.getElementById('modalCategoria').style.display = 'flex';
+    document.getElementById('btnCrearCategoria').disabled = false;
+    document.getElementById('btnCrearCategoria').textContent = '✓ CREAR';
+    document.getElementById('inputNuevaCategoria').focus();
+  }
+
+  // ═══════════════════════════════════════════════════
+  // GALERÍA MULTI-IMAGEN
+  // ═══════════════════════════════════════════════════
+  function renderImageGallery() {
+    const gallery = document.getElementById('imgGallery');
+    let html = '';
+
+    currentMediaItems.forEach((item, i) => {
+      const isMarked = imagesToRemove.includes(item.src);
+      const displayUrl = convertWixImageUrl(item.src);
+      if (displayUrl) {
+        html += `
+          <div class="img-thumb${isMarked ? ' marked' : ''}" data-idx="${i}">
+            <img src="${displayUrl}" loading="lazy">
+            <button class="img-thumb-x"
+              data-action="${isMarked ? 'restore' : 'remove'}"
+              data-src="${esc(item.src)}">${isMarked ? '↩' : '✕'}</button>
+          </div>
+        `;
+      }
+    });
+
+    imagesToAdd.forEach((item, i) => {
+      html += `
+        <div class="img-thumb new-img" data-newidx="${i}">
+          <img src="${item.base64}">
+          <button class="img-thumb-x" data-action="cancel" data-newidx="${i}">✕</button>
+        </div>
+      `;
+    });
+
+    if (!html) html = '<span class="img-gallery-empty">Sin imágenes</span>';
+    gallery.innerHTML = html;
+
+    gallery.querySelectorAll('.img-thumb-x').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        if (action === 'remove') {
+          imagesToRemove.push(btn.dataset.src);
+          renderImageGallery();
+        } else if (action === 'restore') {
+          imagesToRemove = imagesToRemove.filter(s => s !== btn.dataset.src);
+          renderImageGallery();
+        } else if (action === 'cancel') {
+          const idx = parseInt(btn.dataset.newidx);
+          imagesToAdd.splice(idx, 1);
+          renderImageGallery();
+        }
+      });
+    });
+  }
+
+  function populateCategoryCheckboxes(productCollections) {
+    const container = document.getElementById('editCategorias');
+    if (allCollections.length === 0) {
+      container.innerHTML = '<span style="color:var(--muted);font-size:10px;">Sin categorías disponibles</span>';
+      return;
+    }
+    container.innerHTML = allCollections.map(c => {
+      const checked = productCollections.some(pc => pc.id === c.id) ? 'checked' : '';
+      return `<label class="cat-checkbox"><input type="checkbox" value="${esc(c.id)}" ${checked}> ${esc(c.name)}</label>`;
+    }).join('');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // GUARDAR PRODUCTO
+  // ═══════════════════════════════════════════════════
+  function saveProduct() {
+    const nombre = document.getElementById('editNombre').value.trim();
+    if (!nombre) { showToast('⚠️ El nombre es obligatorio', true); return; }
+
+    const precio = document.getElementById('editPrecio').value;
+    if (modalMode === 'new' && (!precio || parseFloat(precio) <= 0)) {
+      showToast('⚠️ El precio es obligatorio para un producto nuevo', true);
+      return;
+    }
+
+    const btnSave = document.getElementById('btnGuardarProducto');
+    btnSave.disabled = true;
+    btnSave.textContent = '⏳ Guardando…';
+
+    const additionalInfoSections = [
+      { title: 'Descripción corta',              description: document.getElementById('editDescCorta').value.trim() },
+      { title: 'Componentes',                    description: document.getElementById('editComponentes').value.trim() },
+      { title: 'Usos recomendados del producto', description: document.getElementById('editUsos').value.trim() },
+      { title: 'Ventajas del producto',          description: document.getElementById('editVentajas').value.trim() }
+    ].filter(s => s.description !== '');
+
+    const campos = {
+      name: nombre,
+      price: parseFloat(precio) || 0,
+      // v3.3.0: el COSTE es SOLO LECTURA en el editor. Se gestiona
+      // desde el módulo Almacén (colección KamisuiteWarehouse). No se
+      // envía para que el editor no intente escribirlo (Wix Stores no
+      // lo permite en productos simples).
+      cost: null,
+      sku: document.getElementById('editSku').value.trim(),
+      brand: document.getElementById('editMarca').value.trim(),
+      description: document.getElementById('editDescripcion').value.trim(),
+      ribbon: document.getElementById('editRibbon').value.trim(),
+      visible: document.getElementById('editVisible').checked,
+      additionalInfoSections: additionalInfoSections
+    };
+
+    // v3.0: incluir stock solo si el input está habilitado y tiene
+    // un valor numérico válido. Si está vacío o disabled, no se toca.
+    const stockInput = document.getElementById('editStock');
+    if (!stockInput.disabled && stockInput.value !== '') {
+      const n = parseInt(stockInput.value, 10);
+      if (!isNaN(n) && n >= 0) {
+        campos.quantityInStock = n;
+      }
+    }
+
+    // v3.1: enviar siempre el estado del seguimiento. El backend
+    // decide si hay que activarlo o desactivarlo según el valor
+    // actual del producto.
+    campos.trackInventory = document.getElementById('editTrackInventory').checked;
+
+    const imagenData = {};
+    if (imagesToRemove.length > 0) imagenData.toRemove = imagesToRemove;
+    if (imagesToAdd.length > 0) imagenData.toAdd = imagesToAdd;
+    const tieneImagenes = imagesToRemove.length > 0 || imagesToAdd.length > 0;
+
+    if (modalMode === 'edit') {
+      const prod = allProductos.find(p => p.id === editingProductId);
+      const currentCatIds = (prod?.collections || []).map(c => c.id);
+      const selectedCatIds = [...document.querySelectorAll('#editCategorias input:checked')].map(cb => cb.value);
+      const addIds = selectedCatIds.filter(id => !currentCatIds.includes(id));
+      const removeIds = currentCatIds.filter(id => !selectedCatIds.includes(id));
+
+      parent.postMessage({
+        type: 'guardarProducto',
+        payload: {
+          productId: editingProductId,
+          campos,
+          imagenes: tieneImagenes ? imagenData : null,
+          categorias: (addIds.length || removeIds.length) ? { addIds, removeIds } : null
+        }
+      }, '*');
+
+    } else {
+      const selectedCatIds = [...document.querySelectorAll('#editCategorias input:checked')].map(cb => cb.value);
+      parent.postMessage({
+        type: 'crearProducto',
+        payload: {
+          campos,
+          imagenes: tieneImagenes ? imagenData : null,
+          categorias: selectedCatIds.length > 0 ? selectedCatIds : null
+        }
+      }, '*');
+    }
+  }
+
+  function startDeleteProduct() {
+    const prod = allProductos.find(p => p.id === editingProductId);
+    if (!prod) return;
+    document.getElementById('deleteProductName').textContent = `Producto: "${prod.name}"`;
+    document.getElementById('inputConfirmDelete').value = '';
+    document.getElementById('btnConfirmDelete').disabled = true;
+    document.getElementById('modalConfirmDelete').style.display = 'flex';
+  }
+
+  function confirmDeleteProduct() {
+    if (!editingProductId) return;
+    document.getElementById('btnConfirmDelete').disabled = true;
+    document.getElementById('btnConfirmDelete').textContent = '⏳…';
+    parent.postMessage({
+      type: 'eliminarProducto',
+      payload: { productId: editingProductId }
+    }, '*');
+  }
+
+  function createCategory() {
+    const nombre = document.getElementById('inputNuevaCategoria').value.trim();
+    if (!nombre) { showToast('⚠️ El nombre es obligatorio', true); return; }
+    const btn = document.getElementById('btnCrearCategoria');
+    btn.disabled = true;
+    btn.textContent = '⏳ Creando…';
+    parent.postMessage({ type: 'crearCategoria', payload: { nombre } }, '*');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // v3.0 — CONFIRMACIÓN DE DESCUENTO DE UNIDAD
+  // ═══════════════════════════════════════════════════
+  function openConfirmDescuento(productId, productName) {
+    pendingDecrementProductId = productId;
+    document.getElementById('descuentoTexto').innerHTML = `¿Descontar <strong>1 unidad</strong> de <strong style="color:var(--accent);">${esc(productName)}</strong>?`;
+    document.getElementById('btnConfirmarDescuento').disabled = false;
+    document.getElementById('btnConfirmarDescuento').textContent = 'CONFIRMAR';
+    document.getElementById('modalConfirmDescuento').style.display = 'flex';
+  }
+
+  function closeConfirmDescuento() {
+    document.getElementById('modalConfirmDescuento').style.display = 'none';
+    pendingDecrementProductId = null;
+  }
+
+  function confirmarDescuento() {
+    if (!pendingDecrementProductId) return;
+    const btn = document.getElementById('btnConfirmarDescuento');
+    btn.disabled = true;
+    btn.textContent = '⏳ Descontando…';
+    parent.postMessage({
+      type: 'descontar-unidad',
+      payload: { productId: pendingDecrementProductId }
+    }, '*');
+  }
+
+  // ═══════════════════════════════════════════════════
+  // COMMS WITH WIX
+  // ═══════════════════════════════════════════════════
+  window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'data') { render(msg.payload); }
+
+    if (msg.type === 'error') {
+      el.content.innerHTML = `<div class="error-msg">❌ ${esc(msg.message || 'Error')}</div>`;
+    }
+
+    if (msg.type === 'productoGuardado') {
+      closeProductModal();
+      showToast('✅ Producto actualizado');
+    }
+    if (msg.type === 'productoGuardadoParcial') {
+      closeProductModal();
+      const errores = (msg.payload?.errores || []).join(' | ');
+      showToast('⚠️ Guardado parcial: ' + errores, true);
+    }
+    if (msg.type === 'productoCreado') {
+      closeProductModal();
+      showToast(`✅ Producto creado: ${msg.payload?.name || ''}`);
+    }
+    if (msg.type === 'productoEliminado') {
+      document.getElementById('modalConfirmDelete').style.display = 'none';
+      closeProductModal();
+      showToast('🗑️ Producto eliminado');
+    }
+    if (msg.type === 'categoriaCreada') {
+      document.getElementById('modalCategoria').style.display = 'none';
+      const yaExistia = msg.payload?.yaExistia;
+      showToast(yaExistia
+        ? `ℹ️ Categoría "${msg.payload?.name}" ya existía`
+        : `✅ Categoría creada: ${msg.payload?.name}`
+      );
+    }
+    if (msg.type === 'errorEdicion') {
+      showToast('❌ ' + (msg.payload?.error || 'Error'), true);
+      const btnSave = document.getElementById('btnGuardarProducto');
+      if (btnSave) { btnSave.disabled = false; btnSave.textContent = '💾 GUARDAR'; }
+      const btnDel = document.getElementById('btnConfirmDelete');
+      if (btnDel) { btnDel.disabled = false; btnDel.textContent = '🗑️ ELIMINAR'; }
+      const btnCat = document.getElementById('btnCrearCategoria');
+      if (btnCat) { btnCat.disabled = false; btnCat.textContent = '✓ CREAR'; }
+    }
+
+    // v3.0: descuento
+    if (msg.type === 'unidadDescontada') {
+      closeConfirmDescuento();
+      showToast('✅ 1 unidad descontada');
+    }
+    if (msg.type === 'descuentoError') {
+      closeConfirmDescuento();
+      showToast('❌ ' + (msg.payload?.error || 'Error descontando'), true);
+    }
+
+    // v3.0: stock setear (cuando se guarda desde el modal)
+    if (msg.type === 'stockError') {
+      showToast('❌ Stock: ' + (msg.payload?.error || 'Error'), true);
+    }
+
+    // v3.0: coste real cargado
+    if (msg.type === 'costeCargado') {
+      // Si el modal sigue abierto y es el mismo producto, actualizar campo
+      if (modalMode === 'edit' && editingProductId === msg.payload?.productId) {
+        const costeInput = document.getElementById('editCoste');
+        const cost = msg.payload?.cost;
+        if (cost !== null && cost !== undefined) {
+          costeInput.value = cost;
+        } else {
+          costeInput.value = '';
+        }
+        costeInput.placeholder = '';
+      }
+    }
+    if (msg.type === 'costeError') {
+      // Silencioso: el campo se queda vacío con placeholder normal
+      if (modalMode === 'edit' && editingProductId === msg.payload?.productId) {
+        const costeInput = document.getElementById('editCoste');
+        costeInput.placeholder = '';
+      }
+    }
+  });
+
+  // Boot
+  parent.postMessage({ type: 'ready' }, '*');
+</script>
+</body>
+</html>
