@@ -1,8 +1,22 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.9
+   salonConfigLogic.web.js  v1.0.10
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.10 · 28 Ago 2026 · emailActive — canal email gobernable
+     - ALL_FIELDS     += emailActive
+     - BOOLEAN_FIELDS += emailActive
+     - El campo ya existía en el CMS SalonConfig y ya lo leía
+       comunicacionesLogic.web.js (corta el envío por email tanto en el
+       camino de triggered emails de Wix como en el de Brevo), pero no
+       estaba en ALL_FIELDS: el merge de updateSalonConfig lo descartaba
+       y getSalonConfig no lo devolvía, así que no había manera de
+       activarlo ni desactivarlo desde la aplicación.
+     - Sin BOOLEAN_FIELDS el valor se guardaría como texto y el corte
+       del canal dejaría de evaluarse como booleano.
+     - Pareja widget: widget_salon_config v1.0.13 (toggle "Email activo"
+       junto a "WhatsApp activo" en la sección Comunicaciones).
+     - Page code sin cambios: pasa el payload completo tal cual.
    v1.0.9 · 1 Ago 2026 · + textVoucherAlert, textPrimeAlert, textCardAlert
      (Texto) a ALL_FIELDS: mensajes de aviso de caducidad de bonos, PRIME
      y tarjetas promo. Crear los 3 campos Texto en el CMS SalonConfig.
@@ -161,6 +175,8 @@ const ALL_FIELDS = [
   'waAccountId',
   'waActive',
   'waPhoneId',
+  // v1.0.10 — canal email activo/inactivo (lo consume comunicacionesLogic)
+  'emailActive',
   'whatsappPro',
   'widgetSkin',
   // v1.0.3 — Accesos (sistema de login de Recepción PRO)
@@ -191,6 +207,8 @@ const BOOLEAN_FIELDS = [
   'whatsappPro',
   // v1.0.3 — toggle del sistema de login de Recepción
   'usersActivation',
+  // v1.0.10 — toggle del canal email
+  'emailActive',
 ];
 
 // ── Campos numéricos ──
