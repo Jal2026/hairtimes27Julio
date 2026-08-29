@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.3.0
+// Versión: 1.3.1
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -227,6 +227,13 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.3.1 (29 Ago 2026): FIX duplicarProducto — Wix limita el nombre
+//         de producto a 80 caracteres. Al añadir " (copia)" a un
+//         nombre largo se pasaba del límite y Wix rechazaba la
+//         creación ("name has size 87, expected 80 or less"). Ahora
+//         el nombre original se recorta lo justo para que quepa el
+//         sufijo. El salón lo reescribe al cambiar el tamaño.
+//
 // v1.3.0 (28 Ago 2026): NEW duplicarProducto(productId).
 //         Wix Stores no gestiona variantes por Velo, así que la vía
 //         para tener el mismo producto en varios tamaños es duplicar
@@ -272,7 +279,7 @@ import { products as storesProducts } from 'wix-stores.v2';
 import { mediaManager } from 'wix-media-backend';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -1390,8 +1397,18 @@ export const duplicarProducto = webMethod(
       if (!orig) throw new Error('Producto original no encontrado');
 
       // 2) Crear la copia. Oculta y sin SKU (ver cabecera v1.3.0).
+      // Wix rechaza nombres de más de 80 caracteres. Si al añadir el
+      // sufijo se pasa, se recorta el nombre original lo justo.
+      const SUFIJO_COPIA = ' (copia)';
+      const MAX_NOMBRE = 80;
+      let nombreBase = String(orig.name || 'Producto').trim();
+      if (nombreBase.length + SUFIJO_COPIA.length > MAX_NOMBRE) {
+        nombreBase = nombreBase.slice(0, MAX_NOMBRE - SUFIJO_COPIA.length).trim();
+        console.log(`${TAG} ⧉ Nombre recortado para que quepa el sufijo de copia`);
+      }
+
       const productInfo = {
-        name: String(orig.name || 'Producto').trim() + ' (copia)',
+        name: nombreBase + SUFIJO_COPIA,
         productType: orig.productType || 'physical',
         price: parseFloat(orig.price) || 0,
         visible: false
