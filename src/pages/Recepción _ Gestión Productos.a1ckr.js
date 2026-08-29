@@ -4,6 +4,7 @@
 // Página: Recepción | Tienda Productos (renombrada
 // internamente a "Alta y Edición Productos")
 // Elemento: #widgetTienda (HtmlComponent)
+// Versión: 3.5
 // =====================================================
 // v1.4: + metodoPago, generarFacturaProducto, obtenerHistorialVentas
 // v2.0: + edición productos (tiendaEdicionLogic.web.js)
@@ -85,7 +86,16 @@
 //      incluido en el reporte de errores parciales.
 // =====================================================
 
-// ── Imports EDICIÓN (tiendaEdicionLogic.web.js v1.2.2) ──
+// v3.5 (28 Ago 2026): + DUPLICAR PRODUCTO.
+//      Wix no gestiona variantes por Velo. Para tener el mismo
+//      producto en varios tamaños, el salón duplica y cambia el
+//      tamaño en el nombre. Handler duplicarProductoHandler:
+//      llama al backend, recarga el listado y devuelve al widget
+//      el id de la copia para que abra su ficha directamente.
+//      Mismo patrón que eliminarProductoHandler.
+// =====================================================
+
+// ── Imports EDICIÓN (tiendaEdicionLogic.web.js v1.4.0) ──
 import {
   listarProductosParaEdicion,
   actualizarProducto,
@@ -99,7 +109,8 @@ import {
   setearStockProducto,
   obtenerCosteProducto,
   setearCosteProducto,
-  activarSeguimientoStock
+  activarSeguimientoStock,
+  duplicarProducto
 } from 'backend/tiendaEdicionLogic.web';
 
 $w.onReady(function () {
@@ -116,6 +127,7 @@ $w.onReady(function () {
     if (msg.type === 'guardarProducto') { await guardarProductoHandler(msg.payload); }
     if (msg.type === 'crearProducto') { await crearProductoHandler(msg.payload); }
     if (msg.type === 'eliminarProducto') { await eliminarProductoHandler(msg.payload); }
+    if (msg.type === 'duplicarProducto') { await duplicarProductoHandler(msg.payload); }
     if (msg.type === 'crearCategoria') { await crearCategoriaHandler(msg.payload); }
 
     // ── Handlers ALMACÉN (v3.0) ──
@@ -390,6 +402,46 @@ $w.onReady(function () {
       await cargarDatos();
     } catch (e) {
       widget.postMessage({ type: 'errorEdicion', payload: { productId: payload?.productId, error: e.message || String(e) } });
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // v3.5 — DUPLICAR PRODUCTO
+  // ══════════════════════════════════════════════════
+  // La copia nace oculta y con "(copia)" en el nombre. Tras
+  // recargar el listado se devuelve su id para que el widget abra
+  // su ficha: es donde el salón cambia el tamaño en el nombre.
+  async function duplicarProductoHandler(payload) {
+    try {
+      const { productId } = payload || {};
+      if (!productId) {
+        widget.postMessage({ type: 'errorEdicion', payload: { error: 'productId requerido' } });
+        return;
+      }
+
+      const result = await duplicarProducto(productId);
+      if (!result.ok) {
+        widget.postMessage({ type: 'duplicadoError', payload: { productId, error: result.error } });
+        return;
+      }
+
+      if (result.avisos) {
+        console.warn('[GestionProductos] Duplicado con avisos:', result.avisos);
+      }
+
+      await cargarDatos();
+
+      widget.postMessage({
+        type: 'productoDuplicado',
+        payload: {
+          origenId: productId,
+          productId: result.productId,
+          nombre: result.nombre
+        }
+      });
+
+    } catch (e) {
+      widget.postMessage({ type: 'duplicadoError', payload: { productId: payload?.productId, error: e.message || String(e) } });
     }
   }
 
