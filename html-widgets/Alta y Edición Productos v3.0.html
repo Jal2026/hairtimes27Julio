@@ -16,6 +16,44 @@
               sin historial.
        v3.3.0: coste solo lectura en el editor (se gestiona
               desde Almacén).
+       v3.7.0 (28 Ago 2026): + DUPLICAR PRODUCTO (botón ⧉ en la
+              tarjeta, junto al lápiz). Wix no gestiona variantes
+              por Velo: la vía para tener el mismo producto en
+              varios tamaños es duplicarlo y cambiar el tamaño en
+              el nombre. Mismo patrón que el duplicado de
+              servicios.
+              La copia nace oculta, sin SKU y con "(copia)" en el
+              nombre, y al terminar se abre su ficha para
+              editarla. Hereda precio, marca, descripción,
+              información adicional, fotos y categorías.
+       v3.6.1 (28 Ago 2026): se aclara qué es el listado de
+              tipos. Antes el botón ponía solo "Ver tipos de
+              producto" y podía leerse como si fueran las
+              categorías de la tienda. Ahora se llama
+              "Categorías según tipos de producto sugeridas" y el
+              panel abre con una línea explicando que son
+              sugerencias para nombrar, no las categorías
+              existentes.
+       v3.6.0 (28 Ago 2026): CATEGORÍAS — guía y control.
+              La tienda pública de Wix solo sabe filtrar por
+              categoría: no puede filtrar por marca. La forma de
+              tener filtro de marca es que cada producto esté en
+              dos categorías, una de tipo de producto y otra con
+              el nombre de la marca. Si el salón no lo hace, el
+              producto desaparece de los filtros de la tienda.
+              · Leyenda fija sobre el cajetín de categorías
+                explicando las tres que hay que marcar.
+              · Botón que despliega el vocabulario de tipos de
+                producto, como consulta. Es una lista de
+                referencia para nombrar bien, NO una validación
+                contra las categorías existentes.
+              · Al guardar se cuentan las categorías marcadas sin
+                contar la general de Wix. Si hay menos de dos, se
+                avisa y hay que confirmar para guardar igual.
+              · Aviso permanente: una categoría nueva hay que
+                comunicarla a KAMISUITE para darla de alta en los
+                filtros de la tienda pública.
+              · Cajetín de categorías más alto (120 → 220 px).
        v3.5.1 (28 Ago 2026): leyendas de redacción bajo la
               descripción larga y la descripción corta, para
               orientar al salón sobre extensión y tono.
@@ -269,6 +307,16 @@
     }
     .btn-edit:hover { border-color: var(--accent); background: var(--accent-dim); }
 
+    /* v3.7.0: duplicar producto */
+    .btn-dup {
+      background: var(--surface2); border: 1px solid var(--border);
+      color: var(--blue); font-size: 13px; padding: 8px 10px;
+      border-radius: var(--radius-sm); cursor: pointer;
+      transition: all .15s; flex-shrink: 0;
+    }
+    .btn-dup:hover { border-color: var(--blue); background: var(--blue-dim); }
+    .btn-dup.busy { opacity: .45; cursor: wait; }
+
     /* v3.0: botón DESCONTAR sustituye al antiguo VENTA */
     .btn-decrement {
       flex: 1; background: var(--red); border: none; color: #fff;
@@ -418,6 +466,48 @@
       padding: 4px 0 2px;
     }
 
+    /* ═══ v3.6.0: guía de categorías ═══ */
+    .cat-guia {
+      background: var(--surface3); border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px; margin-bottom: 6px;
+      font-size: 10px; font-weight: 500; line-height: 1.55;
+      color: var(--text-secondary);
+    }
+    .cat-guia b { color: var(--text); font-weight: 700; }
+    .cat-guia-aviso {
+      display: block; margin-top: 6px;
+      padding-top: 6px; border-top: 1px solid var(--border);
+      color: var(--yellow);
+    }
+    .btn-tipos {
+      background: var(--surface3); border: 1px solid var(--border);
+      color: var(--text-secondary); border-radius: var(--radius-sm);
+      padding: 5px 10px; font-family: inherit; font-size: 10px;
+      font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+      cursor: pointer; margin-bottom: 6px;
+      transition: border-color .2s, color .2s;
+    }
+    .btn-tipos:hover { border-color: var(--accent); color: var(--text); }
+    .tipos-panel {
+      display: none;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px; margin-bottom: 6px;
+      max-height: 200px; overflow-y: auto;
+      font-size: 10px; line-height: 1.6; color: var(--text-secondary);
+    }
+    .tipos-panel.open { display: block; }
+    .tipos-intro {
+      color: var(--muted); font-size: 10px; line-height: 1.5;
+      padding-bottom: 6px; margin-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tipos-grupo { color: var(--accent); font-weight: 700; text-transform: uppercase;
+      letter-spacing: .5px; margin-top: 6px; }
+    .tipos-grupo:first-child { margin-top: 0; }
+
     .modal-hint {
       font-size: 10px; color: var(--muted); font-weight: 500;
       margin-top: 2px;
@@ -452,7 +542,7 @@
 
     .cat-checkboxes {
       display: flex; flex-wrap: wrap; gap: 6px;
-      max-height: 120px; overflow-y: auto;
+      max-height: 220px; overflow-y: auto;
       padding: 6px; background: var(--surface2);
       border: 1px solid var(--border); border-radius: var(--radius-sm);
     }
@@ -554,7 +644,7 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
-    <span class="header-version">v3.5.1</span>
+    <span class="header-version">v3.7.0</span>
   </div>
 
   <!-- TOOLBAR -->
@@ -712,6 +802,20 @@
         </div>
         <div class="modal-field">
           <label class="modal-label">CATEGORÍAS</label>
+          <div class="cat-guia">
+            Marca <b>tres</b> categorías en cada producto:<br>
+            1 · <b>Todos los productos</b>, para que salga en el listado general.<br>
+            2 · Una de <b>tipo de producto</b> (champú, mascarilla, plancha…).<br>
+            3 · Una con el <b>nombre de la marca</b> (TRUSS, K18, Davines…).<br>
+            La tienda filtra por categoría, no por el campo Marca. Si falta
+            alguna, el producto no aparece al filtrar.
+            <span class="cat-guia-aviso">
+              ⚠️ Si creas una categoría nueva, avisa a KAMISUITE: hay que darla
+              de alta en los filtros de la tienda pública o no se verá ahí.
+            </span>
+          </div>
+          <button type="button" class="btn-tipos" id="btnVerTipos">📖 Categorías según tipos de producto sugeridas</button>
+          <div class="tipos-panel" id="tiposPanel"></div>
           <div class="cat-checkboxes" id="editCategorias">
             <span style="color:var(--muted);font-size:10px;">Cargando...</span>
           </div>
@@ -970,6 +1074,7 @@
         </div>
         <div class="prod-action" id="action-${p.id}">
           <button class="btn-edit" data-id="${p.id}" title="Editar producto">✏️</button>
+          <button class="btn-dup" data-dup-id="${p.id}" title="Duplicar producto (para otro tamaño)">⧉</button>
           <button class="btn-decrement" data-id="${p.id}" data-name="${esc(p.name)}" ${canDecrement ? '' : 'disabled'} title="${canDecrement ? 'Descontar 1 unidad' : 'No se puede descontar (sin stock o sin seguimiento)'}">
             🗑️ DESCONTAR
           </button>
@@ -982,6 +1087,16 @@
     el.content.querySelectorAll('.btn-edit').forEach(btn => {
       btn.addEventListener('click', () => {
         openEditModal(btn.dataset.id);
+      });
+    });
+
+    // v3.7.0: DUPLICAR
+    el.content.querySelectorAll('.btn-dup').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.classList.contains('busy')) return;
+        btn.classList.add('busy');
+        showToast('⧉ Duplicando producto…');
+        parent.postMessage({ type: 'duplicarProducto', payload: { productId: btn.dataset.dupId } }, '*');
       });
     });
 
@@ -1308,6 +1423,11 @@
     populateCategoryCheckboxes(prod.collections || []);
 
     document.getElementById('modalProducto').style.display = 'flex';
+    avisoCategoriasConfirmado = false;   // v3.6.0
+    const _tp = document.getElementById('tiposPanel');
+    if (_tp) _tp.classList.remove('open');
+    const _bt = document.getElementById('btnVerTipos');
+    if (_bt) _bt.textContent = '📖 Categorías según tipos de producto sugeridas';
     document.getElementById('btnGuardarProducto').disabled = false;
     document.getElementById('btnGuardarProducto').textContent = '💾 GUARDAR';
   }
@@ -1356,6 +1476,11 @@
     populateCategoryCheckboxes([]);
 
     document.getElementById('modalProducto').style.display = 'flex';
+    avisoCategoriasConfirmado = false;   // v3.6.0
+    const _tp = document.getElementById('tiposPanel');
+    if (_tp) _tp.classList.remove('open');
+    const _bt = document.getElementById('btnVerTipos');
+    if (_bt) _bt.textContent = '📖 Categorías según tipos de producto sugeridas';
     document.getElementById('btnGuardarProducto').disabled = false;
     document.getElementById('btnGuardarProducto').textContent = '💾 CREAR';
     document.getElementById('editNombre').focus();
@@ -1444,6 +1569,68 @@
   }
 
   // ═══════════════════════════════════════════════════
+  // v3.6.0 — CATEGORÍAS: vocabulario y control
+  // ═══════════════════════════════════════════════════
+  // Lista de consulta para nombrar bien los tipos de producto.
+  // NO se compara con las categorías existentes: las categorías
+  // reales del salón agrupan y van en plural ("Champús",
+  // "Tratamientos Capilares", "Planchas de pelo"), así que una
+  // comparación estricta rechazaría productos bien clasificados.
+  // Es una ayuda de redacción, no un validador.
+  const TIPOS_PRODUCTO = [
+    { grupo: 'Cuidado capilar', items: ['Champú','Champú en seco','Acondicionador','Mascarilla','Tratamiento capilar','Tratamiento sin aclarado','Sérum','Aceite capilar','Ampolla','Loción capilar','Protector térmico','Protector solar capilar','Desenredante','Reparador de puntas','Exfoliante capilar','Tratamiento anticaída'] },
+    { grupo: 'Peinado y acabado', items: ['Gel','Gomina','Cera','Pomada','Pasta moldeadora','Espuma','Crema de peinado','Spray fijador','Laca','Spray de volumen','Spray de textura','Polvo de volumen','Brillo capilar','Fijador de rizos'] },
+    { grupo: 'Coloración', items: ['Tinte','Tinte semipermanente','Baño de color','Matizador','Tóner','Decolorante','Oxidante','Corrector de color','Mascarilla de color','Champú con pigmento'] },
+    { grupo: 'Herramientas y aparatos', items: ['Cepillo','Peine','Secador','Plancha','Tenacilla','Rizador','Máquina de corte','Recortadora','Difusor','Boquilla para secador','Rodillo','Pinza','Tijera'] },
+    { grupo: 'Barbería', items: ['Champú para barba','Aceite para barba','Bálsamo para barba','Cera para barba','Espuma de afeitar','Gel de afeitar','Aftershave','Navaja','Maquinilla de afeitar','Cepillo para barba'] },
+    { grupo: 'Varios', items: ['Accesorio para el cabello','Producto infantil','Kit de tratamiento','Pack de productos','Producto profesional','Producto de viaje','Recambio','Estuche de regalo'] },
+    { grupo: 'Otros', items: ['Otros — si no encaja en ninguno de los anteriores'] }
+  ];
+
+  // Nombres con los que Wix llama a su categoría general, la que
+  // contiene todos los productos automáticamente. No cuenta como
+  // clasificación.
+  const CAT_GENERAL = ['all products', 'todos los productos'];
+
+  function esCategoriaGeneral(nombre) {
+    return CAT_GENERAL.includes(String(nombre || '').trim().toLowerCase());
+  }
+
+  function pintarPanelTipos() {
+    const panel = document.getElementById('tiposPanel');
+    if (!panel) return;
+    panel.innerHTML = '<div class="tipos-intro">Nombres sugeridos para la categoría de TIPO DE PRODUCTO. Son una guía para nombrarlas bien: no son las categorías que ya existen en tu tienda, y no hace falta que coincidan palabra por palabra.</div>' + TIPOS_PRODUCTO.map(g =>
+      `<div class="tipos-grupo">${esc(g.grupo)}</div><div>${g.items.map(i => esc(i)).join(' · ')}</div>`
+    ).join('');
+  }
+  pintarPanelTipos();
+
+  const btnVerTipos = document.getElementById('btnVerTipos');
+  if (btnVerTipos) {
+    btnVerTipos.addEventListener('click', () => {
+      const panel = document.getElementById('tiposPanel');
+      const abierto = panel.classList.toggle('open');
+      btnVerTipos.textContent = abierto
+        ? '📖 Ocultar categorías sugeridas'
+        : '📖 Categorías según tipos de producto sugeridas';
+    });
+  }
+
+  // Se pone a true cuando el usuario confirma que quiere guardar
+  // sin las categorías completas. Se reinicia al abrir el modal.
+  let avisoCategoriasConfirmado = false;
+
+  // Devuelve las categorías marcadas que SÍ clasifican, es decir
+  // sin contar la general de Wix.
+  function categoriasClasificadoras() {
+    const ids = [...document.querySelectorAll('#editCategorias input:checked')].map(cb => cb.value);
+    return ids.filter(id => {
+      const c = allCollections.find(x => x.id === id);
+      return c && !esCategoriaGeneral(c.name);
+    });
+  }
+
+  // ═══════════════════════════════════════════════════
   // GUARDAR PRODUCTO
   // ═══════════════════════════════════════════════════
   function saveProduct() {
@@ -1456,7 +1643,18 @@
       return;
     }
 
+    // v3.6.0: control de categorías. Hacen falta dos además de la
+    // general: una de tipo de producto y otra de marca. Avisa una
+    // vez; si el usuario insiste, guarda igual.
     const btnSave = document.getElementById('btnGuardarProducto');
+
+    if (categoriasClasificadoras().length < 2 && !avisoCategoriasConfirmado) {
+      avisoCategoriasConfirmado = true;
+      btnSave.textContent = '⚠️ GUARDAR IGUALMENTE';
+      showToast('⚠️ Faltan categorías: marca una de TIPO DE PRODUCTO y otra con la MARCA, o el producto no saldrá en los filtros de la tienda', true);
+      return;
+    }
+
     btnSave.disabled = true;
     btnSave.textContent = '⏳ Guardando…';
 
@@ -1619,6 +1817,19 @@
       closeProductModal();
       showToast('🗑️ Producto eliminado');
     }
+    // v3.7.0: duplicado. El listado ya viene recargado en el
+    // mensaje 'data' anterior, así que la copia existe en
+    // allProductos y se puede abrir su ficha directamente.
+    if (msg.type === 'productoDuplicado') {
+      showToast('⧉ Copia creada. Cambia el tamaño en el nombre y publícala cuando esté lista.');
+      const nuevoId = msg.payload?.productId;
+      if (nuevoId) openEditModal(nuevoId);
+    }
+    if (msg.type === 'duplicadoError') {
+      showToast('❌ No se pudo duplicar: ' + (msg.payload?.error || 'error'), true);
+      document.querySelectorAll('.btn-dup.busy').forEach(b => b.classList.remove('busy'));
+    }
+
     if (msg.type === 'categoriaCreada') {
       document.getElementById('modalCategoria').style.display = 'none';
       const yaExistia = msg.payload?.yaExistia;
