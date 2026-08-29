@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.2.6
+// Versión: 1.3.0
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -179,7 +179,7 @@
 //           funcionaba); ignora campos.cost (lo gestiona la función
 //           dedicada).
 //
-// v1.3.0 (28 Ago 2026): FIX SECCIONES DE INFORMACIÓN ADICIONAL
+// v1.2.7 (28 Ago 2026): FIX SECCIONES DE INFORMACIÓN ADICIONAL
 //         (Descripción corta, Componentes, Usos recomendados del
 //         producto, Ventajas del producto).
 //
@@ -227,6 +227,40 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.3.0 (28 Ago 2026): NEW duplicarProducto(productId).
+//         Wix Stores no gestiona variantes por Velo, así que la vía
+//         para tener el mismo producto en varios tamaños es duplicar
+//         y cambiar el tamaño en el nombre. El Dashboard de Wix ya
+//         lo permite; ahora también el editor de KAMISUITE.
+//
+//         Copia: nombre + " (copia)", precio, marca, descripción,
+//         ribbon, los cuatro bloques de información adicional, las
+//         fotos y las categorías del original.
+//
+//         Las fotos NO se vuelven a subir. addProductMedia admite
+//         rutas de archivos que ya están en el sitio, así que se le
+//         pasan las del original tal cual.
+//         Doc: dev.wix.com/docs/sdk/backend-modules/stores/products/
+//         add-product-media ("Sources of media items already
+//         uploaded to the Wix site").
+//
+//         DECISIONES DE PRODUCTO (Jal, 28 Ago 2026):
+//         · La copia nace OCULTA. Un "(copia)" a medio configurar no
+//           debe aparecer en la tienda.
+//         · La copia nace SIN SKU. El SKU es el código de barras del
+//           envase y un tamaño distinto tiene código distinto;
+//           heredarlo generaría duplicados.
+//         · El COSTE no se copia: se gestiona desde Almacén.
+//         · La categoría general de Wix no se asigna a mano: Wix mete
+//           todos los productos en ella automáticamente.
+//
+//         LÍMITE DE WIX CON EL STOCK: si el original lleva contador
+//         de unidades, la copia también, pero Wix NO acepta activar
+//         un contador con 0 unidades (mínimo 1, ver
+//         activarSeguimientoStock). La copia queda con 1 unidad. Como
+//         nace oculta, no se puede vender hasta que el salón la
+//         publique con el stock real.
+//
 // =====================================================
 
 import { webMethod, Permissions } from 'wix-web-module';
@@ -305,7 +339,7 @@ async function obtenerVariantIdDefault(productId) {
 }
 
 // =====================================================
-// UTILIDAD v1.3.0: escribir las SECCIONES DE INFORMACIÓN
+// UTILIDAD v1.2.7: escribir las SECCIONES DE INFORMACIÓN
 // ADICIONAL de un producto (Catalog V1, vía API v2)
 // =====================================================
 // Los bloques viven DENTRO del producto, en el campo
@@ -331,6 +365,13 @@ async function obtenerVariantIdDefault(productId) {
 // Retorna siempre un objeto {ok, count, error} — nunca lanza,
 // para no tumbar el alta ni la edición del resto de campos.
 // =====================================================
+// v1.3.0: la categoría general de Wix (la que contiene todos los
+// productos automáticamente) no se asigna nunca a mano.
+function esCollectionGeneral(nombre) {
+  const n = String(nombre || '').trim().toLowerCase();
+  return n === 'all products' || n === 'todos los productos';
+}
+
 async function escribirInfoAdicional(productId, secciones) {
   try {
     if (!productId) return { ok: false, error: 'productId vacío' };
@@ -689,7 +730,7 @@ export const actualizarProducto = webMethod(
       // dedicada nueva), llamada por separado desde el page code.
       // Aquí se ignora campos.cost para no romper el resto del update.
 
-      // v1.3.0: additionalInfoSections YA NO va dentro del update V1.
+      // v1.2.7: additionalInfoSections YA NO va dentro del update V1.
       // updateProductFields lo ignoraba en silencio (mismo caso que el
       // coste en v1.2.4). Se escribe aparte con la vía v2.
       const hayInfoAdicional = Array.isArray(campos.additionalInfoSections);
@@ -705,7 +746,7 @@ export const actualizarProducto = webMethod(
         console.log(`${TAG} ✅ Producto actualizado: ${productId} — campos: ${Object.keys(updateInfo).join(', ')}`);
       }
 
-      // v1.3.0: secciones de información adicional (vía v2)
+      // v1.2.7: secciones de información adicional (vía v2)
       let infoAdicional = null;
       if (hayInfoAdicional) {
         infoAdicional = await escribirInfoAdicional(productId, campos.additionalInfoSections);
@@ -727,7 +768,7 @@ export const actualizarProducto = webMethod(
 );
 
 // =====================================================
-// 2a. SECCIONES DE INFORMACIÓN ADICIONAL (v1.3.0)
+// 2a. SECCIONES DE INFORMACIÓN ADICIONAL (v1.2.7)
 // =====================================================
 // Escribe SOLO los bloques de información adicional de un
 // producto, sin tocar ningún otro campo. El page code actual no
@@ -1295,7 +1336,7 @@ export const crearProductoNuevo = webMethod(
       const newId = result?._id || result?.id || null;
       console.log(`${TAG} ✅ Producto creado: ${newId} — ${info.name}`);
 
-      // v1.3.0: SECCIONES DE INFORMACIÓN ADICIONAL.
+      // v1.2.7: SECCIONES DE INFORMACIÓN ADICIONAL.
       // createProduct (V1) no las acepta en productInfo — antes se
       // perdían aquí sin aviso. Se escriben inmediatamente después,
       // sobre el producto ya creado, con la vía v2. Mismo criterio que
@@ -1318,6 +1359,149 @@ export const crearProductoNuevo = webMethod(
 // =====================================================
 // 5. ELIMINAR PRODUCTO
 // =====================================================
+// =====================================================
+// 11b. DUPLICAR PRODUCTO (v1.3.0)
+// =====================================================
+// Lee el original de la collection Stores/Products (misma fuente que
+// el listado del editor, así se copia exactamente lo que el salón ve)
+// y monta un producto nuevo con esos datos.
+//
+// Devuelve el id de la copia para que el editor abra su ficha.
+// =====================================================
+export const duplicarProducto = webMethod(
+  Permissions.Anyone,
+  async (productId) => {
+    try {
+      if (!productId) throw new Error('productId es requerido');
+
+      console.log(`${TAG} ⧉ Duplicando producto: ${productId}`);
+
+      // 1) Leer el original. includeHiddenProducts para poder duplicar
+      //    también un producto que esté oculto.
+      const res = await wixData.query('Stores/Products')
+        .eq('_id', productId)
+        .limit(1)
+        .find({
+          suppressAuth: true,
+          appOptions: { includeHiddenProducts: true }
+        });
+
+      const orig = (res.items || [])[0];
+      if (!orig) throw new Error('Producto original no encontrado');
+
+      // 2) Crear la copia. Oculta y sin SKU (ver cabecera v1.3.0).
+      const productInfo = {
+        name: String(orig.name || 'Producto').trim() + ' (copia)',
+        productType: orig.productType || 'physical',
+        price: parseFloat(orig.price) || 0,
+        visible: false
+      };
+
+      const brand = String(orig.brand || '').trim();
+      if (brand) productInfo.brand = brand;
+
+      const ribbon = String(orig.ribbon || '').trim();
+      if (ribbon) productInfo.ribbon = ribbon;
+
+      const description = String(orig.description || '').trim();
+      if (description) productInfo.description = description;
+
+      const elevatedCreate = elevate(wixStoresBackend.createProduct);
+      const creado = await elevatedCreate(productInfo);
+
+      const newId = creado?._id || creado?.id || null;
+      if (!newId) throw new Error('La copia se creó sin id');
+
+      console.log(`${TAG} ⧉ Copia creada: ${newId} — ${productInfo.name}`);
+
+      const avisos = [];
+
+      // 3) Bloques de información adicional
+      let infoAdicional = null;
+      if (Array.isArray(orig.additionalInfoSections)) {
+        infoAdicional = await escribirInfoAdicional(newId, orig.additionalInfoSections);
+        if (infoAdicional && !infoAdicional.ok) avisos.push('info adicional: ' + infoAdicional.error);
+      }
+
+      // 4) Fotos: se reutilizan las del original, sin volver a subirlas.
+      let fotos = 0;
+      try {
+        const srcs = (Array.isArray(orig.mediaItems) ? orig.mediaItems : [])
+          .map(m => ({ src: m.src || m.url || '' }))
+          .filter(m => m.src);
+
+        if (srcs.length > 0) {
+          const elevatedAddMedia = elevate(wixStoresBackend.addProductMedia);
+          await elevatedAddMedia(newId, srcs);
+          fotos = srcs.length;
+          console.log(`${TAG} ⧉ ${fotos} foto(s) reutilizadas del original`);
+        }
+      } catch (mediaErr) {
+        console.warn(`${TAG} ⚠️ Fotos no copiadas:`, mediaErr.message);
+        avisos.push('fotos: ' + mediaErr.message);
+      }
+
+      // 5) Categorías. Se omite la general de Wix: los productos entran
+      //    en ella solos y asignarla a mano da error.
+      let categorias = 0;
+      try {
+        const colIds = (Array.isArray(orig.collections) ? orig.collections : [])
+          .filter(c => c && c._id && !esCollectionGeneral(c.name))
+          .map(c => c._id);
+
+        for (const colId of colIds) {
+          try {
+            const elevatedAddCol = elevate(wixStoresBackend.addProductsToCollection);
+            await elevatedAddCol(colId, [newId]);
+            categorias++;
+          } catch (colErr) {
+            console.warn(`${TAG} ⚠️ Categoría ${colId} no asignada:`, colErr.message);
+            avisos.push('categoría ' + colId + ': ' + colErr.message);
+          }
+        }
+        console.log(`${TAG} ⧉ ${categorias} categoría(s) asignadas a la copia`);
+      } catch (catErr) {
+        console.warn(`${TAG} ⚠️ Categorías no copiadas:`, catErr.message);
+        avisos.push('categorías: ' + catErr.message);
+      }
+
+      // 6) Contador de unidades. Wix exige mínimo 1 al activarlo.
+      let stockAvisado = false;
+      try {
+        if (orig.trackInventory === true) {
+          const variantId = await obtenerVariantIdDefault(newId);
+          const inventoryInfo = { trackQuantity: true, variants: [{ quantity: 1 }] };
+          if (variantId) inventoryInfo.variants[0].variantId = variantId;
+
+          const elevatedInv = elevate(updateInventoryVariantFieldsByProductId);
+          await elevatedInv(newId, inventoryInfo);
+          stockAvisado = true;
+          console.log(`${TAG} ⧉ Contador de unidades activado en la copia con 1 unidad`);
+        }
+      } catch (invErr) {
+        console.warn(`${TAG} ⚠️ Contador de unidades no aplicado:`, invErr.message);
+        avisos.push('stock: ' + invErr.message);
+      }
+
+      return {
+        ok: true,
+        productId: newId,
+        origenId: productId,
+        nombre: productInfo.name,
+        fotos,
+        categorias,
+        stockEnUno: stockAvisado,
+        avisos: avisos.length > 0 ? avisos : undefined,
+        version: VERSION
+      };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ duplicarProducto FAIL:`, e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+);
+
 export const eliminarProducto = webMethod(
   Permissions.Anyone,
   async (productId) => {
