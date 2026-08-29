@@ -1,7 +1,26 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.109  ·  VENTAS DEL DÍA en la cabecera del rendimiento
+ * VERSION: 1.1.110  ·  Venta de productos sin modo de pago por defecto
+ *
+ * v1.1.110 (29 ago 2026) — EL MODO DE PAGO YA NO VIENE MARCADO.
+ *
+ *   El modal de venta de productos abría con EFECTIVO ya seleccionado y,
+ *   además, al confirmar se rellenaba Efectivo por su cuenta si no había
+ *   método elegido. Con prisas se pulsa REGISTRAR VENTA sin mirar y la
+ *   venta se registra en efectivo aunque se haya cobrado con tarjeta.
+ *   Descuadre de caja y de arqueo, y nadie se entera hasta el cierre.
+ *
+ *   Decisión de Jal (29 ago 2026):
+ *     · Ningún modo de pago marcado al abrir el modal.
+ *     · Si se pulsa REGISTRAR VENTA sin elegirlo, aviso emergente que hay
+ *       que aceptar y la venta NO sale.
+ *     · Fuera el relleno automático de Efectivo al construir el envío.
+ *
+ *   REGISTRAR VENTA sigue activo con el carrito lleno: hace falta que se
+ *   pueda pulsar para que salte el aviso.
+ *
+ *   Backend, page code y CMS: sin tocar.
  *
  * v1.1.109 (29 ago 2026) — LA CABECERA DEL RENDIMIENTO PASA A SER VENTAS.
  *
@@ -1987,7 +2006,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.109]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.110]';
 
   // ─── helpers ───
   function esc(s) {
@@ -7947,7 +7966,7 @@ button { font-family: inherit; cursor: pointer; }
       this._pendingProdReserva = r;
       this._productoCart = [];
       this._productoSearchQ = '';
-      this._productoMetodoPago = 'Efectivo';
+      this._productoMetodoPago = '';   // v1.1.110 — sin modo de pago por defecto
       this._productosCache = this._productosCache || null;
       const box = this._openSubModal(`
         <div class="ks-modal-head"><span class="ks-modal-staff">${tituloModal}</span><button class="ks-modal-x" id="pdX">✕</button></div>
@@ -8072,7 +8091,7 @@ button { font-family: inherit; cursor: pointer; }
       }
 
       // Métodos de pago
-      const mp = this._productoMetodoPago || 'Efectivo';
+      const mp = this._productoMetodoPago || '';   // v1.1.110 — ninguno marcado hasta que se elija
       const payHTML = this._productoCart.length ? `<div class="pd-pay-row">
         <button class="pd-pay ${mp === 'Efectivo' ? 'sel' : ''}" data-mp="Efectivo">EFECTIVO</button>
         <button class="pd-pay ${mp === 'Tarjeta' ? 'sel' : ''}" data-mp="Tarjeta">TARJETA</button>
@@ -8197,6 +8216,11 @@ button { font-family: inherit; cursor: pointer; }
       body.querySelector('#pdConfirm')?.addEventListener('click', () => {
         const r = this._pendingProdReserva;
         if (!r || !this._productoCart.length) return;
+        // v1.1.110 — sin modo de pago no sale la venta.
+        if (!this._productoMetodoPago) {
+          alert('Selecciona el modo de pago antes de registrar la venta.');
+          return;
+        }
         body.querySelector('#pdConfirm').disabled = true;
         body.querySelector('#pdConfirm').textContent = 'Registrando…';
         this._sendToPage('vender-productos-cita', {
@@ -8213,7 +8237,7 @@ button { font-family: inherit; cursor: pointer; }
             price: c.price,
             quantity: c.quantity
           })),
-          metodoPago: this._productoMetodoPago || 'Efectivo'
+          metodoPago: this._productoMetodoPago
         });
       });
     }
