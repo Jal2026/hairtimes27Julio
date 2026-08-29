@@ -16,6 +16,12 @@
               sin historial.
        v3.3.0: coste solo lectura en el editor (se gestiona
               desde Almacén).
+       v3.7.1 (29 Ago 2026): el aviso de categorías incompletas
+              era solo un mensaje pasajero y el botón cambiaba a
+              "GUARDAR IGUALMENTE" sin decir por qué. Ahora sale
+              una ventana que explica qué falta y qué pasa si se
+              guarda así, con dos salidas claras: volver a elegir
+              categorías, o guardar de todos modos.
        v3.7.0 (28 Ago 2026): + DUPLICAR PRODUCTO (botón ⧉ en la
               tarjeta, junto al lápiz). Wix no gestiona variantes
               por Velo: la vía para tener el mismo producto en
@@ -644,7 +650,7 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
-    <span class="header-version">v3.7.0</span>
+    <span class="header-version">v3.7.1</span>
   </div>
 
   <!-- TOOLBAR -->
@@ -887,6 +893,36 @@
         <div style="flex:1;"></div>
         <button class="btn-modal-cancel" id="btnCancelarDescuento">CANCELAR</button>
         <button class="btn-delete-confirm" id="btnConfirmarDescuento">CONFIRMAR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v3.7.1: AVISO DE CATEGORÍAS INCOMPLETAS -->
+  <div class="modal-overlay" id="modalCategoriasFaltan" style="display:none;">
+    <div class="modal-box modal-box-sm">
+      <div class="modal-header">
+        <span class="modal-title" style="color:var(--yellow);">⚠️ Faltan categorías</span>
+        <button class="modal-close" id="modalCatFaltanClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="color:var(--text-secondary);font-size:13px;line-height:1.5;">
+          Este producto no tiene marcadas las <strong style="color:var(--text);">dos categorías</strong>
+          que necesita para aparecer en los filtros de la tienda.
+        </p>
+        <p style="color:var(--text-secondary);font-size:12px;line-height:1.6;margin-top:8px;">
+          1 · Una de <strong style="color:var(--accent);">tipo de producto</strong> — champú, mascarilla, plancha…<br>
+          2 · Una con el <strong style="color:var(--accent);">nombre de la marca</strong> — TRUSS, K18, Davines…
+        </p>
+        <p style="color:var(--muted);font-size:11px;line-height:1.5;margin-top:8px;">
+          La tienda filtra por categoría, no por el campo Marca. Si guardas así, el
+          producto se venderá igual, pero no aparecerá cuando un cliente filtre por
+          tipo o por marca.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <div style="flex:1;"></div>
+        <button class="btn-modal-cancel" id="btnGuardarIgualmente">GUARDAR IGUALMENTE</button>
+        <button class="btn-modal-save" id="btnElegirCategorias">ELEGIR CATEGORÍAS</button>
       </div>
     </div>
   </div>
@@ -1181,6 +1217,22 @@
   document.getElementById('modalProductoClose').addEventListener('click', closeProductModal);
   document.getElementById('btnCancelarProducto').addEventListener('click', closeProductModal);
   document.getElementById('btnGuardarProducto').addEventListener('click', saveProduct);
+
+  // v3.7.1: ventana de categorías incompletas
+  function cerrarAvisoCategorias() {
+    document.getElementById('modalCategoriasFaltan').style.display = 'none';
+  }
+  document.getElementById('modalCatFaltanClose').addEventListener('click', cerrarAvisoCategorias);
+  document.getElementById('btnElegirCategorias').addEventListener('click', () => {
+    cerrarAvisoCategorias();
+    const caja = document.getElementById('editCategorias');
+    if (caja) caja.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  document.getElementById('btnGuardarIgualmente').addEventListener('click', () => {
+    cerrarAvisoCategorias();
+    avisoCategoriasConfirmado = true;
+    saveProduct();
+  });
   document.getElementById('btnEliminarProducto').addEventListener('click', startDeleteProduct);
 
   document.getElementById('modalCategoriaClose').addEventListener('click', () => {
@@ -1649,9 +1701,7 @@
     const btnSave = document.getElementById('btnGuardarProducto');
 
     if (categoriasClasificadoras().length < 2 && !avisoCategoriasConfirmado) {
-      avisoCategoriasConfirmado = true;
-      btnSave.textContent = '⚠️ GUARDAR IGUALMENTE';
-      showToast('⚠️ Faltan categorías: marca una de TIPO DE PRODUCTO y otra con la MARCA, o el producto no saldrá en los filtros de la tienda', true);
+      document.getElementById('modalCategoriasFaltan').style.display = 'flex';
       return;
     }
 
