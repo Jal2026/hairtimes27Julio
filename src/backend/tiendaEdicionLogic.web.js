@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.3.1
+// Versión: 1.3.2
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -227,6 +227,23 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.3.2 (29 Ago 2026): duplicarProducto — la copia HEREDA la
+//         visibilidad del original (Jal, 29 Ago 2026: "si duplicas
+//         un producto tienes que duplicarlo con todas sus
+//         propiedades"). Antes nacía siempre oculta.
+//
+//         La visibilidad NO se puede leer de la collection
+//         Stores/Products: su schema no expone `visible` (por eso el
+//         listado la deduce con la doble query de v1.2.3). Aquí se
+//         lee del Product object real con
+//         storesProducts.getProduct(), la misma vía que ya se usa
+//         para el coste. Si esa lectura fallara, la copia nace
+//         visible, como el caso normal.
+//
+//         CONSECUENCIA: si el original está a la venta, la copia
+//         también, con su nombre "(copia)" y 1 unidad de stock,
+//         hasta que el salón la remate. Es la decisión tomada.
+//
 // v1.3.1 (29 Ago 2026): FIX duplicarProducto — Wix limita el nombre
 //         de producto a 80 caracteres. Al añadir " (copia)" a un
 //         nombre largo se pasaba del límite y Wix rechazaba la
@@ -252,8 +269,8 @@
 //         uploaded to the Wix site").
 //
 //         DECISIONES DE PRODUCTO (Jal, 28 Ago 2026):
-//         · La copia nace OCULTA. Un "(copia)" a medio configurar no
-//           debe aparecer en la tienda.
+//         · La copia nacía OCULTA. Cambiado en v1.3.2: hereda la
+//           visibilidad del original.
 //         · La copia nace SIN SKU. El SKU es el código de barras del
 //           envase y un tamaño distinto tiene código distinto;
 //           heredarlo generaría duplicados.
@@ -279,7 +296,7 @@ import { products as storesProducts } from 'wix-stores.v2';
 import { mediaManager } from 'wix-media-backend';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.3.1';
+const VERSION = '1.3.2';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -1407,11 +1424,26 @@ export const duplicarProducto = webMethod(
         console.log(`${TAG} ⧉ Nombre recortado para que quepa el sufijo de copia`);
       }
 
+      // Visibilidad del original. La collection no la expone, así que
+      // se lee del Product object real (misma vía que el coste).
+      let visibleOriginal = true;
+      try {
+        const elevatedGetProduct = elevate(storesProducts.getProduct);
+        const prodReal = await elevatedGetProduct(productId);
+        const objeto = prodReal?.product || prodReal;
+        if (objeto && typeof objeto.visible === 'boolean') {
+          visibleOriginal = objeto.visible;
+        }
+        console.log(`${TAG} ⧉ Visibilidad heredada del original: ${visibleOriginal}`);
+      } catch (visErr) {
+        console.warn(`${TAG} ⚠️ No se pudo leer la visibilidad del original, la copia nace visible:`, visErr.message);
+      }
+
       const productInfo = {
         name: nombreBase + SUFIJO_COPIA,
         productType: orig.productType || 'physical',
         price: parseFloat(orig.price) || 0,
-        visible: false
+        visible: visibleOriginal
       };
 
       const brand = String(orig.brand || '').trim();
