@@ -1,7 +1,47 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.108  ·  El TOTAL del modal incluye el producto vendido
+ * VERSION: 1.1.109  ·  VENTAS DEL DÍA en la cabecera del rendimiento
+ *
+ * v1.1.109 (29 ago 2026) — LA CABECERA DEL RENDIMIENTO PASA A SER VENTAS.
+ *
+ *   Hasta aquí la cabecera del bloque de rendimiento decía COBRADO /
+ *   PENDIENTE / TOTAL DEL DÍA y ese total solo contaba los servicios de
+ *   las citas: la venta de productos de tienda y la de especiales (bonos,
+ *   PRIME, tarjetas) se pintaban más abajo, cada una con su total, pero
+ *   quedaban fuera de la cifra grande. Un día con venta de producto
+ *   mostraba un total del día que no era el total del día.
+ *
+ *   Decisión de Jal (29 ago 2026): el bloque habla de VENTAS. La palabra
+ *   "cobrado" pertenece al cierre financiero y desaparece de esta
+ *   cabecera. VENTAS DEL DÍA = servicios del salón + productos de tienda
+ *   + especiales. Los servicios de colaboradoras externas NO entran: van
+ *   aparte, en su propia línea.
+ *
+ *   Cambios, todos dentro de _renderCierre y _cierreBloqueATexto:
+ *     · NEW leyenda fija sobre la cabecera diciendo qué incluye la cifra
+ *       y qué queda fuera.
+ *     · Cabecera de 2 tarjetas → 3 tarjetas: SERVICIOS · PRODUCTOS ·
+ *       ESPECIALES, cada una con su importe.
+ *     · Bloque grande: VENTAS DEL DÍA con la suma de las tres.
+ *     · Dos líneas fuera de esa suma: pendiente de cobro (servicios
+ *       propios del día sin cobrar) y servicios externos.
+ *     · El texto del botón COPIAR refleja exactamente lo mismo.
+ *
+ *   De dónde sale cada número, sin backend nuevo (informe v1.2.1 ya los
+ *   devuelve por separado):
+ *     · servicios propios = rendimiento.total − rendimiento.externosTotal.
+ *       El importe de externos que devuelve el informe es exactamente el
+ *       mismo que suma dentro del total, así que la resta es exacta.
+ *     · productos  = cierre.productosTotal
+ *     · especiales = cierre.especialesTotal
+ *
+ *   Aviso de lectura: productos y especiales van por día de cobro y los
+ *   servicios de este bloque por día de cita. Se cobran en el acto, así
+ *   que en la práctica coinciden, pero un producto vendido hoy contra una
+ *   cita de otro día suma hoy.
+ *
+ *   Backend, page code y CMS: sin tocar.
  *
  * v1.1.108 (27 ago 2026) — EL TOTAL DE LA CITA SUMA EL PRODUCTO.
  *
@@ -1947,7 +1987,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.105]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.109]';
 
   // ─── helpers ───
   function esc(s) {
@@ -3022,6 +3062,17 @@ button { font-family: inherit; cursor: pointer; }
 .cierre-headertotal-label { font-size:10px; font-weight:700; color:#9ca3af; letter-spacing:1px; text-transform:uppercase; }
 .cierre-headertotal-val { font-size:26px; font-weight:800; color:var(--ks-ink); margin-top:2px; font-variant-numeric:tabular-nums; }
 .cierre-headertotal-sub { font-size:11px; color:#9ca3af; margin-top:2px; }
+/* v1.1.109 — Cabecera de VENTAS: leyenda, rejilla de 3 y líneas fuera de la suma */
+.cierre-headergrid.tres { grid-template-columns:1fr 1fr 1fr; }
+.cierre-headercard.svc  { border-left-color:#15803d; }
+.cierre-headercard.prod { border-left-color:#2f6fd9; }
+.cierre-headercard.esp  { border-left-color:#c9a44a; }
+.cierre-headerlegend { font-size:10.5px; line-height:1.45; color:#6b7280; background:#f7f8fa; border:1px solid #e2e5ea; border-radius:8px; padding:8px 10px; margin-bottom:10px; }
+.cierre-headerlegend b { color:var(--ks-ink); }
+.cierre-headerline { display:flex; align-items:baseline; gap:8px; font-size:11px; color:#6b7280; padding:4px 2px; }
+.cierre-headerline .val { margin-left:auto; font-weight:700; font-variant-numeric:tabular-nums; }
+.cierre-headerline.ext { color:#8b5cf6; }
+.cierre-headerline.ext .val { color:#8b5cf6; }
 .cierre-reconc { border:1px dashed #a78bfa; background:rgba(167,139,250,.04); border-radius:10px; padding:12px; margin-bottom:14px; }
 .cierre-reconc-title { font-size:12px; font-weight:800; color:#5b21b6; display:flex; align-items:baseline; gap:8px; }
 .cierre-reconc-diff { font-size:14px; font-weight:800; margin-left:auto; font-variant-numeric:tabular-nums; }
@@ -8662,12 +8713,55 @@ button { font-family: inherit; cursor: pointer; }
       h += `<div class="cierre-block cierre-block-rend">`;
       h += `<div class="cierre-block-title"><span class="cierre-block-emoji">📈</span> Rendimiento productivo<span class="cierre-block-sub">trabajo del día — filtra por fecha de cita</span><button id="btnCopiarRend" class="cierre-copybtn" title="Copiar rendimiento productivo">📋 COPIAR</button></div>`;
 
-      // Header cobrado/pendiente/total
-      h += `<div class="cierre-headergrid">
-        <div class="cierre-headercard ok"><div class="cierre-headercard-label">COBRADO</div><div class="cierre-headercard-val">${eur(rendimiento.cobrado)}</div><div class="cierre-headercard-sub">${rendimiento.clientesCobrados} clientes</div></div>
-        <div class="cierre-headercard pdte"><div class="cierre-headercard-label">PENDIENTE</div><div class="cierre-headercard-val">${eur(rendimiento.pendiente)}</div><div class="cierre-headercard-sub">${rendimiento.clientesPendientes} clientes</div></div>
+      // ── v1.1.109 · CABECERA DE VENTAS ────────────────────────────────
+      // El bloque habla de VENTAS, no de cobros: "cobrado" vive en el
+      // cierre financiero. VENTAS DEL DÍA = servicios del salón +
+      // productos de tienda + especiales. Los servicios de colaboradoras
+      // externas quedan FUERA de la suma y se muestran en su propia línea.
+      //
+      // rendimiento.total incluye las citas de externas (son citas de la
+      // agenda), así que los servicios propios salen restando
+      // rendimiento.externosTotal, que el informe calcula con el MISMO
+      // importe que suma dentro del total: la resta es exacta.
+      // Si el backend fuese anterior y no mandase externosTotal, el
+      // término vale 0 y el bloque se comporta como antes en ese punto.
+      const _extArr    = Array.isArray(rendimiento.externos) ? rendimiento.externos : [];
+      const _extTotal  = Number(rendimiento.externosTotal || 0);
+      const _extPdte   = _extArr
+        .filter(e => String(e.status || '').toUpperCase() !== 'PAGADO')
+        .reduce((acc, e) => acc + (Number(e.importe) || 0), 0);
+
+      const _ventaSvc  = Math.round((Number(rendimiento.total || 0) - _extTotal) * 100) / 100;
+      const _ventaProd = Math.round(Number(cierre.productosTotal  || 0) * 100) / 100;
+      const _ventaEsp  = Math.round(Number(cierre.especialesTotal || 0) * 100) / 100;
+      const _ventaTot  = Math.round((_ventaSvc + _ventaProd + _ventaEsp) * 100) / 100;
+
+      // Pendiente de cobro: solo servicios PROPIOS. Se descuenta lo
+      // pendiente de externas para que la línea no mezcle dinero que no
+      // es del salón. El recuento de clientas solo se muestra cuando no
+      // hay pendientes de externas, porque en ese caso el número que
+      // devuelve el informe deja de corresponder con el importe.
+      const _pdtePropio = Math.round((Number(rendimiento.pendiente || 0) - _extPdte) * 100) / 100;
+      const _pdteSub = (_extPdte === 0 && rendimiento.clientesPendientes)
+        ? ` · ${rendimiento.clientesPendientes} ${rendimiento.clientesPendientes === 1 ? 'clienta' : 'clientas'}`
+        : '';
+
+      h += `<div class="cierre-headerlegend"><b>Ventas del día:</b> servicios del salón + productos de tienda + especiales (bonos, PRIME, tarjetas). Los servicios de colaboradoras externas van aparte: pasan por la agenda pero no son venta del salón.</div>`;
+
+      h += `<div class="cierre-headergrid tres">
+        <div class="cierre-headercard svc"><div class="cierre-headercard-label">SERVICIOS</div><div class="cierre-headercard-val">${eur(_ventaSvc)}</div><div class="cierre-headercard-sub">${rendimiento.clientesTotal} ${rendimiento.clientesTotal === 1 ? 'clienta' : 'clientas'}</div></div>
+        <div class="cierre-headercard prod"><div class="cierre-headercard-label">PRODUCTOS</div><div class="cierre-headercard-val">${eur(_ventaProd)}</div><div class="cierre-headercard-sub">tienda</div></div>
+        <div class="cierre-headercard esp"><div class="cierre-headercard-label">ESPECIALES</div><div class="cierre-headercard-val">${eur(_ventaEsp)}</div><div class="cierre-headercard-sub">bonos · PRIME · tarjetas</div></div>
       </div>`;
-      h += `<div class="cierre-headertotal"><div class="cierre-headertotal-label">TOTAL DEL DÍA</div><div class="cierre-headertotal-val">${eur(rendimiento.total)}</div><div class="cierre-headertotal-sub">${rendimiento.clientesTotal} clientes</div></div>`;
+
+      h += `<div class="cierre-headertotal"><div class="cierre-headertotal-label">VENTAS DEL DÍA</div><div class="cierre-headertotal-val">${eur(_ventaTot)}</div><div class="cierre-headertotal-sub">servicios + productos + especiales</div></div>`;
+
+      if (_pdtePropio > 0) {
+        h += `<div class="cierre-headerline"><span>⏳ Pendiente de cobro${_pdteSub}</span><span class="val">${eur(_pdtePropio)}</span></div>`;
+      }
+      if (_extTotal > 0) {
+        h += `<div class="cierre-headerline ext"><span>🔗 Servicios de colaboradoras externas — no es venta del salón</span><span class="val">${eur(_extTotal)}</span></div>`;
+      }
 
       // Servicios del día — v1.1.92: agrupados por profesional (atribución
       // por fase, la calcula cierreLogicExtendido v1.1.6). Si el backend es
@@ -9376,9 +9470,38 @@ button { font-family: inherit; cursor: pointer; }
         L.push('📈 RENDIMIENTO PRODUCTIVO');
         L.push(`${cab}${fecha}`);
         L.push('');
-        L.push(`COBRADO: ${eur(r.cobrado)} (${r.clientesCobrados} clientes)`);
-        L.push(`PENDIENTE: ${eur(r.pendiente)} (${r.clientesPendientes} clientes)`);
-        L.push(`TOTAL DEL DÍA: ${eur(r.total)} (${r.clientesTotal} clientes)`);
+        // v1.1.109 — el texto copiado dice exactamente lo mismo que la
+        // pantalla: VENTAS DEL DÍA con sus tres componentes, y fuera de
+        // la suma el pendiente de cobro y los servicios externos.
+        {
+          const cxv = ext.cierre || {};
+          const extArr   = Array.isArray(r.externos) ? r.externos : [];
+          const extTotal = Number(r.externosTotal || 0);
+          const extPdte  = extArr
+            .filter(e => String(e.status || '').toUpperCase() !== 'PAGADO')
+            .reduce((acc, e) => acc + (Number(e.importe) || 0), 0);
+
+          const vSvc  = Math.round((Number(r.total || 0) - extTotal) * 100) / 100;
+          const vProd = Math.round(Number(cxv.productosTotal  || 0) * 100) / 100;
+          const vEsp  = Math.round(Number(cxv.especialesTotal || 0) * 100) / 100;
+          const vTot  = Math.round((vSvc + vProd + vEsp) * 100) / 100;
+          const pdte  = Math.round((Number(r.pendiente || 0) - extPdte) * 100) / 100;
+
+          L.push('Ventas del día: servicios del salón + productos de tienda + especiales.');
+          L.push('Los servicios de colaboradoras externas van aparte.');
+          L.push('');
+          L.push(`SERVICIOS: ${eur(vSvc)} (${r.clientesTotal} clientes)`);
+          L.push(`PRODUCTOS: ${eur(vProd)}`);
+          L.push(`ESPECIALES: ${eur(vEsp)}`);
+          L.push(`VENTAS DEL DÍA: ${eur(vTot)}`);
+          if (pdte > 0) {
+            const sub = (extPdte === 0 && r.clientesPendientes) ? ` (${r.clientesPendientes} clientes)` : '';
+            L.push(`Pendiente de cobro: ${eur(pdte)}${sub}`);
+          }
+          if (extTotal > 0) {
+            L.push(`Servicios de colaboradoras externas (no es venta del salón): ${eur(extTotal)}`);
+          }
+        }
 
         if (r.servicios && r.servicios.length) {
           L.push('');
