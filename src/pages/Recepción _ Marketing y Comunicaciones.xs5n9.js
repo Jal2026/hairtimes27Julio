@@ -2,10 +2,22 @@
  * ============================================================
  *  pagecode_comunicaciones.js — KAMISUITE Comunicaciones
  * ============================================================
- *  v1.4.0  ·  23 Mayo 2026
+ *  v1.5.0  ·  30 Agosto 2026
  * ------------------------------------------------------------
  *  CHANGELOG
  *  ---------
+ *  v1.5.0 (30-Ago-2026) — Monitor por rango de fechas + Informe
+ *    - Nuevo import: getHistorialComunicaciones de la centralita
+ *      comunicacionesLogic.web (v1.4.0). Es la consulta neutral de
+ *      canal: devuelve WhatsApp y email por igual, acepta rango de
+ *      fechas y filtros de canal / evento / resultado.
+ *    - Nuevo handler handleGetHistorialRango, que alimenta tanto el
+ *      Monitor como la pestaña Informe del widget de escritorio.
+ *    - handleGetHistorial (whatsappLogic.getHistorialEnvios) SE
+ *      CONSERVA sin tocar: lo sigue usando la pantalla móvil de
+ *      Comunicaciones hasta que se actualice.
+ *    - Resto de handlers (plantillas, envíos, contactos, imágenes,
+ *      campañas, AdServer) intactos.
  *  v1.4.0 (23-May-2026) — AdServer: segmentación de audiencias
  *    - Import adserverLogic.web (getSegmentosDisponibles,
  *      getClientesPorServicio, getClientesPorLabel).
@@ -51,7 +63,12 @@ import {
     getClientesPorLabel
 } from 'backend/adserverLogic.web';
 
-const TAG = '[Comunicaciones v1.4.0]';
+// v1.5.0: histórico neutral de canal (WhatsApp + email) con rango de fechas
+import {
+    getHistorialComunicaciones
+} from 'backend/comunicacionesLogic.web';
+
+const TAG = '[Comunicaciones v1.5.0]';
 
 let cacheContactos = [];
 let cacheReady = false;
@@ -73,6 +90,8 @@ $w.onReady(function () {
             case 'getTemplates': handleGetTemplates(); break;
             case 'getEstadoMeta': handleGetEstadoMeta(); break;
             case 'getHistorial': handleGetHistorial(msg); break;
+            // v1.5.0: histórico con rango de fechas (Monitor + Informe)
+            case 'getHistorialRango': handleGetHistorialRango(msg); break;
             case 'enviarBroadcast': handleEnviarBroadcast(msg); break;
             case 'enviarIndividual': handleEnviarIndividual(msg); break;
             case 'buscarContactos': handleBuscarContactos(msg); break;
@@ -141,6 +160,33 @@ async function handleGetHistorial(msg) {
     } catch (e) {
         console.error(TAG, '❌ getHistorial:', e);
         sendResponse('historialCargado', { registros: [], total: 0 });
+    }
+}
+
+// ── handleGetHistorialRango — v1.5.0 ────────────────────────
+// Lee de la centralita, no del driver de WhatsApp: el histórico incluye
+// los envíos por email (confirmación, recordatorio y compras) igual que
+// los de WhatsApp. El filtrado fino (evento, canal, resultado, búsqueda)
+// lo hace el widget en local sobre el bloque devuelto; aquí solo se
+// acota el periodo y el tope de filas.
+async function handleGetHistorialRango(msg) {
+    try {
+        sendResponse('loading', { message: 'Cargando histórico...' });
+        const result = await getHistorialComunicaciones({
+            from:   msg.from || '',
+            to:     msg.to || '',
+            limit:  msg.limit || 1000
+        });
+        sendResponse('historialCargado', {
+            registros: result.registros || [],
+            total:     result.total || 0,
+            truncado:  !!result.truncado,
+            desde:     msg.from || '',
+            hasta:     msg.to || ''
+        });
+    } catch (e) {
+        console.error(TAG, '❌ getHistorialRango:', e);
+        sendResponse('historialCargado', { registros: [], total: 0, truncado: false });
     }
 }
 
