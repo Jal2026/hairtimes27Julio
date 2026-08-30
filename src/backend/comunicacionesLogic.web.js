@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  comunicacionesLogic.web.js — Centralita de Comunicaciones     ║
-// ║  KAMISUITE · v1.3.0                                            ║
+// ║  KAMISUITE · v1.4.0                                            ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: Orquestador único de todas las comunicaciones con clientes.
@@ -14,7 +14,40 @@
 //       · 'wix' / vacío → Wix Triggered Emails (comportamiento previo)
 //   - WhatsApp Cloud API (vía whatsappLogic.web.js)
 //
+// ─────────────────────────────────────────────────────────────────
+// AUDITORÍA DE CONEXIONES (obligatoria en cada entrega)
+// ─────────────────────────────────────────────────────────────────
+//  LEE de:
+//    · SalonConfig       → canales, plantillas, proveedor de email.
+//    · CommunicationLog  → histórico (v1.4.0, getHistorialComunicaciones).
+//  ESCRIBE en:
+//    · CommunicationLog  → una fila por envío (propio o de terceros vía
+//                          registrarComunicacion).
+//  LE LLAMA:
+//    · recepcionProLogic / widgetPublicoLogic → notificarConfirmacion.
+//    · reminderLogic                          → notificarRecordatorio.
+//    · reminderLogic, voucherPublicLogic, primePublicLogic,
+//      bonosPromosPublicLogic                 → registrarComunicacion.
+//    · Page code Comunicaciones (desktop)     → getHistorialComunicaciones.
+//  LLAMA A:
+//    · whatsappLogic (v1.6.1) · brevoLogic (v1.1.1) · Wix triggeredEmails.
+//  FLUJO DE PUNTA A PUNTA: verificado.
+//
 // CHANGELOG:
+//   v1.4.0 (30-Ago-2026) — Trazabilidad completa + consulta del informe
+//     - registrarComunicacion(): apunte en CommunicationLog reutilizable
+//       por cualquier backend que envíe por su cuenta (recordatorio por
+//       email, compras de bono/tarjeta/PRIME). Hasta ahora esos envíos
+//       salían pero NO dejaban rastro, y el Monitor solo veía su gemelo
+//       de WhatsApp.
+//     - getHistorialComunicaciones(): consulta del histórico neutral de
+//       canal, con RANGO DE FECHAS, filtros de canal / evento / resultado
+//       y tope de filas. Sustituye a whatsappLogic.getHistorialEnvios
+//       como fuente del Monitor de escritorio (aquella se conserva
+//       intacta: la usa todavía la pantalla móvil).
+//     - Sin cambios en el envío: confirmación, recordatorio, WhatsApp,
+//       cancelación y modificación quedan exactamente igual.
+//
 //   v1.3.0 (27-Ago-2026) — Enrutado de email Wix ⇄ Brevo (confirmación)
 //     - Nuevo canal _enviarEmailBrevo: envía la CONFIRMACIÓN usando la
 //       plantilla HTML de SalonConfig.layoutBooking vía brevoLogic
@@ -59,8 +92,8 @@ import {
 import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 
 // ─── CONSTANTES ──────────────────────────────────────────────────
-const VERSION = '1.3.0';
-const TAG = '[COMMS v1.3.0]';
+const VERSION = '1.4.0';
+const TAG = '[COMMS v1.4.0]';
 const SALON_CONFIG_COLLECTION = 'SalonConfig';
 const COMMUNICATION_LOG_COLLECTION = 'CommunicationLog';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
@@ -567,5 +600,146 @@ export const notificarModificacion = webMethod(
   async (datos) => {
     console.log(TAG, 'notificarModificacion → PLACEHOLDER, no implementado aún');
     return { ok: true, placeholder: true };
+  }
+);
+
+// ═════════════════════════════════════════════════════════════════
+//  v1.4.0 · TRAZABILIDAD — apunte y consulta del histórico
+// ═════════════════════════════════════════════════════════════════
+
+/**
+ * REGISTRO DE UNA COMUNICACIÓN YA ENVIADA POR OTRO BACKEND
+ *
+ * Existe porque no todos los envíos pasan por esta centralita: el
+ * recordatorio por email lo manda reminderLogic con su propia cascada
+ * de destinatarios, y los emails de compra los mandan los backends
+ * públicos de bono / tarjeta / PRIME. Esos envíos salían sin dejar
+ * rastro en CommunicationLog, de modo que el Monitor mostraba el
+ * WhatsApp de un recordatorio o de una compra pero nunca su email.
+ *
+ * Este método NO envía nada: solo deja el apunte. El caller lo llama
+ * después de enviar, con el resultado real, y de forma no bloqueante
+ * (si el apunte falla, el envío ya se hizo y no debe romperse nada).
+ *
+ * Campos aceptados = los mismos que escribe la centralita en sus
+ * propios envíos, para que el histórico sea homogéneo:
+ *   event · channel · recipient · clientName · result · errorDetail
+ *   services · staffName · appointmentDate · appointmentTime
+ */
+export const registrarComunicacion = webMethod(
+  Permissions.SiteMember,
+  async (datos) => {
+    try {
+      const d = datos || {};
+
+      const canal = String(d.channel || '').toLowerCase().trim();
+      const resultado = String(d.result || '').toLowerCase().trim();
+
+      await _registrarLog({
+        event:           d.event || '',
+        channel:         canal || 'email',
+        recipient:       d.recipient || '',
+        clientName:      d.clientName || '',
+        result:          (resultado === 'error') ? 'error' : 'ok',
+        errorDetail:     d.errorDetail || '',
+        services:        d.services || '',
+        staffName:       d.staffName || '',
+        appointmentDate: d.appointmentDate || '',
+        appointmentTime: d.appointmentTime || ''
+      });
+
+      return { ok: true, version: VERSION };
+
+    } catch (e) {
+      // No relanzar nunca: el apunte es secundario respecto al envío.
+      console.error(TAG, 'registrarComunicacion (no bloqueante):', e.message);
+      return { ok: false, version: VERSION, error: e.message };
+    }
+  }
+);
+
+/**
+ * HISTÓRICO DE COMUNICACIONES — fuente del Monitor y del Informe
+ *
+ * Neutral de canal (WhatsApp, email y cualquier otro que se registre).
+ *
+ * Parámetros (todos opcionales):
+ *   from    — fecha/hora de inicio (ISO o Date). Sin ella, sin límite inferior.
+ *   to      — fecha/hora de fin (ISO o Date). Sin ella, sin límite superior.
+ *   channel — 'whatsapp' | 'email' | ...  (vacío = todos)
+ *   event   — valor exacto del tipo de evento (vacío = todos)
+ *   result  — 'ok' | 'error' (vacío = ambos)
+ *   limit   — tope de filas devueltas. Por defecto 500, máximo 1000.
+ *
+ * Devuelve las filas ya normalizadas (nunca null) y ordenadas de la más
+ * reciente a la más antigua, más el total de coincidencias en la
+ * colección para poder avisar si el tope recorta el periodo.
+ */
+export const getHistorialComunicaciones = webMethod(
+  Permissions.SiteMember,
+  async (filtros) => {
+    try {
+      const f = filtros || {};
+
+      let limite = parseInt(f.limit, 10);
+      if (!Number.isFinite(limite) || limite <= 0) limite = 500;
+      if (limite > 1000) limite = 1000;
+
+      let query = wixData.query(COMMUNICATION_LOG_COLLECTION)
+        .descending('_createdDate')
+        .limit(limite);
+
+      if (f.from) {
+        const desde = new Date(f.from);
+        if (!isNaN(desde.getTime())) query = query.ge('_createdDate', desde);
+      }
+      if (f.to) {
+        const hasta = new Date(f.to);
+        if (!isNaN(hasta.getTime())) query = query.le('_createdDate', hasta);
+      }
+
+      const canal = String(f.channel || '').toLowerCase().trim();
+      if (canal) query = query.eq('channel', canal);
+
+      const evento = String(f.event || '').trim();
+      if (evento) query = query.eq('event', evento);
+
+      const resultado = String(f.result || '').toLowerCase().trim();
+      if (resultado) query = query.eq('result', resultado);
+
+      const res = await query.find({ suppressAuth: true });
+
+      const registros = (res.items || []).map(r => ({
+        id:              r._id,
+        event:           r.event || '',
+        channel:         r.channel || '',
+        recipient:       r.recipient || '',
+        clientName:      r.clientName || '',
+        result:          r.result || '',
+        errorDetail:     r.errorDetail || '',
+        services:        r.services || '',
+        staffName:       r.staffName || '',
+        appointmentDate: r.appointmentDate || '',
+        appointmentTime: r.appointmentTime || '',
+        createdDate:     r._createdDate
+      }));
+
+      const total = res.totalCount || registros.length;
+
+      console.log(`${TAG} getHistorialComunicaciones → ${registros.length} filas (total ${total})`);
+
+      return {
+        ok: true,
+        version: VERSION,
+        registros,
+        total,
+        limite,
+        truncado: total > registros.length
+      };
+
+    } catch (e) {
+      console.error(TAG, 'getHistorialComunicaciones:', e.message);
+      return { ok: false, version: VERSION, error: e.message, registros: [], total: 0, truncado: false };
+    }
   }
 );
