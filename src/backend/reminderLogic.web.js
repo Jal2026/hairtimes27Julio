@@ -1,5 +1,5 @@
 // =====================================================
-// [ReminderJob v1.8.0] - reminderLogic.web.js
+// [ReminderJob v1.9.0] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
 // FUENTE V2: KamisuiteReservations (fuente de verdad de reservas)
 // Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
@@ -16,11 +16,15 @@
 //    · ReminderLog            → idempotencia (qué ya se envió).
 //  ESCRIBE en:
 //    · ReminderLog            → una fila por reserva notificada.
-//    · CommunicationLog       → indirectamente, vía la centralita.
+//    · CommunicationLog       → el WhatsApp, vía la centralita; y desde
+//                               la v1.9.0 también el EMAIL, con apunte
+//                               propio (registrarComunicacion).
 //  LE LLAMA:
 //    · reminderJob.js → jobs.config, cron "0 7 * * *" (07:00 UTC).
 //  LLAMA A:
-//    · comunicacionesLogic.notificarRecordatorio (v1.3.0) → WhatsApp
+//    · comunicacionesLogic.registrarComunicacion (v1.4.0) → apunte del
+//      email del recordatorio en el histórico de Comunicaciones.
+//    · comunicacionesLogic.notificarRecordatorio (v1.4.0) → WhatsApp
 //      (whatsappLogic v1.6.1, plantilla booking_reminder_es).
 //    · brevoLogic.enviarEmailPlantilla (plantilla reminderLayout).
 //    · wix-crm-backend triggeredEmails (plantilla VGPVvYO).
@@ -53,6 +57,27 @@
 //            Salon Kami (son ficticios, no clonados reales). Sin cambios
 //            funcionales respecto a la v1.7.0.
 //   v1.8.0 - Un interruptor por canal para el recordatorio de cita.
+//   v1.9.0 - El recordatorio por EMAIL deja rastro en el histórico de
+//            Comunicaciones.
+//
+// CAMBIOS v1.9.0:
+//   - PROBLEMA QUE CIERRA: el email del recordatorio (tanto el camino
+//     Brevo como la cascada de Wix) se enviaba sin escribir en
+//     CommunicationLog. El WhatsApp sí lo hacía, vía la centralita. La
+//     pantalla de Comunicaciones mostraba, por tanto, la mitad de los
+//     recordatorios reales, y cualquier informe por canal salía sesgado
+//     hacia WhatsApp.
+//   - Tras el intento de envío por email se llama a
+//     comunicacionesLogic.registrarComunicacion con el resultado real
+//     (ok o error + motivo), el destinatario, el cliente, los servicios
+//     y la fecha/hora de la cita. Mismos campos que ya escribe la
+//     centralita para el WhatsApp → el histórico queda homogéneo.
+//   - NO BLOQUEANTE: el apunte va en try/catch propio. Si falla el
+//     registro, el recordatorio ya se envió y el cron sigue igual.
+//   - Sin apunte cuando el canal email está cerrado por configuración:
+//     no se ha intentado nada, así que no hay nada que registrar.
+//   - Cero cambios en el envío: cascada de candidatos, Brevo,
+//     idempotencia, agrupación y toggles quedan exactamente igual.
 //
 // CAMBIOS v1.8.0:
 //   - Nuevo helper _getCanalesRecordatorio(): lee de SalonConfig los
@@ -160,11 +185,11 @@ import wixData from 'wix-data';
 import { triggeredEmails, contacts } from 'wix-crm-backend';
 
 // v1.4.0: Centralita de comunicaciones
-import { notificarRecordatorio } from 'backend/comunicacionesLogic.web.js';
+import { notificarRecordatorio, registrarComunicacion } from 'backend/comunicacionesLogic.web.js';
 // v1.6.0: driver de email por plantilla (Brevo)
 import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 
-const TAG = '[ReminderJob v1.8.0]';
+const TAG = '[ReminderJob v1.9.0]';
 
 // v1.7.0: colección fuente de verdad de reservas en V2
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -778,6 +803,32 @@ async function enviarRecordatorio(grupo, emailsDeContacto, emailProvider) {
   return { ok: false, error: `Todos fallaron (${candidatosValidos.length}/${grupo._candidatos.length} válidos): ${errores.join(' | ')}` };
 }
 
+// ----------- v1.9.0: apunte del EMAIL en el histórico ---------------
+// El WhatsApp lo registra la centralita al enviarlo. El email lo envía
+// este módulo por su cuenta (Brevo directo o cascada Triggered de Wix),
+// así que el apunte tiene que hacerlo también él o el envío queda
+// invisible en la pantalla de Comunicaciones.
+// No bloqueante: si el registro falla, el recordatorio ya salió.
+async function registrarEmailRecordatorio(grupo, resultado) {
+  try {
+    const nombreCliente = `${grupo.Nombre || ''} ${grupo.Apellido || ''}`.trim();
+    await registrarComunicacion({
+      event:           'recordatorio',
+      channel:         'email',
+      recipient:       grupo.clientEmail || '',
+      clientName:      nombreCliente,
+      result:          resultado && resultado.ok ? 'ok' : 'error',
+      errorDetail:     resultado && resultado.ok ? '' : String((resultado && resultado.error) || ''),
+      services:        grupo.servicios || '',
+      staffName:       PROFESIONAL_DEFAULT,
+      appointmentDate: grupo.Fecha || '',
+      appointmentTime: grupo.horaInicio || ''
+    });
+  } catch (logErr) {
+    console.error(`${TAG} ⚠️ Apunte de email en histórico (no bloqueante): ${logErr.message}`);
+  }
+}
+
 // ----------- v1.4.0: Notificación WhatsApp via centralita -----------
 // Se llama después de enviarRecordatorio (en ambos casos: ok o error).
 // Pasa canalesExcluidos:['email'] para que la centralita NO duplique
@@ -944,6 +995,8 @@ export const ejecutarRecordatoriosDiarios = webMethod(
           errCount++;
           console.error(`${TAG} ❌ ${grupo.Nombre} ${grupo.Apellido}: ${r.error}`);
         }
+        // v1.9.0: rastro del email en el histórico de Comunicaciones.
+        await registrarEmailRecordatorio(grupo, r);
       }
 
       // 2. v1.4.0: WhatsApp vía centralita (en paralelo, no-blocking)
