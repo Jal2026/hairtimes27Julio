@@ -9,10 +9,34 @@
 <title>KAMISUITE · Configuración Salón</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   widget_salon_config.html  v1.0.15
+   widget_salon_config.html  v1.0.16
    KAMISUITE — Widget Edición Configuración Salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.16 · 30 Ago 2026 · Los dos toggles del recordatorio dejan de
+     mentir cuando el campo está vacío
+     - PROBLEMA: un interruptor solo tiene dos posiciones, pero en el CMS
+       un booleano tiene tres estados: sí, no y VACÍO (nunca guardado).
+       Esta pantalla pintaba el vacío como apagado. El motor de
+       recordatorios, en cambio, lee el vacío como ENCENDIDO a propósito,
+       para que ningún salón se quede mudo por no tener el campo creado.
+       Resultado en Hair-Times: la pantalla mostraba los dos recordatorios
+       apagados mientras el cron los enviaba todas las mañanas.
+     - PEOR AÚN: al guardar, el widget manda el estado de TODOS los
+       interruptores tal como los está pintando. Un guardado cualquiera
+       —cambiar un teléfono— habría escrito "no" en los dos campos y
+       apagado el recordatorio de verdad, en producción, sin quererlo.
+     - SOLUCIÓN: propiedad nueva `defaultOn` en la definición del campo.
+       Un toggle con defaultOn se pinta ENCENDIDO cuando su valor está
+       vacío, que es exactamente como lo interpreta el motor. Aplicada a
+       emailReminder y whatsappReminder, y solo a ellos.
+     - NO se aplica a los demás interruptores: el resto se leen en el
+       motor como "vacío = apagado", así que ahí pantalla y motor ya
+       coinciden y no hay nada que corregir.
+     - Sin CSS nuevo, sin cambios de maquetación: se toca únicamente qué
+       posición inicial muestra el interruptor.
+     - Pareja backend: reminderLogic v1.10.0 (jerarquía canal → recordatorio,
+       se abandona el maestro reminderActive).
    v1.0.15 · 28 Ago 2026 · bookingBufferMinutes — antelación mínima de
      las reservas online
      - SECTIONS[horarios].fields += bookingBufferMinutes (type 'number'),
@@ -1080,7 +1104,7 @@ select.field-input {
     <div>
       <span class="header-brand">KAMISUITE</span>
       <span class="header-title"> · CONFIGURACIÓN SALÓN</span>
-      <span class="header-version">v1.0.15</span>
+      <span class="header-version">v1.0.16</span>
     </div>
   </div>
   <div class="header-right">
@@ -1378,8 +1402,11 @@ const SECTIONS = [
       { id: 'waActive',     label: 'WhatsApp activo',    type: 'boolean', desc: 'Envío de mensajes por WhatsApp' },
       { id: 'emailActive',  label: 'Email activo',       type: 'boolean', desc: 'Envío de mensajes por email' },
       // v1.0.14 — recordatorio de cita (24h antes), un interruptor por canal
-      { id: 'whatsappReminder', label: 'Recordatorio por WhatsApp', type: 'boolean', desc: 'Aviso automático de la cita del día siguiente por WhatsApp' },
-      { id: 'emailReminder',    label: 'Recordatorio por email',    type: 'boolean', desc: 'Aviso automático de la cita del día siguiente por email' },
+      // v1.0.16 — defaultOn: si el campo está vacío en el CMS, el motor
+      // de recordatorios lo interpreta como ENCENDIDO. La pantalla tiene
+      // que decir lo mismo o el siguiente guardado lo apagaría de verdad.
+      { id: 'whatsappReminder', label: 'Recordatorio por WhatsApp', type: 'boolean', defaultOn: true, desc: 'Aviso automático de la cita del día siguiente. Requiere el canal WhatsApp activo.' },
+      { id: 'emailReminder',    label: 'Recordatorio por email',    type: 'boolean', defaultOn: true, desc: 'Aviso automático de la cita del día siguiente. Requiere el canal Email activo.' },
     ]
   },
   {
@@ -1665,7 +1692,13 @@ function renderField(field) {
 }
 
 function renderToggle(field) {
-  const checked = configData[field.id] === true ? ' checked' : '';
+  // v1.0.16 — tres estados en el CMS (sí / no / vacío) contra dos en el
+  // interruptor. Para los campos marcados con defaultOn, el vacío se
+  // pinta encendido, que es como lo lee el motor.
+  const guardado = configData[field.id];
+  const vacio = (guardado === undefined || guardado === null || guardado === '');
+  const encendido = field.defaultOn ? (vacio ? true : guardado === true) : (guardado === true);
+  const checked = encendido ? ' checked' : '';
 
   return `<div class="field-group full-width">
     <div class="toggle-row">
@@ -2040,7 +2073,12 @@ function checkForChanges() {
 
       if (field.type === 'boolean') {
         const current = el.checked;
-        const original = originalData[field.id] === true;
+        // v1.0.16 — el "original" tiene que calcularse igual que el
+        // pintado, o un campo vacío con defaultOn se marcaría como
+        // modificado nada más abrir la pantalla.
+        const guardado = originalData[field.id];
+        const vacio = (guardado === undefined || guardado === null || guardado === '');
+        const original = field.defaultOn ? (vacio ? true : guardado === true) : (guardado === true);
         if (current !== original) modified = true;
       } else {
         const current = el.value || '';
