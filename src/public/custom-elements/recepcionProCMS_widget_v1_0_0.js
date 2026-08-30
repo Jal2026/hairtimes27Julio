@@ -1,7 +1,27 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
- * VERSION: 1.1.110  ·  Venta de productos sin modo de pago por defecto
+ * VERSION: 1.1.111  ·  La venta de producto y de especiales tiene dueño
+ *
+ * v1.1.111 (30 ago 2026) — VENTA POR PROFESIONAL EN EL INFORME DEL DÍA.
+ *
+ *   Hasta ahora el rendimiento por profesional se construía solo con las
+ *   CITAS, así que las ventas de producto y de ESPECIALES no sumaban en
+ *   el rendimiento de nadie — ni siquiera las vendidas dentro de una
+ *   cita. El dinero se veía en sus bloques, pero sin dueño.
+ *
+ *   Bloque nuevo "🏷️ Venta por profesional", debajo de "Cobrado por
+ *   staff": por persona, producto y especiales con su suma. Lo calcula
+ *   cierreLogicExtendido v1.3.0 (`ventaPorStaff`) atribuyendo cada venta
+ *   al titular de la cita de origen, o al empleado logueado que la
+ *   cobró, o a "Salón" cuando no hay capa de acceso y no se puede saber
+ *   quién vendió. "Salón" es una fila más con su importe: no se reparte.
+ *
+ *   Mismo bloque en la exportación de texto del informe.
+ *
+ *   Con un backend anterior a v1.3.0 el bloque no se pinta y el resto
+ *   del informe sigue exactamente igual. No se toca ningún importe ni
+ *   ningún otro bloque.
  *
  * v1.1.110 (29 ago 2026) — EL MODO DE PAGO YA NO VIENE MARCADO.
  *
@@ -9051,6 +9071,23 @@ button { font-family: inherit; cursor: pointer; }
         h += `</div>`;
       }
 
+      // v1.1.111 — VENTA POR PROFESIONAL. Producto y ESPECIALES con dueño.
+      // Lo calcula cierreLogicExtendido v1.3.0: cita de origen → empleado
+      // logueado → "Salón". Backend anterior: no viaja y no se pinta.
+      if (cierre.ventaPorStaff?.length) {
+        h += `<div class="cierre-section" style="margin-top:12px;"><div class="cierre-section-title">🏷️ Venta por profesional <span style="color:#9ca3af;font-size:9.5px;font-weight:600;text-transform:none;letter-spacing:0;">· productos y especiales</span></div>`;
+        for (const v of cierre.ventaPorStaff) {
+          const partes = [];
+          if (v.producto > 0) partes.push(`🛒 ${eur(v.producto)}`);
+          if (v.especiales > 0) partes.push(`✦ ${eur(v.especiales)}`);
+          const detalle = partes.length ? ` <span style="color:#9ca3af;font-size:10px;">${partes.join(' · ')}</span>` : '';
+          const salon = v.esSalon ? ` <span style="color:#9ca3af;font-size:9px;font-weight:700;background:rgba(156,163,175,.14);padding:1px 5px;border-radius:4px;">SIN LOGIN</span>` : '';
+          h += `<div class="cierre-row"><span class="cierre-nombre"><b>${esc(v.staffName)}</b>${salon}${detalle}</span><span class="cierre-importe">${eur(v.total)}</span></div>`;
+        }
+        h += `<div class="cierre-row" style="border-top:1px solid #e2e5ea;padding-top:6px;margin-top:4px;"><span class="cierre-nombre" style="font-weight:700;">Total venta atribuida</span><span class="cierre-importe" style="font-weight:700;">${eur(cierre.ventaPorStaffTotal || 0)}</span></div>`;
+        h += `</div>`;
+      }
+
       // Productos — v1.1.92: detalle con cliente y chip del empleado que
       // despachó. `soldBy` lo graba tiendaProductos v1.5.13 con el usuario
       // logueado en Recepción; vacío = sin capa de acceso → Administrador.
@@ -9700,6 +9737,20 @@ button { font-family: inherit; cursor: pointer; }
             const e = s.isExternal ? ' [EXT]' : '';
             L.push(`- ${s.staffName}${e} · ${s.citas} cobros: ${eur(s.cobrado)}`);
           }
+        }
+        // v1.1.111 — venta atribuida (producto + especiales)
+        if (c.ventaPorStaff && c.ventaPorStaff.length) {
+          L.push('');
+          L.push('🏷️ Venta por profesional · productos y especiales');
+          for (const v of c.ventaPorStaff) {
+            const partes = [];
+            if (v.producto > 0) partes.push(`productos ${eur(v.producto)}`);
+            if (v.especiales > 0) partes.push(`especiales ${eur(v.especiales)}`);
+            const det = partes.length ? ` (${partes.join(' · ')})` : '';
+            const sinLogin = v.esSalon ? ' [sin login]' : '';
+            L.push(`- ${v.staffName}${sinLogin}: ${eur(v.total)}${det}`);
+          }
+          L.push(`Total venta atribuida: ${eur(c.ventaPorStaffTotal || 0)}`);
         }
         if (c.productosDetalle && c.productosDetalle.length) {
           L.push('');
