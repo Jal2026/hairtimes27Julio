@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<!-- KAMISUITE Comunicaciones · MOBILE standalone v1.5.0 · generado como versión aparte -->
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KAMISUITE · Comunicaciones MOBILE v1.5.0</title>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f0f0f2;
+  --surface: #fff;
+  --surface2: #f7f7f9;
+  --border: #e2e2e8;
+  --text: #1a1a2e;
+  --text2: #6b6b80;
+  --text3: #9999aa;
+  --orange: #e87722;
+  --orange-lt: #fff4ec;
+  --purple: #7c3aed;
+  --purple-lt: #f3effe;
+  --green: #059669;
+  --green-lt: #ecfdf5;
+  --red: #dc2626;
+  --red-lt: #fef2f2;
+  --blue: #2563eb;
+  --blue-lt: #eff6ff;
+  --gold: #d97706;
+  --gold-lt: #fffbeb;
+  --radius: 10px;
+  --radius-sm: 6px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%; font-family: 'Bai Jamjuree', sans-serif;
+  background: var(--bg); color: var(--text); font-size: 13px; overflow-x: hidden;
+}
+
+/* ── TOPBAR ────────────────────────────────────────── */
+.topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 16px; height: 48px; display: flex; align-items: center; }
+.topbar-left { display: flex; align-items: center; gap: 10px; }
+.logo { font-size: 14px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--orange); }
+.page-title { font-size: 11px; font-weight: 500; color: var(--text2); border-left: 1px solid var(--border); padding-left: 10px; letter-spacing: .05em; text-transform: uppercase; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+.top-stat { text-align: center; }
+.top-stat-val { font-size: 16px; font-weight: 700; color: var(--purple); }
+.top-stat-lbl { font-size: 9px; color: var(--text3); text-transform: uppercase; letter-spacing: .05em; }
+
+/* ── TABS ──────────────────────────────────────────── */
+.tabs-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 16px; display: flex; align-items: flex-end; gap: 1px; }
+.tab { padding: 12px 14px 10px; font-size: 11.5px; font-weight: 600; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 5px; transition: all .15s; white-space: nowrap; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--orange); border-bottom-color: var(--orange); }
+
+/* ── LAYOUT ────────────────────────────────────────── */
+.main-content { flex: 1; overflow-y: auto; padding: 16px; background: var(--bg); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+.app { display: flex; flex-direction: column; height: 100vh; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 10px; }
+.card-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--text3); margin-bottom: 10px; }
+
+/* ── TABLES ────────────────────────────────────────── */
+.log-table { width: 100%; border-collapse: collapse; }
+.log-table th { text-align: left; padding: 8px 10px; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text3); background: var(--surface2); border-bottom: 1px solid var(--border); }
+.log-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; vertical-align: middle; }
+.log-table tr:last-child td { border-bottom: none; }
+.log-table tr:hover { background: var(--surface2); }
+.badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 20px; font-size: 9.5px; font-weight: 600; }
+.badge-ok { background: var(--green-lt); color: var(--green); }
+.badge-error { background: var(--red-lt); color: var(--red); }
+.badge-wa { background: #d1fae5; color: #065f46; }
+.badge-email { background: var(--blue-lt); color: var(--blue); }
+.badge-pending { background: var(--gold-lt); color: var(--gold); }
+
+/* ── TEMPLATE CARDS ────────────────────────────────── */
+.tpl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.tpl-card { border: 2px solid var(--border); border-radius: var(--radius); padding: 10px; cursor: pointer; transition: all .2s; }
+.tpl-card:hover { border-color: var(--orange); background: var(--orange-lt); }
+.tpl-card.selected { border-color: var(--orange); background: var(--orange-lt); }
+.tpl-card-name { font-weight: 600; font-size: 12px; }
+.tpl-card-cat { font-size: 10px; color: var(--text2); margin-top: 2px; }
+
+/* ── VARIABLES ─────────────────────────────────────── */
+.var-group { margin-bottom: 8px; }
+.var-label { font-size: 10px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 3px; }
+.var-input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: 'Bai Jamjuree', sans-serif; font-size: 12px; color: var(--text); background: var(--surface2); outline: none; }
+.var-input:focus { border-color: var(--orange); background: #fff; }
+.var-input:disabled { background: var(--surface2); color: var(--text3); }
+
+/* ── PREVIEW + ADSERVER ROW (v1.5.0) ───────────────── */
+.preview-adserver-row { display: flex; gap: 12px; align-items: stretch; }
+.preview-col { width: 300px; min-width: 280px; flex-shrink: 0; }
+.adserver-col { flex: 1; min-width: 0; }
+
+/* ── PREVIEW MÓVIL ─────────────────────────────────── */
+.wa-preview { background: #e5ddd5; border-radius: 20px; padding: 16px 12px; max-width: 300px; min-height: 180px; border: 2px solid #ccc; position: relative; }
+.wa-preview::before { content: ''; display: block; width: 60px; height: 4px; background: #bbb; border-radius: 2px; margin: -8px auto 12px; }
+.wa-bubble { background: #fff; border-radius: 0 8px 8px 8px; padding: 6px 8px 4px; font-size: 11px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; box-shadow: 0 1px 1px rgba(0,0,0,.13); }
+.wa-bubble-footer { font-size: 8px; color: #8696a0; margin-top: 6px; padding-top: 4px; border-top: 1px solid #e9edef; }
+.wa-bubble-time { float: right; font-size: 8px; color: #8696a0; margin-top: 3px; }
+.wa-bubble-img { width: 100%; border-radius: 6px 6px 0 0; margin-bottom: 4px; max-height: 140px; object-fit: cover; }
+
+/* ── ADSERVER PANEL (v1.5.0) ──────────────────────── */
+.adserver-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; height: 100%; }
+.adserver-title { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--purple); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+.segment-bar { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.segment-chip { padding: 4px 10px; border-radius: 20px; font-size: 10px; font-weight: 600; cursor: pointer; transition: all .15s; border: 1.5px solid var(--border); background: var(--surface); color: var(--text2); }
+.segment-chip:hover { border-color: var(--orange); color: var(--orange); }
+.segment-chip.active { background: var(--orange); border-color: var(--orange); color: #fff; }
+.segment-chip.label-chip { border-color: var(--purple-lt); color: var(--purple); }
+.segment-chip.label-chip:hover { border-color: var(--purple); }
+.segment-chip.label-chip.active { background: var(--purple); border-color: var(--purple); color: #fff; }
+.segment-divider { width: 1px; height: 20px; background: var(--border); align-self: center; margin: 0 2px; }
+
+/* ── DESTINATARIOS ─────────────────────────────────── */
+.dest-controls { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
+.dest-search { flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: 'Bai Jamjuree', sans-serif; font-size: 12px; outline: none; background: var(--surface2); }
+.dest-search:focus { border-color: var(--orange); background: #fff; }
+.dest-list { flex: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); min-height: 150px; max-height: 400px; }
+.dest-item { padding: 5px 10px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 11.5px; border-bottom: 1px solid var(--border); }
+.dest-item:last-child { border-bottom: none; }
+.dest-item:hover { background: var(--surface2); }
+.dest-item.selected { background: var(--orange-lt); }
+.dest-check { width: 16px; height: 16px; border: 2px solid var(--border); border-radius: 3px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 10px; }
+.dest-item.selected .dest-check { background: var(--orange); border-color: var(--orange); color: white; }
+.dest-name { font-weight: 500; }
+.dest-phone { color: var(--text2); font-size: 10.5px; }
+.selected-count { font-size: 11px; color: var(--orange); font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; }
+
+/* ── BOTONES ───────────────────────────────────────── */
+.btn { padding: 8px 16px; border: none; border-radius: var(--radius-sm); font-family: 'Bai Jamjuree', sans-serif; font-weight: 600; font-size: 11.5px; cursor: pointer; transition: all .15s; }
+.btn-primary { background: var(--orange); color: white; }
+.btn-primary:hover { background: #d06a1a; }
+.btn-primary:disabled { background: #f5c9a0; cursor: not-allowed; }
+.btn-secondary { background: var(--surface); color: var(--text2); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--surface2); }
+.btn-sm { padding: 4px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); font-family: 'Bai Jamjuree', sans-serif; font-size: 10.5px; font-weight: 600; color: var(--text2); cursor: pointer; }
+.btn-sm:hover { background: var(--orange); border-color: var(--orange); color: #fff; }
+.btn-icon { width: 32px; height: 32px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; transition: all .15s; }
+.btn-icon:hover { background: var(--orange); border-color: var(--orange); color: #fff; }
+.action-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 8px; }
+
+/* ── FILTER BAR ────────────────────────────────────── */
+.filter-bar { display: flex; gap: 8px; padding: 10px 0; align-items: center; flex-wrap: wrap; }
+.filter-select { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: 'Bai Jamjuree', sans-serif; font-size: 11px; background: var(--surface); color: var(--text); outline: none; }
+
+/* ── MISC ──────────────────────────────────────────── */
+.empty-state { text-align: center; padding: 30px 10px; }
+.empty-icon { font-size: 28px; margin-bottom: 6px; }
+.empty-text { font-size: 12px; color: var(--text3); }
+.result-box { padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; }
+.result-ok { background: var(--green-lt); color: var(--green); }
+.result-partial { background: var(--gold-lt); color: var(--gold); }
+.result-error { background: var(--red-lt); color: var(--red); }
+.loading-bar { height: 3px; background: transparent; position: fixed; top: 0; left: 0; right: 0; z-index: 100; }
+.loading-bar.active { background: linear-gradient(90deg, var(--orange), var(--purple), var(--orange)); background-size: 200%; animation: loadAnim 1.5s infinite; }
+.loading-bar.done { background: var(--green); transition: opacity .5s; }
+@keyframes loadAnim { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: var(--radius); font-size: 12px; font-weight: 600; z-index: 200; opacity: 0; transition: opacity .3s; pointer-events: none; }
+.toast.ok { background: var(--green); color: #fff; }
+.toast.error { background: var(--red); color: #fff; }
+.toast.visible { opacity: 1; }
+
+/* ── IMAGE UPLOAD ──────────────────────────────────── */
+.img-upload-area { display: flex; gap: 12px; align-items: flex-start; }
+.img-preview { width: 80px; height: 80px; border: 2px dashed var(--border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: 24px; color: var(--text3); overflow: hidden; flex-shrink: 0; }
+.img-preview img { width: 100%; height: 100%; object-fit: cover; }
+.img-actions { display: flex; flex-direction: column; gap: 4px; }
+.img-hint { font-size: 9px; color: var(--text3); }
+.img-status { font-size: 10px; font-weight: 600; color: var(--green); }
+.btn-upload { background: var(--surface); border: 1px solid var(--border); color: var(--text2); border-radius: var(--radius-sm); padding: 6px 12px; font-family: 'Bai Jamjuree', sans-serif; font-weight: 600; font-size: 11px; cursor: pointer; transition: all .15s; }
+.btn-upload:hover { border-color: var(--orange); color: var(--orange); }
+.btn-remove-img { background: none; border: none; color: var(--red); font-size: 10px; font-weight: 600; cursor: pointer; padding: 0; font-family: 'Bai Jamjuree', sans-serif; }
+.img-buttons-row { display: flex; gap: 6px; }
+
+/* ── GALLERY ───────────────────────────────────────── */
+.gallery-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.4); z-index: 200; align-items: center; justify-content: center; }
+.gallery-overlay.open { display: flex; }
+.gallery-modal { background: var(--surface); border-radius: var(--radius); padding: 16px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; }
+.gallery-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text2); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+.gallery-close { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--text2); }
+.gallery-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.gallery-item { border-radius: var(--radius-sm); overflow: hidden; cursor: pointer; border: 2px solid transparent; transition: all .15s; aspect-ratio: 1; }
+.gallery-item:hover { border-color: var(--orange); }
+.gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+
+/* ── CAMPAÑAS ──────────────────────────────────────── */
+.camp-list { margin-bottom: 10px; }
+.camp-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 4px; cursor: pointer; transition: all .15s; font-size: 11.5px; }
+.camp-item:hover { border-color: var(--orange); background: var(--orange-lt); }
+.camp-item-name { font-weight: 600; }
+.camp-item-info { font-size: 10px; color: var(--text3); }
+.camp-item-meta { text-align: right; }
+.save-campaign-row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.save-campaign-input { flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: 'Bai Jamjuree', sans-serif; font-size: 11.5px; outline: none; background: var(--surface2); }
+.save-campaign-input:focus { border-color: var(--orange); background: #fff; }
+/* ── POPUP CAMPAÑA ENVIADA ──────────────────────── */
+.campaign-popup-overlay {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.35); z-index: 250; align-items: center; justify-content: center;
+}
+.campaign-popup-overlay.visible { display: flex; }
+.campaign-popup {
+  background: #fff; border-radius: 16px; padding: 32px 40px; text-align: center;
+  box-shadow: 0 20px 60px rgba(0,0,0,.2); transform: scale(0.8); opacity: 0;
+  transition: all .3s ease; max-width: 380px;
+}
+.campaign-popup-overlay.visible .campaign-popup { transform: scale(1); opacity: 1; }
+.campaign-popup-icon { font-size: 52px; margin-bottom: 12px; }
+.campaign-popup-title { font-size: 18px; font-weight: 700; color: var(--green); margin-bottom: 6px; }
+.campaign-popup-detail { font-size: 13px; color: var(--text2); margin-bottom: 16px; }
+.campaign-popup-btn {
+  padding: 8px 24px; border: none; border-radius: var(--radius-sm);
+  background: var(--green); color: #fff; font-family: 'Bai Jamjuree', sans-serif;
+  font-weight: 600; font-size: 12px; cursor: pointer; transition: all .15s;
+}
+.campaign-popup-btn:hover { background: #047857; }
+.campaign-popup-error .campaign-popup-title { color: var(--red); }
+.campaign-popup-error .campaign-popup-btn { background: var(--red); }
+.campaign-popup-error .campaign-popup-btn:hover { background: #b91c1c; }
+.campaign-popup-partial .campaign-popup-title { color: var(--gold); }
+.campaign-popup-partial .campaign-popup-btn { background: var(--gold); }
+.campaign-popup-partial .campaign-popup-btn:hover { background: #b45309; }
+
+
+/* =====================================================
+   MOBILE VERSION — KAMISUITE Comunicaciones v1.5.0
+   Archivo independiente para HTML Component móvil.
+   No requiere cambios en backend.
+   ===================================================== */
+html, body {
+  height: auto;
+  min-height: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  font-size: 13px;
+  background: var(--bg);
+}
+.app {
+  height: auto;
+  min-height: 100vh;
+  max-width: 480px;
+  margin: 0 auto;
+  overflow-x: hidden;
+}
+.topbar {
+  height: auto;
+  min-height: 58px;
+  padding: 10px 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.topbar-left {
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+}
+.logo {
+  font-size: 13px;
+}
+.page-title {
+  border-left: 0;
+  padding-left: 0;
+  font-size: 10px;
+  text-align: right;
+}
+.topbar-right {
+  width: 100%;
+  margin-left: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.top-stat {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 4px;
+}
+.top-stat-val {
+  font-size: 15px;
+}
+.tabs-bar {
+  padding: 0 8px;
+  overflow-x: auto;
+  align-items: center;
+  gap: 4px;
+  -webkit-overflow-scrolling: touch;
+}
+.tabs-bar::-webkit-scrollbar { display: none; }
+.tab {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 12px 12px 9px;
+  font-size: 11px;
+}
+.main-content {
+  padding: 10px;
+  overflow-y: visible;
+}
+.card {
+  padding: 12px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.card-title {
+  font-size: 9.5px;
+  margin-bottom: 8px;
+}
+.tpl-grid {
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tpl-card {
+  padding: 12px;
+}
+.tpl-card-name {
+  font-size: 12.5px;
+}
+.var-input,
+.dest-search,
+.filter-select,
+.save-campaign-input {
+  min-height: 38px;
+  font-size: 13px;
+}
+.preview-adserver-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+.preview-col {
+  width: 100%;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.adserver-col {
+  width: 100%;
+  min-width: 0;
+}
+.wa-preview {
+  width: 100%;
+  max-width: none;
+  min-height: 150px;
+  border-radius: 16px;
+  padding: 15px 10px 12px;
+}
+.wa-bubble {
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.wa-bubble-img {
+  max-height: 180px;
+}
+.adserver-panel {
+  height: auto;
+  padding: 12px;
+  border-radius: 12px;
+}
+.segment-bar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 6px;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+}
+.segment-bar::-webkit-scrollbar { display: none; }
+.segment-chip {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  font-size: 10.5px;
+}
+.segment-divider {
+  flex: 0 0 1px;
+  height: 26px;
+}
+.dest-controls {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.dest-controls .btn-sm,
+.dest-controls .btn-icon,
+.dest-controls .btn,
+.dest-controls .filter-select {
+  width: 100%;
+  min-height: 36px;
+}
+.dest-list {
+  min-height: 180px;
+  max-height: 320px;
+}
+.dest-item {
+  padding: 9px 10px;
+  gap: 9px;
+  font-size: 12px;
+}
+.dest-check {
+  width: 20px;
+  height: 20px;
+}
+.dest-phone {
+  font-size: 11px;
+}
+.selected-count {
+  font-size: 11.5px;
+  margin: 4px 0;
+}
+.action-bar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.action-bar .btn {
+  width: 100%;
+  min-height: 40px;
+  font-size: 12.5px;
+}
+.result-box {
+  text-align: center;
+}
+.img-upload-area {
+  flex-direction: column;
+  gap: 8px;
+}
+.img-preview {
+  width: 100%;
+  height: 150px;
+}
+.img-actions {
+  width: 100%;
+}
+.img-buttons-row,
+.save-campaign-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+.btn-upload,
+.save-campaign-row .btn-sm {
+  width: 100%;
+  min-height: 36px;
+}
+.gallery-modal {
+  width: calc(100% - 20px);
+  max-height: 82vh;
+  padding: 12px;
+}
+.gallery-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+.camp-item {
+  padding: 10px;
+}
+.campaign-popup {
+  width: calc(100% - 28px);
+  max-width: 340px;
+  padding: 24px 18px;
+}
+.campaign-popup-title {
+  font-size: 16px;
+}
+.toast {
+  width: calc(100% - 28px);
+  bottom: 12px;
+  text-align: center;
+}
+.mobile-log-list,
+.mobile-meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mobile-log-item,
+.mobile-meta-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 10px;
+}
+.mobile-log-head,
+.mobile-meta-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+.mobile-log-event,
+.mobile-meta-name {
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.mobile-log-date,
+.mobile-meta-lang {
+  color: var(--text3);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.mobile-log-row,
+.mobile-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 5px;
+  margin-top: 5px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+}
+.mobile-log-label,
+.mobile-meta-label {
+  color: var(--text3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  flex: 0 0 auto;
+}
+.mobile-log-value,
+.mobile-meta-value {
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (min-width: 481px) {
+  .app { max-width: 540px; }
+}
+
+</style>
+</head>
+<body>
+<div class="loading-bar" id="loadingBar"></div>
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">KAMISUITE</div>
+      <div class="page-title">Comunicaciones</div>
+    </div>
+    <div class="topbar-right">
+      <div class="top-stat"><div class="top-stat-val" id="statWa">—</div><div class="top-stat-lbl">con WhatsApp</div></div>
+      <div class="top-stat"><div class="top-stat-val" id="statEnvios">—</div><div class="top-stat-lbl">envíos</div></div>
+    </div>
+  </div>
+  <div class="tabs-bar">
+    <div class="tab active" data-tab="monitor" onclick="switchTab('monitor',this)">📊 Monitor</div>
+    <div class="tab" data-tab="servicio" onclick="switchTab('servicio',this)">🔔 Servicio</div>
+    <div class="tab" data-tab="marketing" onclick="switchTab('marketing',this)">📢 Marketing</div>
+  </div>
+  <div class="main-content">
+
+    <!-- ═══ MONITOR ═══ -->
+    <div class="tab-panel active" id="tab-monitor">
+      <div class="card" style="padding:10px 14px;">
+        <div class="dest-controls">
+          <input type="text" class="dest-search" id="monitorSearch" placeholder="Buscar por nombre o teléfono...">
+          <select class="filter-select" id="filterServicio">
+            <option value="">🔔 Servicio</option>
+            <option value="confirmacion">Confirmación de cita</option>
+            <option value="recordatorio">Recordatorio de cita</option>
+            <option value="salon_news_es">Noticias del salón</option>
+            <option value="appointment_followup_es">Seguimiento post-visita</option>
+          </select>
+          <select class="filter-select" id="filterMarketing">
+            <option value="">📢 Marketing</option>
+            <option value="promo_service_es">Promoción de servicio</option>
+            <option value="promo_product_es">Promoción de producto</option>
+            <option value="gift_card_es">Tarjetas regalo</option>
+            <option value="special_occasion_es">Días especiales</option>
+          </select>
+          <select class="filter-select" id="filterCanal">
+            <option value="">Todo canal</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">Email</option>
+          </select>
+          <button class="btn-icon" id="btnRefresh" title="Actualizar">↻</button>
+          <button class="btn btn-secondary" id="btnMeta" style="font-size:10px;padding:5px 10px;">Estado META</button>
+        </div>
+      </div>
+      <div class="card" id="logCard"><div class="empty-state"><div class="empty-icon">📊</div><div class="empty-text">Cargando historial...</div></div></div>
+      <div class="card" id="metaCard" style="display:none"><div class="card-title">Plantillas en META</div><div id="metaBody"></div></div>
+    </div>
+
+    <!-- ═══ SERVICIO ═══ -->
+    <div class="tab-panel" id="tab-servicio">
+      <div class="card">
+        <div class="card-title">Seleccionar plantilla de servicio</div>
+        <div class="tpl-grid" id="svcGrid"></div>
+      </div>
+      <div class="card" id="svcEditor" style="display:none">
+        <div class="card-title">Variables del mensaje</div>
+        <div id="svcVars"></div>
+      </div>
+      <!-- v1.5.0: Preview + AdServer SIEMPRE VISIBLE -->
+      <div class="preview-adserver-row">
+        <div class="preview-col">
+          <div class="card" style="margin-bottom:0;height:100%">
+            <div class="card-title">Preview WhatsApp</div>
+            <div class="wa-preview"><div class="wa-bubble" id="svcBubble"><div class="empty-text" style="padding:20px;">Selecciona una plantilla</div></div></div>
+          </div>
+        </div>
+        <div class="adserver-col">
+          <div class="adserver-panel">
+            <div class="adserver-title">🎯 AD SERVER CAMPAÑAS</div>
+            <!-- CHIPS HARDCODEADOS — no dependen de ninguna llamada -->
+            <div class="segment-bar">
+              <div class="segment-chip" data-segment="COLOR">Color</div>
+              <div class="segment-chip" data-segment="TRATAMIENTOS">Tratamientos</div>
+              <div class="segment-chip" data-segment="PEINADOS">Peinados</div>
+              <div class="segment-chip" data-segment="CORTE">Corte</div>
+              <div class="segment-chip" data-segment="SPA">Spa</div>
+              <div class="segment-chip" data-segment="PRODUCTOS">Productos</div>
+              <div class="segment-divider"></div>
+              <div class="segment-chip label-chip" data-label="HOMBRE">Hombre</div>
+              <div class="segment-chip label-chip" data-label="MUJER">Mujer</div>
+              <div class="segment-chip label-chip" data-segment="INFANTIL">Infantil</div>
+            </div>
+            <div class="dest-controls">
+              <input type="text" class="dest-search" id="svcSearch" placeholder="Filtrar por nombre o teléfono...">
+              <button class="btn-sm" id="btnSvcSelectAll" style="background:var(--green-lt);color:var(--green);border-color:var(--green);">☑ Marcar todos</button>
+              <button class="btn-sm" id="btnSvcAll">Restaurar</button>
+              <button class="btn-sm" id="btnSvcClear" style="font-size:9px;">Limpiar</button>
+            </div>
+            <div class="dest-controls" style="margin-bottom:4px;">
+              <input type="text" class="dest-search" id="svcManualPhone" placeholder="Añadir teléfono directo (ej: 612345678)" style="flex:0.6;">
+              <input type="text" class="dest-search" id="svcManualName" placeholder="Nombre (opcional)" style="flex:0.4;">
+              <button class="btn-sm" id="btnSvcAddPhone" style="background:var(--purple-lt);color:var(--purple);border-color:var(--purple);">+ Añadir</button>
+            </div>
+            <div class="selected-count"><span id="svcCount">0 seleccionados</span></div>
+            <div class="dest-list" id="svcDest"><div class="empty-state"><div class="empty-text">Cargando contactos...</div></div></div>
+            <div class="action-bar">
+              <div id="svcResult"></div>
+              <button class="btn btn-primary" id="btnSvcSend" disabled>📤 Enviar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ MARKETING ═══ -->
+    <div class="tab-panel" id="tab-marketing">
+      <div class="card">
+        <div class="card-title">Seleccionar campaña</div>
+        <div class="tpl-grid" id="mktGrid"></div>
+      </div>
+      <div class="card" id="mktCampaignsCard" style="display:none">
+        <div class="card-title">📋 Campañas guardadas</div>
+        <div class="camp-list" id="campList"><div class="empty-state"><div class="empty-text">Sin campañas guardadas</div></div></div>
+      </div>
+      <div class="card" id="mktEditor" style="display:none">
+        <div class="card-title">Variables del mensaje</div>
+        <div class="var-group">
+          <div class="var-label">Imagen de campaña</div>
+          <div class="img-upload-area">
+            <div class="img-preview" id="mktImgPreview">📷</div>
+            <div class="img-actions">
+              <input type="file" id="mktImgFile" accept="image/jpeg,image/png,image/webp" style="display:none;">
+              <div class="img-buttons-row">
+                <button class="btn-upload" id="btnMktUpload">📁 Subir imagen</button>
+                <button class="btn-upload" id="btnMktGallery">🖼️ Elegir existente</button>
+              </div>
+              <div class="img-hint">JPG, PNG, WebP. Máx. 5 MB</div>
+              <div class="img-status" id="mktImgStatus" style="display:none;"></div>
+              <button class="btn-remove-img" id="btnMktRemoveImg" style="display:none;">✕ Quitar imagen</button>
+            </div>
+          </div>
+        </div>
+        <div id="mktVars"></div>
+        <div class="save-campaign-row">
+          <input type="text" class="save-campaign-input" id="campNameInput" placeholder="Nombre de la campaña...">
+          <button class="btn-sm" id="btnSaveCampaign">💾 Guardar</button>
+        </div>
+      </div>
+      <!-- v1.5.0: Preview + AdServer SIEMPRE VISIBLE -->
+      <div class="preview-adserver-row">
+        <div class="preview-col">
+          <div class="card" style="margin-bottom:0;height:100%">
+            <div class="card-title">Preview WhatsApp</div>
+            <div class="wa-preview"><div class="wa-bubble" id="mktBubble"><div class="empty-text" style="padding:20px;">Selecciona una plantilla</div></div></div>
+          </div>
+        </div>
+        <div class="adserver-col">
+          <div class="adserver-panel">
+            <div class="adserver-title">🎯 AD SERVER CAMPAÑAS</div>
+            <!-- CHIPS HARDCODEADOS -->
+            <div class="segment-bar">
+              <div class="segment-chip" data-segment="COLOR">Color</div>
+              <div class="segment-chip" data-segment="TRATAMIENTOS">Tratamientos</div>
+              <div class="segment-chip" data-segment="PEINADOS">Peinados</div>
+              <div class="segment-chip" data-segment="CORTE">Corte</div>
+              <div class="segment-chip" data-segment="SPA">Spa</div>
+              <div class="segment-chip" data-segment="PRODUCTOS">Productos</div>
+              <div class="segment-divider"></div>
+              <div class="segment-chip label-chip" data-label="HOMBRE">Hombre</div>
+              <div class="segment-chip label-chip" data-label="MUJER">Mujer</div>
+              <div class="segment-chip label-chip" data-segment="INFANTIL">Infantil</div>
+            </div>
+            <div class="dest-controls">
+              <input type="text" class="dest-search" id="mktSearch" placeholder="Filtrar por nombre o teléfono...">
+              <button class="btn-sm" id="btnMktSelectAll" style="background:var(--green-lt);color:var(--green);border-color:var(--green);">☑ Marcar todos</button>
+              <button class="btn-sm" id="btnMktAll">Restaurar</button>
+              <button class="btn-sm" id="btnMktClear" style="font-size:9px;">Limpiar</button>
+            </div>
+            <div class="dest-controls" style="margin-bottom:4px;">
+              <input type="text" class="dest-search" id="mktManualPhone" placeholder="Añadir teléfono directo (ej: 612345678)" style="flex:0.6;">
+              <input type="text" class="dest-search" id="mktManualName" placeholder="Nombre (opcional)" style="flex:0.4;">
+              <button class="btn-sm" id="btnMktAddPhone" style="background:var(--purple-lt);color:var(--purple);border-color:var(--purple);">+ Añadir</button>
+            </div>
+            <div class="selected-count"><span id="mktCount">0 seleccionados</span></div>
+            <div class="dest-list" id="mktDest"><div class="empty-state"><div class="empty-text">Cargando contactos...</div></div></div>
+            <div class="action-bar">
+              <div id="mktResult"></div>
+              <button class="btn btn-primary" id="btnMktSend" disabled>📤 Enviar campaña</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- GALERÍA -->
+<div class="gallery-overlay" id="galleryOverlay">
+  <div class="gallery-modal">
+    <div class="gallery-title"><span>🖼️ Imágenes del sitio</span><button class="gallery-close" id="btnGalleryClose">✕</button></div>
+    <div class="gallery-grid" id="galleryGrid"><div class="gallery-empty">Cargando imágenes...</div></div>
+  </div>
+</div>
+<div class="campaign-popup-overlay" id="campaignPopup">
+  <div class="campaign-popup">
+    <div class="campaign-popup-icon" id="cpIcon">🚀</div>
+    <div class="campaign-popup-title" id="cpTitle">¡CAMPAÑA ENVIADA!</div>
+    <div class="campaign-popup-detail" id="cpDetail"></div>
+    <button class="campaign-popup-btn" id="cpClose">Aceptar</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var TAG = '[Comunicaciones][Widget][MOBILE][1.5.0]';
+
+// ═══ STATE ════════════════════════════════════════
+var templates = [];
+var allContactos = [];   // v1.5.0: TODOS los contactos con teléfono, precargados
+var contactos = [];      // lista filtrada visible en pantalla
+var selSvc = null;
+var selMkt = null;
+var svcSel = {};
+var mktSel = {};
+var activeTab = 'monitor';
+var mktImageUrl = '';
+var currentCampaignId = null;
+
+// ═══ PLANTILLAS META ══════════════════════════════
+var BODIES = {
+  'booking_confirmation_es': '*Cita confirmada*\nHola {{1}}:\n\nGracias por tu reserva en {{2}} 🎉\n\nEstos son los detalles de la sesión:\n\n💅 Servicio: {{3}}\n👤 Personal: {{4}}\n📅 Fecha y hora: {{5}}\n📍 Ubicación: {{6}}\n\nSi tienes alguna pregunta o necesitas hacer cambios, contáctanos en:\n{{7}}\n{{8}}\n\nTambién puedes acceder al área de cliente de nuestra web en la página de INICIO.\n\nEste es un correo automático, por favor no respondas.\n\n¡Nos vemos pronto!',
+  'booking_reminder_es': '*Te recordamos tu cita*\nHola {{1}}:\n\nEste mensaje es para recordarte tu cita en {{2}} 🎉\n\nEstos son los detalles de la sesión:\n\n💅 Servicio: {{3}}\n👤 Personal: {{4}}\n📅 Fecha y hora: {{5}}\n📍 Ubicación: {{6}}\n\nSi necesitas hacer cambios o no puedes acudir, te rogamos que nos contactes en:\n{{7}}\n{{8}}\n\nTambién puedes entrar en el área de cliente con tu usuario registrado desde la página de inicio de nuestra web.\n\nTe rogamos estés en el salón 5 minutos antes del comienzo del servicio.\n\n¡Nos vemos pronto!\n\n(Este es un servicio automático por favor no respondas)',
+  'salon_news_es': 'Hola {{1}} 👋\n\nTe informamos desde {{2}}:\n\n{{3}}\n\nSi tienes alguna duda, puedes contactarnos en el {{4}}.\n\n¡Gracias por confiar en nosotros!',
+  'appointment_followup_es': 'Hola {{1}} 😊\n\nHan pasado unos días desde tu última visita a {{2}} y nos encantaría saber cómo te encuentras con tu {{3}}.\n\nSi necesitas cualquier retoque o tienes alguna consulta, estamos aquí para ayudarte.\n\n📞 {{4}}',
+  'promo_service_es': '¡Hola {{1}}! 🎉\n\nTenemos una oferta especial para ti en {{2}}:\n\n✨ {{3}} ✨\n\n{{4}}\n\n📅 Válido hasta el {{5}}.\n\n¡No te lo pierdas!',
+  'promo_product_es': '¡Hola {{1}}! 💇‍♀️\n\nEn {{2}} hemos incorporado algo nuevo que te va a encantar:\n\n🛍️ {{3}}\n\n{{4}}\n\n💰 {{5}}\n\n¡Ven a conocerlo!',
+  'gift_card_es': '¡Hola {{1}}! 🎁\n\n¿Buscas el regalo perfecto? En {{2}} tenemos tarjetas regalo desde {{3}}.\n\n{{4}}\n\n🎄 Ideal para cualquier ocasión especial.\n\n¡Regala belleza y bienestar!',
+  'special_occasion_es': '¡Hola {{1}}! {{2}}\n\nEn {{3}} hemos preparado algo especial para esta ocasión:\n\n{{4}}\n\n{{5}}\n\n📅 Disponible hasta el {{6}}.'
+};
+var FOOTERS = {
+  'booking_confirmation_es': 'Enviado por KAMISUITE · kamisuite.com',
+  'booking_reminder_es': 'Enviado por KAMISUITE | kamisuite.com',
+  'promo_service_es': 'Responde STOP para dejar de recibir ofertas.',
+  'promo_product_es': 'Responde STOP para dejar de recibir ofertas.',
+  'gift_card_es': 'Responde STOP para dejar de recibir ofertas.',
+  'special_occasion_es': 'Responde STOP para dejar de recibir ofertas.'
+};
+var LABELS = {
+  'booking_confirmation_es': ['Nombre cliente','Nombre salón','Servicio','Personal','Fecha y hora','Ubicación','Email contacto','Teléfono salón'],
+  'booking_reminder_es': ['Nombre cliente','Nombre salón','Servicio','Personal','Fecha y hora','Ubicación','Email contacto','Teléfono salón'],
+  'salon_news_es': ['Nombre cliente','Nombre salón','Texto del aviso','Teléfono salón'],
+  'appointment_followup_es': ['Nombre cliente','Nombre salón','Servicio realizado','Teléfono salón'],
+  'promo_service_es': ['Nombre cliente','Nombre salón','Nombre servicio/promo','Descripción/precio','Fecha fin'],
+  'promo_product_es': ['Nombre cliente','Nombre salón','Nombre producto','Descripción','Precio o descuento'],
+  'gift_card_es': ['Nombre cliente','Nombre salón','Precio mínimo','Texto adicional'],
+  'special_occasion_es': ['Nombre cliente','Emoji','Nombre salón','Título campaña','Detalle/condiciones','Fecha fin']
+};
+
+// v1.4.0: plantillas con botón CTA de URL dinámica
+var BUTTON_TPL = {
+  'promo_service_es':    { label: 'URL reserva (solo el path tras la /)',  hint: 'p.ej. reservatintehombre' },
+  'promo_product_es':    { label: 'URL producto (solo el path tras la /)', hint: 'p.ej. product-page/insta-glaze-250ml' },
+  'gift_card_es':        { label: 'URL tienda (solo el path tras la /)',   hint: 'p.ej. tarjeta-regalo' },
+  'special_occasion_es': { label: 'URL campaña (solo el path tras la /)',  hint: 'p.ej. dia-de-la-madre' }
+};
+
+// ═══ COMMS ════════════════════════════════════════
+function sendToPage(t, d) { try { window.parent.postMessage({ type: t, ...d }, '*'); } catch(e) {} }
+function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+window.addEventListener('message', function(ev) {
+  var msg = ev.data;
+  if (!msg || !msg.type) return;
+  switch (msg.type) {
+    case 'loading': setLoading(true); break;
+    case 'cacheReady':
+      setLoading(false);
+      document.getElementById('statWa').textContent = msg.conTelefono || 0;
+      sendToPage('getTemplates');
+      sendToPage('getHistorial', { limit: 500 });
+      // v1.5.0: pedir TODOS los contactos para precargar lista
+      sendToPage('buscarContactos', { query: '**ALL**' });
+      break;
+    case 'templatesCargados': templates = msg.templates || []; renderTplCards(); break;
+    case 'historialCargado':
+      allHistorial = msg.registros || [];
+      filterAndRenderMonitor();
+      break;
+    case 'estadoMeta': renderMeta(msg); break;
+    case 'contactosEncontrados':
+      // v1.5.0: guardar lista completa y mostrar
+      var incoming = msg.contactos || [];
+      if (incoming.length > 50) { allContactos = incoming; } // es una carga completa
+      contactos = incoming;
+      renderDest('svc'); renderDest('mkt');
+      break;
+    case 'broadcastProgress': setLoading(true); break;
+    case 'broadcastCompletado': setLoading(false); renderResult(msg); break;
+    case 'marketingImageReady': onImageReady(msg); break;
+    case 'marketingImageError': onImageError(msg); break;
+    case 'mediaImagesLoaded': onGalleryLoaded(msg); break;
+    case 'mediaImagesError': setLoading(false); showToast('Error cargando galería', 'error'); break;
+    case 'campaignSaved': onCampaignSaved(msg); break;
+    case 'campaignSaveError': setLoading(false); showToast('Error: ' + (msg.error || ''), 'error'); break;
+    case 'campaignsLoaded': onCampaignsLoaded(msg); break;
+    // v1.5.0: AdServer responses
+    case 'segmentoFiltrado': setLoading(false); onSegmentoFiltrado(msg); break;
+    case 'labelFiltrado': setLoading(false); onLabelFiltrado(msg); break;
+    case 'error': setLoading(false); showToast(msg.message || 'Error', 'error'); break;
+  }
+});
+
+document.addEventListener('DOMContentLoaded', function() { sendToPage('ready', {}); });
+
+// ═══ LOADING & TOAST ══════════════════════════════
+function setLoading(on) {
+  var b = document.getElementById('loadingBar');
+  b.className = on ? 'loading-bar active' : 'loading-bar done';
+  if (!on) setTimeout(function() { b.className = 'loading-bar'; }, 500);
+}
+function showToast(m, t) {
+  var el = document.getElementById('toast');
+  el.textContent = m; el.className = 'toast ' + t + ' visible';
+  setTimeout(function() { el.className = 'toast'; }, 3000);
+}
+
+// ═══ TABS ═════════════════════════════════════════
+function switchTab(n, el) {
+  activeTab = n;
+  document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+  if (el) el.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+  var p = document.getElementById('tab-' + n);
+  if (p) p.classList.add('active');
+}
+
+// ═══ TEMPLATE CARDS ═══════════════════════════════
+function renderTplCards() {
+  var svc = templates.filter(function(t) { return t.category === 'utility'; });
+  var mkt = templates.filter(function(t) { return t.category === 'marketing'; });
+  document.getElementById('svcGrid').innerHTML = svc.map(function(t) {
+    return '<div class="tpl-card" data-name="'+esc(t.name)+'" data-label="'+esc(t.label)+'">'
+      +'<div class="tpl-card-name">'+esc(t.label)+'</div><div class="tpl-card-cat">Servicio</div></div>';
+  }).join('') || '<div class="empty-state"><div class="empty-text">Sin plantillas</div></div>';
+  document.getElementById('mktGrid').innerHTML = mkt.map(function(t) {
+    return '<div class="tpl-card" data-name="'+esc(t.name)+'" data-label="'+esc(t.label)+'">'
+      +'<div class="tpl-card-name">'+esc(t.label)+'</div><div class="tpl-card-cat">Marketing</div></div>';
+  }).join('') || '<div class="empty-state"><div class="empty-text">Sin plantillas</div></div>';
+  document.querySelectorAll('#svcGrid .tpl-card').forEach(function(c) { c.addEventListener('click', function() { selectTpl('svc', this); }); });
+  document.querySelectorAll('#mktGrid .tpl-card').forEach(function(c) { c.addEventListener('click', function() { selectTpl('mkt', this); }); });
+}
+
+function selectTpl(tab, card) {
+  var name = card.dataset.name, label = card.dataset.label;
+  document.querySelectorAll('#' + tab + 'Grid .tpl-card').forEach(function(c) { c.classList.remove('selected'); });
+  card.classList.add('selected');
+  if (tab === 'svc') {
+    selSvc = { name: name, label: label };
+    document.getElementById('svcEditor').style.display = '';
+  } else {
+    selMkt = { name: name, label: label };
+    document.getElementById('mktEditor').style.display = '';
+    document.getElementById('mktCampaignsCard').style.display = '';
+    sendToPage('loadCampaigns', { templateName: name });
+  }
+  renderVars(tab, name);
+  updateBubble(tab, name);
+}
+
+function renderVars(tab, tplName) {
+  var lbls = LABELS[tplName] || [];
+  var container = document.getElementById(tab + 'Vars');
+  var html = '';
+  lbls.forEach(function(lbl, i) {
+    var isNombre = lbl.toLowerCase().indexOf('nombre cliente') >= 0;
+    html += '<div class="var-group"><div class="var-label">{{' + (i+1) + '}} ' + esc(lbl) + '</div>'
+      + '<input type="text" class="var-input vf" data-idx="'+i+'" placeholder="'+esc(lbl)+'"'
+      + (isNombre ? ' disabled value="(nombre del cliente)"' : '') + '></div>';
+  });
+  // v1.4.0: campo URL del botón CTA si la plantilla lo tiene
+  var btn = BUTTON_TPL[tplName];
+  if (btn) {
+    html += '<div class="var-group" style="border-top:1px dashed var(--border);padding-top:10px;margin-top:10px;">';
+    html += '<div class="var-label" style="color:var(--purple);">🔗 ' + esc(btn.label) + '</div>';
+    html += '<input type="text" class="var-input" id="' + tab + 'BtnUrl" placeholder="' + esc(btn.hint) + '">';
+    html += '</div>';
+  }
+  container.innerHTML = html;
+  container.querySelectorAll('.vf').forEach(function(inp) { inp.addEventListener('input', function() { updateBubble(tab, tplName); }); });
+}
+
+function updateBubble(tab, tplName) {
+  var body = BODIES[tplName] || '';
+  var footer = FOOTERS[tplName] || '';
+  document.querySelectorAll('#' + tab + 'Vars .vf').forEach(function(inp) {
+    var idx = parseInt(inp.dataset.idx);
+    var val = inp.disabled ? '{{' + (idx+1) + '}}' : (inp.value || '{{' + (idx+1) + '}}');
+    body = body.split('{{' + (idx+1) + '}}').join(val);
+  });
+  var bubbleEl = document.getElementById(tab + 'Bubble');
+  var imgHtml = (tab === 'mkt' && mktImageUrl) ? '<img class="wa-bubble-img" src="'+esc(mktImageUrl)+'" alt="">' : '';
+  bubbleEl.innerHTML = imgHtml + body.replace(/\n/g,'<br>') + '<span class="wa-bubble-time">00:38 ✓✓</span>'
+    + (footer ? '<div class="wa-bubble-footer">'+esc(footer)+'</div>' : '');
+}
+
+// ═══ IMAGE HANDLERS ═══════════════════════════════
+document.getElementById('btnMktUpload').addEventListener('click', function() { document.getElementById('mktImgFile').click(); });
+document.getElementById('mktImgFile').addEventListener('change', function() {
+  var file = this.files[0]; if (!file) return;
+  if (file.size > 5*1024*1024) { showToast('Imagen demasiado grande (máx. 5MB)', 'error'); return; }
+  var reader = new FileReader();
+  reader.onload = function(e) { sendToPage('uploadMarketingImage', { base64Data: e.target.result.split(',')[1], fileName: file.name, mimeType: file.type }); };
+  reader.readAsDataURL(file);
+});
+function onImageReady(msg) {
+  setLoading(false); mktImageUrl = msg.publicUrl;
+  document.getElementById('mktImgPreview').innerHTML = '<img src="'+esc(msg.publicUrl)+'" alt="">';
+  document.getElementById('mktImgStatus').textContent = '✓ Imagen cargada';
+  document.getElementById('mktImgStatus').style.display = 'block';
+  document.getElementById('btnMktRemoveImg').style.display = 'inline';
+  if (selMkt) updateBubble('mkt', selMkt.name);
+  showToast('Imagen subida', 'ok');
+}
+function onImageError(msg) { setLoading(false); showToast('Error: '+(msg.error||''), 'error'); }
+document.getElementById('btnMktRemoveImg').addEventListener('click', function() {
+  mktImageUrl = ''; document.getElementById('mktImgPreview').innerHTML = '📷';
+  document.getElementById('mktImgStatus').style.display = 'none'; this.style.display = 'none';
+  if (selMkt) updateBubble('mkt', selMkt.name);
+});
+document.getElementById('btnMktGallery').addEventListener('click', function() { sendToPage('listMediaImages', { limit: 50 }); });
+function onGalleryLoaded(msg) {
+  setLoading(false); var imgs = msg.imagenes || [];
+  var grid = document.getElementById('galleryGrid');
+  grid.innerHTML = imgs.length ? imgs.map(function(img) {
+    return '<div class="gallery-item" data-url="'+esc(img.publicUrl)+'"><img src="'+esc(img.publicUrl)+'" alt="'+esc(img.fileName||'')+'" loading="lazy"></div>';
+  }).join('') : '<div class="gallery-empty">Sin imágenes</div>';
+  grid.querySelectorAll('.gallery-item').forEach(function(item) {
+    item.addEventListener('click', function() {
+      mktImageUrl = this.dataset.url;
+      document.getElementById('mktImgPreview').innerHTML = '<img src="'+esc(mktImageUrl)+'" alt="">';
+      document.getElementById('mktImgStatus').textContent = '✓ Imagen seleccionada';
+      document.getElementById('mktImgStatus').style.display = 'block';
+      document.getElementById('btnMktRemoveImg').style.display = 'inline';
+      document.getElementById('galleryOverlay').classList.remove('open');
+      if (selMkt) updateBubble('mkt', selMkt.name);
+    });
+  });
+  document.getElementById('galleryOverlay').classList.add('open');
+}
+document.getElementById('btnGalleryClose').addEventListener('click', function() { document.getElementById('galleryOverlay').classList.remove('open'); });
+
+// ═══ CAMPAÑAS v1.2.0 ═════════════════════════════
+document.getElementById('btnSaveCampaign').addEventListener('click', function() {
+  if (!selMkt) { showToast('Selecciona una plantilla', 'error'); return; }
+  var name = document.getElementById('campNameInput').value.trim();
+  if (!name) { showToast('Escribe un nombre', 'error'); return; }
+  var inputs = document.querySelectorAll('#mktVars .vf');
+  var params = []; inputs.forEach(function(inp) { params.push(inp.disabled ? '' : (inp.value||'')); });
+  var btnUrlEl = document.getElementById('mktBtnUrl');
+  var buttonUrl = btnUrlEl ? (btnUrlEl.value||'').trim() : '';
+  sendToPage('saveCampaign', { _id: currentCampaignId||null, templateName: selMkt.name, campaignName: name, imageUrl: mktImageUrl, parameters: JSON.stringify(params), buttonUrl: buttonUrl });
+});
+function onCampaignSaved(msg) {
+  setLoading(false);
+  if (msg.campaign) { currentCampaignId = msg.campaign._id; showToast('Campaña guardada', 'ok'); sendToPage('loadCampaigns', { templateName: selMkt?selMkt.name:'' }); }
+}
+function onCampaignsLoaded(msg) {
+  setLoading(false); var camps = msg.campaigns || [];
+  var el = document.getElementById('campList');
+  if (!camps.length) { el.innerHTML = '<div style="text-align:center;padding:10px;color:var(--text3);font-size:11px;">Sin campañas guardadas</div>'; return; }
+  el.innerHTML = camps.map(function(c) {
+    var lastStr = c.lastUsed ? new Date(c.lastUsed).toLocaleDateString('es-ES',{day:'2-digit',month:'short'}) : 'Nunca';
+    return '<div class="camp-item" data-id="'+esc(c._id)+'" data-params="'+esc(c.parameters)+'" data-img="'+esc(c.imageUrl)+'" data-buttonurl="'+esc(c.buttonUrl||'')+'" data-name="'+esc(c.campaignName)+'">'
+      +'<div><div class="camp-item-name">'+esc(c.campaignName)+'</div></div>'
+      +'<div class="camp-item-meta"><div class="camp-item-info">'+lastStr+'</div><div class="camp-item-info">'+c.timesUsed+'x</div></div></div>';
+  }).join('');
+  el.querySelectorAll('.camp-item').forEach(function(item) { item.addEventListener('click', function() { loadCampaignIntoEditor(this); }); });
+}
+function loadCampaignIntoEditor(item) {
+  currentCampaignId = item.dataset.id;
+  var params = []; try { params = JSON.parse(item.dataset.params); } catch(e) {}
+  document.getElementById('campNameInput').value = item.dataset.name || '';
+  mktImageUrl = item.dataset.img || '';
+  if (mktImageUrl) {
+    document.getElementById('mktImgPreview').innerHTML = '<img src="'+esc(mktImageUrl)+'" alt="">';
+    document.getElementById('mktImgStatus').textContent = '✓ Imagen cargada';
+    document.getElementById('mktImgStatus').style.display = 'block';
+    document.getElementById('btnMktRemoveImg').style.display = 'inline';
+  } else {
+    document.getElementById('mktImgPreview').innerHTML = '📷';
+    document.getElementById('mktImgStatus').style.display = 'none';
+    document.getElementById('btnMktRemoveImg').style.display = 'none';
+  }
+  var inputs = document.querySelectorAll('#mktVars .vf');
+  inputs.forEach(function(inp, i) { if (!inp.disabled && params[i] !== undefined) inp.value = params[i]; });
+  // Recargar URL del botón CTA
+  var btnUrlEl = document.getElementById('mktBtnUrl');
+  if (btnUrlEl) btnUrlEl.value = item.dataset.buttonurl || '';
+  if (selMkt) updateBubble('mkt', selMkt.name);
+  showToast('Campaña cargada', 'ok');
+}
+
+// ═══ HISTORIAL ════════════════════════════════════
+function renderHistorial(regs) {
+  document.getElementById('statEnvios').textContent = regs.length;
+  var el = document.getElementById('logCard');
+  if (!regs.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-icon">📊</div><div class="empty-text">Sin envíos</div></div>';
+    return;
+  }
+  var html = '<div class="mobile-log-list">';
+  regs.forEach(function(r) {
+    var f = r.createdDate ? new Date(r.createdDate).toLocaleString('es-ES',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
+    var ch = r.channel==='whatsapp' ? '<span class="badge badge-wa">WhatsApp</span>' : '<span class="badge badge-email">Email</span>';
+    var res = r.result==='ok' ? '<span class="badge badge-ok">✓ OK</span>' : '<span class="badge badge-error">✗ Error</span>';
+    html += '<div class="mobile-log-item">'
+      + '<div class="mobile-log-head"><div class="mobile-log-event">'+esc(r.event||'—')+'</div><div class="mobile-log-date">'+f+'</div></div>'
+      + '<div class="mobile-log-row"><span class="mobile-log-label">Canal</span><span class="mobile-log-value">'+ch+'</span></div>'
+      + '<div class="mobile-log-row"><span class="mobile-log-label">Cliente</span><span class="mobile-log-value">'+esc(r.clientName||'—')+'</span></div>'
+      + '<div class="mobile-log-row"><span class="mobile-log-label">Destino</span><span class="mobile-log-value">'+esc(r.recipient||'—')+'</span></div>'
+      + '<div class="mobile-log-row"><span class="mobile-log-label">Resultado</span><span class="mobile-log-value">'+res+'</span></div>'
+      + '</div>';
+  });
+  el.innerHTML = html + '</div>';
+}
+
+// ═══ ESTADO META ══════════════════════════════════
+function renderMeta(msg) {
+  setLoading(false);
+  document.getElementById('metaCard').style.display = 'block';
+  var body = document.getElementById('metaBody');
+  if (!msg.ok) {
+    body.innerHTML = '<div style="color:var(--red);">'+esc(msg.error||'Error')+'</div>';
+    return;
+  }
+  var ts = msg.templates || [];
+  if (!ts.length) {
+    body.innerHTML = '<div class="empty-state"><div class="empty-text">Sin plantillas</div></div>';
+    return;
+  }
+  var html = '<div class="mobile-meta-list">';
+  ts.forEach(function(t) {
+    var bc = t.status==='APPROVED'?'badge-ok':(t.status==='REJECTED'?'badge-error':'badge-pending');
+    html += '<div class="mobile-meta-item">'
+      + '<div class="mobile-meta-head"><div class="mobile-meta-name">'+esc(t.name)+'</div><div class="mobile-meta-lang">'+esc(t.language||'—')+'</div></div>'
+      + '<div class="mobile-meta-row"><span class="mobile-meta-label">Categoría</span><span class="mobile-meta-value">'+esc(t.category||'—')+'</span></div>'
+      + '<div class="mobile-meta-row"><span class="mobile-meta-label">Estado</span><span class="mobile-meta-value"><span class="badge '+bc+'">'+esc(t.status)+'</span></span></div>'
+      + '</div>';
+  });
+  body.innerHTML = html + '</div>';
+}
+
+// ═══ ADSERVER — SEGMENT CHIPS (v1.5.0) ════════════
+// Chips hardcodeados en HTML. Event binding directo.
+
+function bindSegmentChips() {
+  document.querySelectorAll('.segment-chip[data-segment]').forEach(function(chip) {
+    chip.addEventListener('click', function() {
+      var seg = this.dataset.segment;
+      var bar = this.parentElement;
+      if (this.classList.contains('active')) {
+        this.classList.remove('active');
+        contactos = allContactos.slice();
+        renderDest('svc'); renderDest('mkt');
+        return;
+      }
+      // Desactivar otros chips en esta barra
+      bar.querySelectorAll('.segment-chip').forEach(function(c) { c.classList.remove('active'); });
+      this.classList.add('active');
+      sendToPage('filtrarPorSegmento', { segmento: seg });
+    });
+  });
+  document.querySelectorAll('.segment-chip[data-label]').forEach(function(chip) {
+    chip.addEventListener('click', function() {
+      var lbl = this.dataset.label;
+      var bar = this.parentElement;
+      if (this.classList.contains('active')) {
+        this.classList.remove('active');
+        contactos = allContactos.slice();
+        renderDest('svc'); renderDest('mkt');
+        return;
+      }
+      bar.querySelectorAll('.segment-chip').forEach(function(c) { c.classList.remove('active'); });
+      this.classList.add('active');
+      sendToPage('filtrarPorLabel', { labelName: lbl });
+    });
+  });
+}
+
+function onSegmentoFiltrado(msg) {
+  contactos = msg.contactos || [];
+  renderDest('svc'); renderDest('mkt');
+  if (msg.total === 0 && !msg.error) showToast('Sin clientes en ' + (msg.segmento || ''), 'error');
+  if (msg.error) showToast('Error: ' + msg.error, 'error');
+}
+
+function onLabelFiltrado(msg) {
+  contactos = msg.contactos || [];
+  renderDest('svc'); renderDest('mkt');
+  if (msg.total === 0 && !msg.error) showToast('Sin clientes con etiqueta ' + (msg.labelName || ''), 'error');
+  if (msg.error) showToast('Error: ' + msg.error, 'error');
+}
+
+// ═══ DESTINATARIOS ════════════════════════════════
+function renderDest(tab) {
+  if (tab !== 'svc' && tab !== 'mkt') return;
+  var selSet = tab === 'svc' ? svcSel : mktSel;
+  var el = document.getElementById(tab + 'Dest');
+  if (!contactos.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-text">Sin contactos</div></div>';
+    return;
+  }
+  el.innerHTML = contactos.map(function(c) {
+    var key = c.contactId || c.telefono;
+    var isSel = selSet[key];
+    return '<div class="dest-item'+(isSel?' selected':'')+'" data-key="'+esc(key)+'" data-phone="'+esc(c.telefono||'')+'" data-name="'+esc(c.nombreCompleto||'')+'">'
+      +'<div class="dest-check">'+(isSel?'✓':'')+'</div>'
+      +'<div><div class="dest-name">'+esc(c.nombreCompleto||'(sin nombre)')+'</div>'
+      +'<div class="dest-phone">'+esc(c.telefono||'')+'</div></div></div>';
+  }).join('');
+  el.querySelectorAll('.dest-item').forEach(function(item) {
+    item.addEventListener('click', function() {
+      var key = this.dataset.key;
+      if (selSet[key]) {
+        delete selSet[key]; this.classList.remove('selected'); this.querySelector('.dest-check').textContent = '';
+      } else {
+        selSet[key] = { phone: this.dataset.phone, name: this.dataset.name };
+        this.classList.add('selected'); this.querySelector('.dest-check').textContent = '✓';
+      }
+      updateCnt(tab);
+    });
+  });
+}
+
+function updateCnt(tab) {
+  var selSet = tab === 'svc' ? svcSel : mktSel;
+  var cnt = Object.keys(selSet).length;
+  document.getElementById(tab + 'Count').textContent = cnt + ' seleccionados';
+  document.getElementById('btn' + (tab === 'svc' ? 'Svc' : 'Mkt') + 'Send').disabled = cnt === 0;
+}
+
+// ═══ SEARCH — filtro en vivo sobre lista visible ══
+function setupLocalFilter(inputId, tab) {
+  document.getElementById(inputId).addEventListener('input', function() {
+    var q = this.value.trim().toLowerCase();
+    if (!q) { contactos = allContactos.slice(); renderDest(tab); return; }
+    var qPhone = q.replace(/[\s\-\(\)]/g, '');
+    contactos = allContactos.filter(function(c) {
+      var n = (c.nombreCompleto||'').toLowerCase();
+      var t = (c.telefono||'').replace(/[\s\-\(\)]/g, '');
+      return n.includes(q) || t.includes(qPhone);
+    });
+    renderDest(tab);
+  });
+}
+
+// Marcar todos los visibles
+document.getElementById('btnSvcSelectAll').addEventListener('click', function() { selectAllVisible('svc'); });
+document.getElementById('btnMktSelectAll').addEventListener('click', function() { selectAllVisible('mkt'); });
+
+function selectAllVisible(tab) {
+  var selSet = tab === 'svc' ? svcSel : mktSel;
+  contactos.forEach(function(c) {
+    var key = c.contactId || c.telefono;
+    if (c.telefono && c.telefono.trim()) {
+      selSet[key] = { phone: c.telefono, name: c.nombreCompleto || '' };
+    }
+  });
+  updateCnt(tab);
+  renderDest(tab);
+}
+
+// Restaurar: lista completa, limpiar chips
+document.getElementById('btnSvcAll').addEventListener('click', function() {
+  document.querySelectorAll('#tab-servicio .segment-chip').forEach(function(c){c.classList.remove('active');});
+  document.getElementById('svcSearch').value = '';
+  contactos = allContactos.slice(); renderDest('svc');
+});
+document.getElementById('btnMktAll').addEventListener('click', function() {
+  document.querySelectorAll('#tab-marketing .segment-chip').forEach(function(c){c.classList.remove('active');});
+  document.getElementById('mktSearch').value = '';
+  contactos = allContactos.slice(); renderDest('mkt');
+});
+
+// Limpiar selección
+document.getElementById('btnSvcClear').addEventListener('click', function() { svcSel = {}; updateCnt('svc'); renderDest('svc'); });
+document.getElementById('btnMktClear').addEventListener('click', function() { mktSel = {}; updateCnt('mkt'); renderDest('mkt'); });
+
+// Añadir teléfono directo
+function addManualPhone(tab) {
+  var phoneEl = document.getElementById(tab + 'ManualPhone');
+  var nameEl = document.getElementById(tab + 'ManualName');
+  var phone = (phoneEl.value || '').trim().replace(/[\s\-\(\)]/g, '');
+  var name = (nameEl.value || '').trim() || 'Manual';
+
+  if (phone.length < 6) { showToast('Introduce un teléfono válido', 'error'); return; }
+
+  var selSet = tab === 'svc' ? svcSel : mktSel;
+  var key = 'manual_' + phone;
+
+  if (selSet[key]) { showToast('Teléfono ya añadido', 'error'); return; }
+
+  selSet[key] = { phone: phone, name: name };
+  updateCnt(tab);
+
+  // Añadir visualmente al principio de la lista
+  var destEl = document.getElementById(tab + 'Dest');
+  var itemHtml = '<div class="dest-item selected" data-key="' + esc(key) + '" data-phone="' + esc(phone) + '" data-name="' + esc(name) + '" style="background:var(--purple-lt);">'
+    + '<div class="dest-check" style="background:var(--purple);border-color:var(--purple);color:#fff;">✓</div>'
+    + '<div><div class="dest-name">📱 ' + esc(name) + '</div>'
+    + '<div class="dest-phone">' + esc(phone) + ' (manual)</div></div></div>';
+  destEl.insertAdjacentHTML('afterbegin', itemHtml);
+
+  // Limpiar campos
+  phoneEl.value = '';
+  nameEl.value = '';
+  showToast('Teléfono añadido: ' + phone, 'ok');
+}
+
+document.getElementById('btnSvcAddPhone').addEventListener('click', function() { addManualPhone('svc'); });
+document.getElementById('btnMktAddPhone').addEventListener('click', function() { addManualPhone('mkt'); });
+
+// ═══ ENVIAR ═══════════════════════════════════════
+document.getElementById('btnSvcSend').addEventListener('click', function() { enviar('svc'); });
+document.getElementById('btnMktSend').addEventListener('click', function() { enviar('mkt'); });
+
+function enviar(tab) {
+  var tpl = tab === 'svc' ? selSvc : selMkt;
+  var selSet = tab === 'svc' ? svcSel : mktSel;
+  if (!tpl || !Object.keys(selSet).length) return;
+  var inputs = document.querySelectorAll('#' + tab + 'Vars .vf');
+  var vars = []; inputs.forEach(function(inp) { vars.push(inp.disabled ? '' : (inp.value||'')); });
+  var btnUrlEl = document.getElementById(tab + 'BtnUrl');
+  var buttonUrl = btnUrlEl ? (btnUrlEl.value||'').trim() : '';
+  var dests = [];
+  var nameIdx = -1;
+  var lbls = LABELS[tpl.name] || [];
+  for (var i = 0; i < lbls.length; i++) { if (lbls[i].toLowerCase().indexOf('nombre cliente') >= 0) { nameIdx = i; break; } }
+  Object.keys(selSet).forEach(function(key) {
+    var d = selSet[key]; if (!d.phone) return;
+    var params = vars.slice();
+    if (nameIdx >= 0) params[nameIdx] = d.name || 'Cliente';
+    dests.push({ telefono: d.phone, nombreCliente: d.name||'', parameters: params, buttonUrl: buttonUrl });
+  });
+  if (!dests.length) return;
+  var img = tab === 'mkt' ? mktImageUrl : '';
+
+  // ── Límite Meta: 250 contactos únicos / 24h (Tier actual) ──
+  var META_LIMIT = 250;
+  var totalSeleccionados = dests.length;
+  var confirmMsg = '';
+
+  if (totalSeleccionados > META_LIMIT) {
+    dests = dests.slice(0, META_LIMIT);
+    confirmMsg = '⚠️ Límite WhatsApp: ' + META_LIMIT + ' envíos en 24h.\n'
+      + 'Se enviarán los primeros ' + META_LIMIT + ' de ' + totalSeleccionados + ' seleccionados.\n'
+      + 'Repite mañana para los siguientes.\n\n'
+      + '¿Enviar "' + tpl.label + '" a ' + dests.length + ' contacto(s)?';
+  } else {
+    confirmMsg = '¿Enviar "' + tpl.label + '" a ' + dests.length + ' contacto(s)?';
+  }
+
+  if (!confirm(confirmMsg)) return;
+  sendToPage('enviarBroadcast', { templateName: tpl.name, destinatarios: dests, eventType: tpl.name, imageUrl: img, buttonUrl: buttonUrl });
+  if (tab === 'mkt' && currentCampaignId) sendToPage('campaignSent', { _id: currentCampaignId });
+}
+
+function renderResult(msg) {
+  var tab = activeTab === 'marketing' ? 'mkt' : 'svc';
+  var el = document.getElementById(tab + 'Result');
+  var cls = 'result-ok', txt = '✅ ' + msg.enviados + '/' + msg.total + ' enviados';
+  if (msg.fallidos > 0 && msg.enviados > 0) { cls = 'result-partial'; txt = '⚠️ ' + msg.enviados + ' ok, ' + msg.fallidos + ' fallidos'; }
+  else if (msg.enviados === 0) { cls = 'result-error'; txt = '❌ Error: ' + ((msg.errores&&msg.errores[0]) ? msg.errores[0].error : 'desconocido'); }
+  el.innerHTML = '<div class="result-box ' + cls + '">' + txt + '</div>';
+
+  // Popup de resultado
+  var overlay = document.getElementById('campaignPopup');
+  var popup = overlay.querySelector('.campaign-popup');
+  var icon = document.getElementById('cpIcon');
+  var title = document.getElementById('cpTitle');
+  var detail = document.getElementById('cpDetail');
+
+  popup.className = 'campaign-popup';
+  if (msg.enviados > 0 && msg.fallidos === 0) {
+    icon.textContent = '🚀';
+    title.textContent = '¡CAMPAÑA ENVIADA!';
+    detail.textContent = msg.enviados + ' de ' + msg.total + ' mensajes enviados correctamente';
+  } else if (msg.enviados > 0 && msg.fallidos > 0) {
+    icon.textContent = '⚠️';
+    title.textContent = 'ENVÍO PARCIAL';
+    detail.textContent = msg.enviados + ' enviados, ' + msg.fallidos + ' fallidos de ' + msg.total;
+    popup.classList.add('campaign-popup-partial');
+  } else {
+    icon.textContent = '❌';
+    title.textContent = 'ERROR DE ENVÍO';
+    detail.textContent = (msg.errores && msg.errores[0]) ? msg.errores[0].error : 'Error desconocido';
+    popup.classList.add('campaign-popup-error');
+  }
+  overlay.classList.add('visible');
+
+  sendToPage('getHistorial', { limit: 500 });
+}
+
+// ═══ MONITOR ══════════════════════════════════════
+var allHistorial = [];
+
+document.getElementById('btnRefresh').addEventListener('click', function() {
+  sendToPage('getHistorial', { channel: '', event: '', limit: 500 });
+});
+document.getElementById('filterCanal').addEventListener('change', function() { filterAndRenderMonitor(); });
+document.getElementById('btnMeta').addEventListener('click', function() { sendToPage('getEstadoMeta'); });
+
+// v1.5.0: los dos selects son mutuamente excluyentes
+document.getElementById('filterServicio').addEventListener('change', function() {
+  if (this.value) document.getElementById('filterMarketing').value = '';
+  filterAndRenderMonitor();
+});
+document.getElementById('filterMarketing').addEventListener('change', function() {
+  if (this.value) document.getElementById('filterServicio').value = '';
+  filterAndRenderMonitor();
+});
+
+// v1.5.0: buscador local en monitor
+document.getElementById('monitorSearch').addEventListener('input', function() {
+  filterAndRenderMonitor();
+});
+
+function filterAndRenderMonitor() {
+  var eventFilter = document.getElementById('filterServicio').value || document.getElementById('filterMarketing').value || '';
+  var canal = document.getElementById('filterCanal').value;
+  var search = (document.getElementById('monitorSearch').value || '').trim().toLowerCase();
+  var searchPhone = search.replace(/[\s\-\(\)]/g, '');
+
+  var filtered = allHistorial.filter(function(r) {
+    if (eventFilter && r.event !== eventFilter) return false;
+    if (canal && r.channel !== canal) return false;
+    if (search.length >= 2) {
+      var name = (r.clientName || '').toLowerCase();
+      var phone = (r.recipient || '').replace(/[\s\-\(\)]/g, '');
+      if (!name.includes(search) && !phone.includes(searchPhone)) return false;
+    }
+    return true;
+  });
+
+  renderHistorial(filtered);
+}
+
+// ═══ INIT ═════════════════════════════════════════
+document.getElementById('cpClose').addEventListener('click', function() {
+  document.getElementById('campaignPopup').classList.remove('visible');
+});
+bindSegmentChips();
+setupLocalFilter('svcSearch', 'svc');
+setupLocalFilter('mktSearch', 'mkt');
+</script>
+</body>
+</html>
