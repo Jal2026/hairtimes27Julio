@@ -1,6 +1,35 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.2.1
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.3.0
 // =====================================================
+// v1.3.0 (30 ago 2026): LA VENTA TIENE DUEÑO.
+//
+//      DEFECTO. El rendimiento por profesional del informe del día se
+//      construye a partir de las CITAS, así que las ventas de producto y
+//      de ESPECIALES no sumaban en el rendimiento de nadie — ni siquiera
+//      las que nacen dentro de una cita. El dinero se veía (bloque de
+//      productos, bloque de especiales) pero no tenía dueño.
+//
+//      REGLA DE ATRIBUCIÓN (decisión de producto de Jal, 30-ago-2026),
+//      la misma que estadisticas.web.js v2.8.0:
+//        1. Venta nacida DENTRO de una cita → titular de esa cita.
+//           tiendaProductos v1.5.14 guarda la cita en `reservaId`.
+//        2. Sin cita pero con login → el empleado que la cobró
+//           (`soldBy`, lo graba tiendaProductos v1.5.13).
+//        3. Sin login → "Salón". Es una fila más del informe con su
+//           importe; NO se reparte entre el equipo.
+//
+//      QUÉ SE AÑADE. `cierre.ventaPorStaff`: por persona, el importe de
+//      producto, el de especiales y su suma. Nada más cambia de sitio.
+//      Los bloques que ya existían —"Cobrado por staff" (que agrupa por
+//      `soldBy` desde v1.1.7), "Productos cobrados hoy", el detalle de
+//      ESPECIALES, los totales y el cuadre por canal— se quedan
+//      exactamente igual: ningún importe se mueve, solo se añade una
+//      lectura nueva.
+//
+//      NO HAY NADA QUE REETIQUETAR. `reservaId` y `soldBy` ya viajan en
+//      cada fila de PaymentReservations. El histórico se lee bien sin
+//      tocar un solo dato.
+//
 // v1.2.1 (12 ago 2026): EL COBRO DE LAS CITAS EXTERNAS SÍ SE SABE.
 //      Una cita de profesional externo cobrada aparecía en Rendimiento
 //      Productivo con `metodoPago` VACÍO, como si no constara con qué
@@ -285,7 +314,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.2.1]';
+const TAG = '[CierreExt v1.3.0]';
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_PAGOS_EXT = 'PagoreservasExternos';   // v1.2.1 - ledger de externos
@@ -296,6 +325,20 @@ const COLECCION_CONFIG   = 'SalonConfig';
 // PaymentReservations.staff para las ventas manuales de Bono / PRIME /
 // Tarjeta promocional. Debe coincidir con STAFF_ESPECIALES de ese backend.
 const STAFF_ESPECIALES = 'ESPECIALES';
+
+// ── v1.3.0 ─────────────────────────────────────────────────────────────
+// Valores que PaymentReservations.staff usa como DISCRIMINADOR de tipo de
+// cobro y que NO son personas. Nunca deben aparecer como empleado.
+//   TIENDA      → venta de producto con orden + factura (tiendaProductos)
+//   TIENDA_POS  → venta standalone desde Tienda Productos
+//   ESPECIALES  → bono / PRIME / tarjeta vendidos desde Recepción
+const STAFF_TIENDA = 'TIENDA';
+const STAFF_TIENDA_POS = 'TIENDA_POS';
+const MARCADORES_NO_PERSONA = new Set([STAFF_TIENDA, STAFF_TIENDA_POS, STAFF_ESPECIALES]);
+
+// Bote del salón: ventas de mostrador sin capa de acceso, donde no se
+// puede saber quién las hizo. Fila propia del informe; no se reparte.
+const ETIQUETA_SALON = 'Salón';
 
 // =====================================================
 // HELPERS COMUNES
@@ -878,7 +921,19 @@ const CANALES_FISICOS = ['Tarjeta', 'Efectivo', 'Bizum'];
 // =====================================================
 // Q2 — CIERRE FINANCIERO
 // =====================================================
-function procesarCierre(pagos, staffList, vatRate) {
+function procesarCierre(pagos, staffList, vatRate, titularPorReserva = {}) {
+  // v1.3.0 — A QUIÉN PERTENECE UNA VENTA que no es de servicio.
+  //   1) cita de origen → titular de la cita
+  //   2) empleado logueado que la cobró (`soldBy`)
+  //   3) sin login → "Salón"
+  const resolverPersonaVenta = (p) => {
+    const rid = String(p.reservaId || '').trim();
+    if (rid && titularPorReserva[rid]) return titularPorReserva[rid];
+    const vendedor = String(p.soldBy || '').trim();
+    if (vendedor) return vendedor;
+    return ETIQUETA_SALON;
+  };
+
   const staffMap = {};
   for (const s of staffList) {
     const key = (s.displayName || s.canonicalName || '').toUpperCase();
@@ -902,6 +957,7 @@ function procesarCierre(pagos, staffList, vatRate) {
   const productosDetalle = [];  // v1.1.6 — una entrada por producto vendido
   let canjesCount = 0;          // v1.2.0 — canjes de 0€ (no son dinero)
   const anomaliasArr = [];      // v1.2.0 — cobros que no se pueden repartir
+  const ventaPorStaff = new Map();  // v1.3.0 — producto + especiales con dueño
 
   for (const p of noCancelados) {
     const importe = Number(p.importeTotal) || 0;
@@ -998,6 +1054,23 @@ function procesarCierre(pagos, staffList, vatRate) {
       especialesTotal += importe;
     }
 
+    // ── v1.3.0 · VENTA ATRIBUIDA ──────────────────────────────────────
+    // Producto y ESPECIALES no son servicio, pero sí son rendimiento del
+    // profesional: en un salón con capa de acceso suelen llevar comisión.
+    // Se atribuyen por cita de origen → empleado logueado → Salón.
+    const staffKeyPago = staffName.toUpperCase();
+    if (MARCADORES_NO_PERSONA.has(staffKeyPago)) {
+      const quienVendio = resolverPersonaVenta(p);
+      if (!ventaPorStaff.has(quienVendio)) {
+        ventaPorStaff.set(quienVendio, { staffName: quienVendio, producto: 0, especiales: 0, total: 0, n: 0 });
+      }
+      const vAgg = ventaPorStaff.get(quienVendio);
+      if (staffKeyPago === STAFF_ESPECIALES) vAgg.especiales += importe;
+      else vAgg.producto += importe;
+      vAgg.total += importe;
+      vAgg.n += 1;
+    }
+
     const info = staffMap[staffName.toUpperCase()];
     if (info && info.isExternal) {
       const pct = info.commissionPct || 0;
@@ -1048,7 +1121,23 @@ function procesarCierre(pagos, staffList, vatRate) {
     descuentos: descuentosArr,                  // v1.1.1
     descuentoTotal: round(descuentoTotal),      // v1.1.1
     especiales: especialesArr,                  // v1.1.5
-    especialesTotal: round(especialesTotal)     // v1.1.5
+    especialesTotal: round(especialesTotal),    // v1.1.5
+
+    // ── v1.3.0 · VENTA ATRIBUIDA POR PROFESIONAL ──
+    // "Salón" es el bote de las ventas de mostrador sin login: aparece
+    // como una fila más, con su importe, y no se reparte entre nadie.
+    ventaPorStaff: Array.from(ventaPorStaff.values())
+      .map(v => ({
+        ...v,
+        producto: round(v.producto),
+        especiales: round(v.especiales),
+        total: round(v.total),
+        esSalon: v.staffName === ETIQUETA_SALON
+      }))
+      .sort((a, b) => b.total - a.total),
+    ventaPorStaffTotal: round(
+      Array.from(ventaPorStaff.values()).reduce((s, v) => s + v.total, 0)
+    )
   };
 }
 
@@ -1467,9 +1556,45 @@ export const obtenerDatosCierreExtendidos = webMethod(
       }
       console.log(`${TAG} Q2.6 pagosExtPorReserva: ${Object.keys(pagosExtPorReserva).length} cobros externos cruzados`);
 
+      // v1.3.0 — Q2.7: titular de la cita de origen de cada venta.
+      // Las ventas de producto y de ESPECIALES llevan un discriminador en
+      // `staff` que no es una persona; cuando nacieron dentro de una cita,
+      // `reservaId` dice cuál. Las citas del día ya están cargadas: solo
+      // se consulta lo que falte (venta de hoy sobre una cita de otro día).
+      const titularPorReserva = {};
+      for (const r of reservas) {
+        const titular = String(r.staffName || '').trim();
+        if (titular) titularPorReserva[r._id] = titular;
+      }
+      {
+        const faltantes = new Set();
+        for (const p of pagos) {
+          if (!MARCADORES_NO_PERSONA.has(String(p.staff || '').trim().toUpperCase())) continue;
+          const rid = String(p.reservaId || '').trim();
+          if (rid && !titularPorReserva[rid]) faltantes.add(rid);
+        }
+        const lista = Array.from(faltantes);
+        for (let i = 0; i < lista.length; i += 50) {
+          const lote = lista.slice(i, i + 50);
+          try {
+            const rRes = await wixData.query(COLECCION_RESERVAS)
+              .hasSome('_id', lote)
+              .limit(50)
+              .find({ suppressAuth: true });
+            for (const it of (rRes.items || [])) {
+              const titular = String(it.staffName || '').trim();
+              if (titular) titularPorReserva[it._id] = titular;
+            }
+          } catch (eRes) {
+            console.warn(`${TAG} Q2.7 titularPorReserva lote ${i}: ${eRes.message}`);
+          }
+        }
+        if (lista.length) console.log(`${TAG} Q2.7 citas de origen fuera del día: ${lista.length} consultadas`);
+      }
+
       const vatRate = await leerVatRate();
       const rendimiento = procesarRendimiento(reservas, staffList, pagosPorReserva, pagosExtPorReserva);
-      const cierre = procesarCierre(pagos, staffList, vatRate);
+      const cierre = procesarCierre(pagos, staffList, vatRate, titularPorReserva);
       const reconciliacion = await procesarReconciliacion(reservas, pagos, fechaISO, startOfDay, endOfDay, pagosPorReserva);
 
       // Legacy compat
