@@ -1,8 +1,17 @@
 // =====================================================
 // KAMISUITE - Tarjeta PRIME (Página Pública) Backend
 // =====================================================
-// VERSION: 1.0.5
-// FECHA: 27 de agosto de 2026
+// VERSION: 1.0.6
+// FECHA: 30 de agosto de 2026
+//
+// v1.0.6 (30-Ago-2026): El EMAIL de compra de PRIME deja rastro en el
+//   histórico de Comunicaciones. Hasta ahora solo lo dejaba su gemelo de
+//   WhatsApp (event 'compra_prime'), así que la pantalla de Comunicaciones
+//   mostraba media compra y cualquier informe por canal salía sesgado.
+//   Se registra en los DOS caminos (Brevo y Triggered de Wix), con el
+//   resultado real, vía comunicacionesLogic.registrarComunicacion (v1.4.0).
+//   Nuevo helper privado _registrarEmailCompra, no bloqueante.
+//   El envío no cambia en absoluto.
 //
 // v1.0.5 (27-Ago-2026): WhatsApp de compra PRIME vía enviarTemplateGenerico
 //   (plantilla prime_purchase_es) al buyerPhone, en paralelo al email.
@@ -103,6 +112,8 @@ import { elevate } from 'wix-auth';
 import { triggeredEmails } from 'wix-crm-backend';
 // v1.0.4: driver de email por plantilla (Brevo)
 import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
+// Apunte del email de compra en el histórico de Comunicaciones.
+import { registrarComunicacion } from 'backend/comunicacionesLogic.web.js';
 // v1.0.5: driver WhatsApp (plantilla genérica)
 import { enviarTemplateGenerico } from 'backend/whatsappLogic.web.js';
 
@@ -575,6 +586,13 @@ async function _enviarEmailCompraPrime(updated) {
       });
       if (rB && rB.ok) console.log(`${TAG} 📧 Email compra-PRIME Brevo OK → ${buyerEmail} (${rB.messageId || ''})`);
       else console.error(`${TAG} ⚠️ Email compra-PRIME Brevo error: ${(rB && rB.error) || '?'}`);
+      await _registrarEmailCompra({
+        email: buyerEmail,
+        nombreCliente,
+        producto: variables.tituloProducto,
+        ok: !!(rB && rB.ok),
+        error: (rB && rB.error) || 'error desconocido Brevo'
+      });
       return;
     }
 
@@ -582,6 +600,12 @@ async function _enviarEmailCompraPrime(updated) {
     if (!templateId) { console.warn(`${TAG} ⚠️ SalonConfig.purchaseConfirmationTemplateId vacío — sin email`); return; }
     await triggeredEmails.emailContact(templateId, updated.contactId, { variables });
     console.log(`${TAG} 📧 Email compra-PRIME enviado OK → contactId=${updated.contactId}`);
+    await _registrarEmailCompra({
+      email: String(updated.buyerEmail || ''),
+      nombreCliente,
+      producto: variables.tituloProducto,
+      ok: true
+    });
   } catch (emailErr) {
     console.error(`${TAG} ⚠️ Error enviando email compra-PRIME (no bloqueante):`, emailErr && emailErr.message);
   }
@@ -716,3 +740,26 @@ export const cancelPrimePayment = webMethod(
     }
   }
 );
+
+// ─────────────────────────────────────────────────────────────
+// Apunte del EMAIL de compra en el histórico de Comunicaciones.
+// El WhatsApp de compra ya lo registra whatsappLogic al enviarlo; el
+// email salía sin dejar rastro, de modo que la pantalla de
+// Comunicaciones mostraba solo la mitad de cada compra.
+// No bloqueante: el envío ya se hizo, el apunte nunca debe romperlo.
+// ─────────────────────────────────────────────────────────────
+async function _registrarEmailCompra({ email, nombreCliente, producto, ok, error }) {
+  try {
+    await registrarComunicacion({
+      event:       'compra_prime',
+      channel:     'email',
+      recipient:   email || '',
+      clientName:  nombreCliente || '',
+      result:      ok ? 'ok' : 'error',
+      errorDetail: ok ? '' : String(error || ''),
+      services:    producto || ''
+    });
+  } catch (logErr) {
+    console.error(`${TAG} ⚠️ Apunte de email compra-PRIME en histórico (no bloqueante):`, logErr && logErr.message);
+  }
+}
