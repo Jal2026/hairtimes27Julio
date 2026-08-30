@@ -3,8 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KAMISUITE · Comunicaciones v1.5.0</title>
+<title>KAMISUITE · Comunicaciones v1.6.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<!-- v1.6.0: exportación a Excel. Misma librería y versión que ya usa
+     el widget de Estadísticas en producción. -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 <style>
 :root {
   --bg: #f0f0f2;
@@ -144,6 +147,23 @@ html, body {
 .filter-bar { display: flex; gap: 8px; padding: 10px 0; align-items: center; flex-wrap: wrap; }
 .filter-select { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: 'Bai Jamjuree', sans-serif; font-size: 11px; background: var(--surface); color: var(--text); outline: none; }
 
+/* ── INFORME (v1.6.0) — clases nuevas, no tocan las existentes ── */
+.rango-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text3); }
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 10px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.kpi-val { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.kpi-lbl { font-size: 9.5px; color: var(--text3); text-transform: uppercase; letter-spacing: .06em; margin-top: 3px; }
+.kpi-total .kpi-val { color: var(--purple); }
+.kpi-ok .kpi-val { color: var(--green); }
+.kpi-err .kpi-val { color: var(--red); }
+.kpi-rate .kpi-val { color: var(--orange); }
+.informe-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.informe-periodo { font-size: 11px; color: var(--text2); }
+.num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+.bar-track { background: var(--surface2); border-radius: 20px; height: 6px; overflow: hidden; min-width: 60px; }
+.bar-fill { height: 100%; background: var(--green); }
+.bar-fill.low { background: var(--red); }
+
 /* ── MISC ──────────────────────────────────────────── */
 .empty-state { text-align: center; padding: 30px 10px; }
 .empty-icon { font-size: 28px; margin-bottom: 6px; }
@@ -239,6 +259,7 @@ html, body {
   <div class="tabs-bar">
     <div class="tab active" data-tab="monitor" onclick="switchTab('monitor',this)">📊 Monitor</div>
     <div class="tab" data-tab="servicio" onclick="switchTab('servicio',this)">🔔 Servicio</div>
+    <div class="tab" data-tab="informe" onclick="switchTab('informe',this)">📈 Informe</div>
     <div class="tab" data-tab="marketing" onclick="switchTab('marketing',this)">📢 Marketing</div>
   </div>
   <div class="main-content">
@@ -246,33 +267,89 @@ html, body {
     <!-- ═══ MONITOR ═══ -->
     <div class="tab-panel active" id="tab-monitor">
       <div class="card" style="padding:10px 14px;">
+        <!-- v1.6.0: fila 1 — periodo -->
         <div class="dest-controls">
+          <span class="rango-lbl">Periodo</span>
+          <input type="date" class="filter-select" id="fDesde">
+          <span class="rango-lbl">a</span>
+          <input type="date" class="filter-select" id="fHasta">
+          <button class="btn-sm preset-btn" data-preset="hoy">Hoy</button>
+          <button class="btn-sm preset-btn" data-preset="7">7 días</button>
+          <button class="btn-sm preset-btn" data-preset="30">30 días</button>
+          <button class="btn-sm preset-btn" data-preset="90">90 días</button>
+          <button class="btn-sm preset-btn" data-preset="todo">Todo</button>
+          <button class="btn-icon" id="btnRefresh" title="Actualizar">↻</button>
+        </div>
+        <!-- v1.6.0: fila 2 — filtros sobre el periodo cargado -->
+        <div class="dest-controls" style="margin-top:6px;margin-bottom:0;">
           <input type="text" class="dest-search" id="monitorSearch" placeholder="Buscar por nombre o teléfono...">
-          <select class="filter-select" id="filterServicio">
-            <option value="">🔔 Servicio</option>
-            <option value="confirmacion">Confirmación de cita</option>
-            <option value="recordatorio">Recordatorio de cita</option>
-            <option value="salon_news_es">Noticias del salón</option>
-            <option value="appointment_followup_es">Seguimiento post-visita</option>
-          </select>
-          <select class="filter-select" id="filterMarketing">
-            <option value="">📢 Marketing</option>
-            <option value="promo_service_es">Promoción de servicio</option>
-            <option value="promo_product_es">Promoción de producto</option>
-            <option value="gift_card_es">Tarjetas regalo</option>
-            <option value="special_occasion_es">Días especiales</option>
+          <select class="filter-select" id="filterEvento">
+            <option value="">Todos los tipos</option>
+            <optgroup label="🔔 Servicio">
+              <option value="confirmacion">Confirmación de cita</option>
+              <option value="recordatorio">Recordatorio de cita</option>
+              <option value="salon_news_es">Noticias del salón</option>
+              <option value="appointment_followup_es">Seguimiento post-visita</option>
+            </optgroup>
+            <optgroup label="🎟️ Compras">
+              <option value="compra_bono">Compra de bono</option>
+              <option value="compra_tarjeta">Compra de tarjeta</option>
+              <option value="compra_prime">Compra PRIME</option>
+            </optgroup>
+            <optgroup label="📢 Marketing">
+              <option value="promo_service_es">Promoción de servicio</option>
+              <option value="promo_product_es">Promoción de producto</option>
+              <option value="gift_card_es">Tarjetas regalo</option>
+              <option value="special_occasion_es">Días especiales</option>
+            </optgroup>
+            <optgroup label="Otros">
+              <option value="presupuesto">Presupuesto</option>
+              <option value="prueba">Prueba de email</option>
+            </optgroup>
           </select>
           <select class="filter-select" id="filterCanal">
             <option value="">Todo canal</option>
             <option value="whatsapp">WhatsApp</option>
             <option value="email">Email</option>
           </select>
-          <button class="btn-icon" id="btnRefresh" title="Actualizar">↻</button>
+          <select class="filter-select" id="filterResultado">
+            <option value="">Todo resultado</option>
+            <option value="ok">Correctos</option>
+            <option value="error">Fallidos</option>
+          </select>
+          <button class="btn btn-secondary" id="btnExportMonitor" style="font-size:10px;padding:5px 10px;">⬇ Excel</button>
           <button class="btn btn-secondary" id="btnMeta" style="font-size:10px;padding:5px 10px;">Estado META</button>
         </div>
       </div>
+      <div id="avisoTruncado" style="display:none" class="result-box result-partial">El periodo tiene más envíos de los que caben en una carga. Se muestran los más recientes: acota las fechas para verlo completo.</div>
       <div class="card" id="logCard"><div class="empty-state"><div class="empty-icon">📊</div><div class="empty-text">Cargando historial...</div></div></div>
       <div class="card" id="metaCard" style="display:none"><div class="card-title">Plantillas en META</div><div id="metaBody"></div></div>
+    </div>
+
+    <!-- ═══ INFORME (v1.6.0) ═══ -->
+    <div class="tab-panel" id="tab-informe">
+      <div class="informe-head">
+        <div class="informe-periodo" id="infPeriodo">—</div>
+        <button class="btn btn-secondary" id="btnExportInforme" style="margin-left:auto;font-size:10px;padding:5px 10px;">⬇ Exportar informe a Excel</button>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi kpi-total"><div class="kpi-val" id="infTotal">—</div><div class="kpi-lbl">Envíos</div></div>
+        <div class="kpi kpi-ok"><div class="kpi-val" id="infOk">—</div><div class="kpi-lbl">Correctos</div></div>
+        <div class="kpi kpi-err"><div class="kpi-val" id="infErr">—</div><div class="kpi-lbl">Fallidos</div></div>
+        <div class="kpi kpi-rate"><div class="kpi-val" id="infTasa">—</div><div class="kpi-lbl">% sin incidencias</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Reparto por canal</div>
+        <div id="infCanal"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Tipo de comunicación por canal</div>
+        <div id="infEvento"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Envíos fallidos del periodo</div>
+        <div id="infFallos"></div>
+      </div>
     </div>
 
     <!-- ═══ SERVICIO ═══ -->
@@ -432,7 +509,49 @@ html, body {
 <div class="toast" id="toast"></div>
 
 <script>
-var TAG = '[Comunicaciones][Widget][1.5.0]';
+/* ═══════════════════════════════════════════════════════════════
+   widget_comunicaciones.html  ·  v1.6.0  ·  30 Agosto 2026
+   ───────────────────────────────────────────────────────────────
+   CHANGELOG
+   v1.6.0 · 30 Ago 2026 · Monitor por periodo + Informe + Excel
+     - MONITOR: rango de fechas (desde / hasta) con atajos Hoy, 7, 30,
+       90 días y Todo. Antes traía siempre las últimas 500 filas sin
+       poder acotar el periodo.
+     - MONITOR: los dos desplegables mutuamente excluyentes (Servicio /
+       Marketing) se unifican en UN solo desplegable con grupos, para
+       poder incluir los tipos que faltaban — Compra de bono, Compra de
+       tarjeta, Compra PRIME, Presupuesto y Prueba de email — sin
+       encadenar un tercer select excluyente.
+     - MONITOR: filtro nuevo por resultado (correctos / fallidos) y
+       botón de exportación a Excel de lo que se está viendo.
+     - MONITOR: el canal 'copiar' (presupuestos copiados al portapapeles)
+       se pintaba como si fuera un email. Corregido.
+     - MONITOR: los tipos se muestran con nombre legible en vez del
+       código interno. Un tipo nuevo no reconocido se sigue mostrando
+       tal cual, nunca se oculta.
+     - INFORME (pestaña nueva): totales del periodo y fiabilidad,
+       reparto por canal, tabla de tipo de comunicación cruzada por
+       canal, y listado de envíos fallidos con su motivo. Se calcula
+       sobre las mismas filas filtradas que muestra el Monitor: lo que
+       se exporta es exactamente lo que se ve.
+     - INFORME: exportación a Excel con hojas Resumen, Por canal,
+       Por tipo, Fallidos y Detalle.
+     - Handshake con reintento al arrancar (patrón obligatorio del
+       proyecto): antes se mandaba un único 'ready' y el widget podía
+       quedarse en blanco si el page code aún no escuchaba.
+     - Aviso visible cuando el periodo elegido tiene más envíos de los
+       que caben en una carga, para que nadie lea un informe recortado
+       creyéndolo completo.
+     - Librería de Excel: la misma versión que ya usa el widget de
+       Estadísticas en producción.
+     - Pareja page code: v1.5.0 (nuevo handler getHistorialRango).
+       Backend: comunicacionesLogic v1.4.0 (histórico neutral de canal
+       con rango de fechas).
+     - Sin cambios en Servicio, Marketing, AdServer, campañas, galería
+       de imágenes ni en el envío de mensajes.
+   v1.5.0 · Preview + AdServer siempre visible, buscador en monitor.
+   ═══════════════════════════════════════════════════════════════ */
+var TAG = '[Comunicaciones][Widget][1.6.0]';
 
 // ═══ STATE ════════════════════════════════════════
 var templates = [];
@@ -496,14 +615,18 @@ window.addEventListener('message', function(ev) {
     case 'cacheReady':
       setLoading(false);
       document.getElementById('statWa').textContent = msg.conTelefono || 0;
+      handshakeOk = true;   // v1.6.0: el page code ya responde, parar el reintento
       sendToPage('getTemplates');
-      sendToPage('getHistorial', { limit: 500 });
+      aplicarPreset('30');   // v1.6.0: el Monitor arranca con los últimos 30 días
       // v1.5.0: pedir TODOS los contactos para precargar lista
       sendToPage('buscarContactos', { query: '**ALL**' });
       break;
     case 'templatesCargados': templates = msg.templates || []; renderTplCards(); break;
     case 'historialCargado':
+      setLoading(false);
       allHistorial = msg.registros || [];
+      var avT = document.getElementById('avisoTruncado');
+      if (avT) avT.style.display = msg.truncado ? 'block' : 'none';
       filterAndRenderMonitor();
       break;
     case 'estadoMeta': renderMeta(msg); break;
@@ -530,7 +653,20 @@ window.addEventListener('message', function(ev) {
   }
 });
 
-document.addEventListener('DOMContentLoaded', function() { sendToPage('ready', {}); });
+// v1.6.0: handshake con reintento. Sin él, el primer 'ready' se pierde
+// si el page code todavía no ha registrado su listener y el widget se
+// queda en blanco. Se para en cuanto llega la primera respuesta.
+var handshakeOk = false;
+function iniciarHandshake() {
+  sendToPage('ready', {});
+  var reintentos = 0;
+  var t = setInterval(function() {
+    if (handshakeOk || reintentos >= 20) { clearInterval(t); return; }
+    reintentos++;
+    sendToPage('ready', {});
+  }, 700);
+}
+document.addEventListener('DOMContentLoaded', iniciarHandshake);
 
 // ═══ LOADING & TOAST ══════════════════════════════
 function setLoading(on) {
@@ -552,6 +688,7 @@ function switchTab(n, el) {
   document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
   var p = document.getElementById('tab-' + n);
   if (p) p.classList.add('active');
+  if (n === 'informe') renderInforme();   // v1.6.0
 }
 
 // ═══ TEMPLATE CARDS ═══════════════════════════════
@@ -728,9 +865,11 @@ function renderHistorial(regs) {
   var html = '<table class="log-table"><thead><tr><th>Fecha</th><th>Evento</th><th>Canal</th><th>Destinatario</th><th>Cliente</th><th>Resultado</th></tr></thead><tbody>';
   regs.forEach(function(r) {
     var f = r.createdDate ? new Date(r.createdDate).toLocaleString('es-ES',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
-    var ch = r.channel==='whatsapp' ? '<span class="badge badge-wa">WhatsApp</span>' : '<span class="badge badge-email">Email</span>';
-    var res = r.result==='ok' ? '<span class="badge badge-ok">✓ OK</span>' : '<span class="badge badge-error">✗ Error</span>';
-    html += '<tr><td>'+f+'</td><td>'+esc(r.event||'—')+'</td><td>'+ch+'</td><td style="font-size:10px;">'+esc(r.recipient||'—')+'</td><td>'+esc(r.clientName||'—')+'</td><td>'+res+'</td></tr>';
+    var ch = badgeCanal(r.channel);
+    var res = r.result==='ok'
+      ? '<span class="badge badge-ok">✓ OK</span>'
+      : '<span class="badge badge-error" title="'+esc(r.errorDetail||'')+'">✗ Error</span>';
+    html += '<tr><td>'+f+'</td><td>'+esc(labelEvento(r.event))+'</td><td>'+ch+'</td><td style="font-size:10px;">'+esc(r.recipient||'—')+'</td><td>'+esc(r.clientName||'—')+'</td><td>'+res+'</td></tr>';
   });
   el.innerHTML = html + '</tbody></table>';
 }
@@ -999,51 +1138,337 @@ function renderResult(msg) {
   }
   overlay.classList.add('visible');
 
-  sendToPage('getHistorial', { limit: 500 });
+  pedirHistorial();   // v1.6.0
 }
 
 // ═══ MONITOR ══════════════════════════════════════
 var allHistorial = [];
 
-document.getElementById('btnRefresh').addEventListener('click', function() {
-  sendToPage('getHistorial', { channel: '', event: '', limit: 500 });
+// ── v1.6.0: etiquetas legibles ────────────────────
+// El histórico guarda códigos internos (confirmacion, compra_bono) y
+// nombres de plantilla de Meta (promo_service_es). En pantalla y en el
+// Excel se muestran en cristiano; lo que no esté en la tabla se enseña
+// tal cual, así un evento nuevo nunca desaparece del informe.
+var EVENTO_LABEL = {
+  'confirmacion':           'Confirmación de cita',
+  'recordatorio':           'Recordatorio de cita',
+  'salon_news_es':          'Noticias del salón',
+  'appointment_followup_es':'Seguimiento post-visita',
+  'compra_bono':            'Compra de bono',
+  'compra_tarjeta':         'Compra de tarjeta',
+  'compra_prime':           'Compra PRIME',
+  'promo_service_es':       'Promoción de servicio',
+  'promo_product_es':       'Promoción de producto',
+  'gift_card_es':           'Tarjetas regalo',
+  'special_occasion_es':    'Días especiales',
+  'presupuesto':            'Presupuesto',
+  'prueba':                 'Prueba de email',
+  'email':                  'Email genérico'
+};
+var CANAL_LABEL = { 'whatsapp': 'WhatsApp', 'email': 'Email', 'copiar': 'Copiado' };
+
+function labelEvento(e) { return EVENTO_LABEL[e] || (e || '—'); }
+function labelCanal(c) { return CANAL_LABEL[c] || (c || '—'); }
+function badgeCanal(c) {
+  if (c === 'whatsapp') return '<span class="badge badge-wa">WhatsApp</span>';
+  if (c === 'email')    return '<span class="badge badge-email">Email</span>';
+  return '<span class="badge badge-pending">' + esc(labelCanal(c)) + '</span>';
+}
+
+// ── v1.6.0: periodo ───────────────────────────────
+function _iso(fechaStr, finDelDia) {
+  if (!fechaStr) return '';
+  var t = fechaStr.split('-');
+  if (t.length !== 3) return '';
+  var d = finDelDia
+    ? new Date(+t[0], +t[1] - 1, +t[2], 23, 59, 59, 999)
+    : new Date(+t[0], +t[1] - 1, +t[2], 0, 0, 0, 0);
+  return d.toISOString();
+}
+function _fechaInput(d) {
+  var m = String(d.getMonth() + 1); if (m.length < 2) m = '0' + m;
+  var dd = String(d.getDate());     if (dd.length < 2) dd = '0' + dd;
+  return d.getFullYear() + '-' + m + '-' + dd;
+}
+
+function pedirHistorial() {
+  var desde = document.getElementById('fDesde').value;
+  var hasta = document.getElementById('fHasta').value;
+  setLoading(true);
+  sendToPage('getHistorialRango', {
+    from: _iso(desde, false),
+    to:   _iso(hasta, true),
+    limit: 1000
+  });
+}
+
+function aplicarPreset(preset) {
+  var hoy = new Date();
+  var elD = document.getElementById('fDesde');
+  var elH = document.getElementById('fHasta');
+  if (preset === 'todo') {
+    elD.value = ''; elH.value = '';
+  } else if (preset === 'hoy') {
+    elD.value = _fechaInput(hoy); elH.value = _fechaInput(hoy);
+  } else {
+    var dias = parseInt(preset, 10) || 30;
+    var ini = new Date(hoy.getTime() - (dias - 1) * 24 * 60 * 60 * 1000);
+    elD.value = _fechaInput(ini); elH.value = _fechaInput(hoy);
+  }
+  pedirHistorial();
+}
+
+// ── Bindings ──────────────────────────────────────
+document.getElementById('btnRefresh').addEventListener('click', pedirHistorial);
+document.getElementById('fDesde').addEventListener('change', pedirHistorial);
+document.getElementById('fHasta').addEventListener('change', pedirHistorial);
+document.querySelectorAll('.preset-btn').forEach(function(b) {
+  b.addEventListener('click', function() { aplicarPreset(this.dataset.preset); });
 });
-document.getElementById('filterCanal').addEventListener('change', function() { filterAndRenderMonitor(); });
+document.getElementById('filterCanal').addEventListener('change', filterAndRenderMonitor);
+document.getElementById('filterEvento').addEventListener('change', filterAndRenderMonitor);
+document.getElementById('filterResultado').addEventListener('change', filterAndRenderMonitor);
+document.getElementById('monitorSearch').addEventListener('input', filterAndRenderMonitor);
 document.getElementById('btnMeta').addEventListener('click', function() { sendToPage('getEstadoMeta'); });
+document.getElementById('btnExportMonitor').addEventListener('click', exportarMonitorExcel);
+document.getElementById('btnExportInforme').addEventListener('click', exportarInformeExcel);
 
-// v1.5.0: los dos selects son mutuamente excluyentes
-document.getElementById('filterServicio').addEventListener('change', function() {
-  if (this.value) document.getElementById('filterMarketing').value = '';
-  filterAndRenderMonitor();
-});
-document.getElementById('filterMarketing').addEventListener('change', function() {
-  if (this.value) document.getElementById('filterServicio').value = '';
-  filterAndRenderMonitor();
-});
-
-// v1.5.0: buscador local en monitor
-document.getElementById('monitorSearch').addEventListener('input', function() {
-  filterAndRenderMonitor();
-});
-
-function filterAndRenderMonitor() {
-  var eventFilter = document.getElementById('filterServicio').value || document.getElementById('filterMarketing').value || '';
+// ── Filtrado local (compartido por Monitor e Informe) ──
+function filtrarActual() {
+  var eventFilter = document.getElementById('filterEvento').value || '';
   var canal = document.getElementById('filterCanal').value;
+  var resultado = document.getElementById('filterResultado').value;
   var search = (document.getElementById('monitorSearch').value || '').trim().toLowerCase();
   var searchPhone = search.replace(/[\s\-\(\)]/g, '');
 
-  var filtered = allHistorial.filter(function(r) {
+  return allHistorial.filter(function(r) {
     if (eventFilter && r.event !== eventFilter) return false;
     if (canal && r.channel !== canal) return false;
+    if (resultado === 'ok'    && r.result !== 'ok') return false;
+    if (resultado === 'error' && r.result === 'ok') return false;
     if (search.length >= 2) {
       var name = (r.clientName || '').toLowerCase();
+      var dest = (r.recipient || '').toLowerCase();
       var phone = (r.recipient || '').replace(/[\s\-\(\)]/g, '');
-      if (!name.includes(search) && !phone.includes(searchPhone)) return false;
+      if (!name.includes(search) && !dest.includes(search) && !phone.includes(searchPhone)) return false;
     }
     return true;
   });
+}
 
-  renderHistorial(filtered);
+function filterAndRenderMonitor() {
+  var filtrados = filtrarActual();
+  renderHistorial(filtrados);
+  if (activeTab === 'informe') renderInforme();
+}
+
+// ═══ INFORME (v1.6.0) ═════════════════════════════
+// Se calcula en local sobre las mismas filas que ve el Monitor: lo que
+// se exporta a Excel es exactamente lo que hay en pantalla.
+function textoPeriodo() {
+  var d = document.getElementById('fDesde').value;
+  var h = document.getElementById('fHasta').value;
+  if (!d && !h) return 'Todo el histórico';
+  function bonito(x) { var t = x.split('-'); return t[2] + '/' + t[1] + '/' + t[0]; }
+  if (d && h) return 'Del ' + bonito(d) + ' al ' + bonito(h);
+  if (d) return 'Desde el ' + bonito(d);
+  return 'Hasta el ' + bonito(h);
+}
+
+function calcularInforme(regs) {
+  var total = regs.length, ok = 0;
+  var porCanal = {}, porEvento = {};
+  regs.forEach(function(r) {
+    var esOk = r.result === 'ok';
+    if (esOk) ok++;
+    var c = r.channel || '—';
+    if (!porCanal[c]) porCanal[c] = { total: 0, ok: 0, err: 0 };
+    porCanal[c].total++; esOk ? porCanal[c].ok++ : porCanal[c].err++;
+
+    var e = r.event || '—';
+    if (!porEvento[e]) porEvento[e] = { total: 0, ok: 0, err: 0, canales: {} };
+    porEvento[e].total++; esOk ? porEvento[e].ok++ : porEvento[e].err++;
+    if (!porEvento[e].canales[c]) porEvento[e].canales[c] = { ok: 0, err: 0 };
+    esOk ? porEvento[e].canales[c].ok++ : porEvento[e].canales[c].err++;
+  });
+  return {
+    total: total, ok: ok, err: total - ok,
+    tasa: total ? Math.round((ok / total) * 100) : 0,
+    porCanal: porCanal, porEvento: porEvento,
+    fallos: regs.filter(function(r) { return r.result !== 'ok'; })
+  };
+}
+
+function _pct(ok, total) { return total ? Math.round((ok / total) * 100) : 0; }
+
+function renderInforme() {
+  var regs = filtrarActual();
+  var inf = calcularInforme(regs);
+
+  document.getElementById('infPeriodo').textContent = textoPeriodo() + ' · ' + inf.total + ' envíos';
+  document.getElementById('infTotal').textContent = inf.total;
+  document.getElementById('infOk').textContent = inf.ok;
+  document.getElementById('infErr').textContent = inf.err;
+  document.getElementById('infTasa').textContent = inf.total ? inf.tasa + '%' : '—';
+
+  // ── Reparto por canal ──
+  var canales = Object.keys(inf.porCanal).sort(function(a, b) { return inf.porCanal[b].total - inf.porCanal[a].total; });
+  var elC = document.getElementById('infCanal');
+  if (!canales.length) {
+    elC.innerHTML = '<div class="empty-state"><div class="empty-text">Sin envíos en el periodo</div></div>';
+  } else {
+    var hC = '<table class="log-table"><thead><tr><th>Canal</th><th class="num-cell">Envíos</th><th class="num-cell">% del total</th><th class="num-cell">Correctos</th><th class="num-cell">Fallidos</th><th>Fiabilidad</th></tr></thead><tbody>';
+    canales.forEach(function(c) {
+      var d = inf.porCanal[c];
+      var p = _pct(d.ok, d.total);
+      hC += '<tr><td>' + badgeCanal(c) + '</td>'
+         + '<td class="num-cell">' + d.total + '</td>'
+         + '<td class="num-cell">' + _pct(d.total, inf.total) + '%</td>'
+         + '<td class="num-cell">' + d.ok + '</td>'
+         + '<td class="num-cell">' + d.err + '</td>'
+         + '<td><div class="bar-track"><div class="bar-fill' + (p < 90 ? ' low' : '') + '" style="width:' + p + '%"></div></div></td></tr>';
+    });
+    elC.innerHTML = hC + '</tbody></table>';
+  }
+
+  // ── Tipo de comunicación por canal ──
+  var eventos = Object.keys(inf.porEvento).sort(function(a, b) { return inf.porEvento[b].total - inf.porEvento[a].total; });
+  var elE = document.getElementById('infEvento');
+  if (!eventos.length) {
+    elE.innerHTML = '<div class="empty-state"><div class="empty-text">Sin envíos en el periodo</div></div>';
+  } else {
+    var hE = '<table class="log-table"><thead><tr><th>Tipo</th><th class="num-cell">WhatsApp</th><th class="num-cell">Email</th><th class="num-cell">Otros</th><th class="num-cell">Total</th><th class="num-cell">Fallidos</th></tr></thead><tbody>';
+    eventos.forEach(function(e) {
+      var d = inf.porEvento[e];
+      var wa = d.canales['whatsapp'] ? d.canales['whatsapp'].ok + d.canales['whatsapp'].err : 0;
+      var em = d.canales['email'] ? d.canales['email'].ok + d.canales['email'].err : 0;
+      var otros = d.total - wa - em;
+      hE += '<tr><td>' + esc(labelEvento(e)) + '</td>'
+         + '<td class="num-cell">' + (wa || '—') + '</td>'
+         + '<td class="num-cell">' + (em || '—') + '</td>'
+         + '<td class="num-cell">' + (otros || '—') + '</td>'
+         + '<td class="num-cell"><b>' + d.total + '</b></td>'
+         + '<td class="num-cell">' + (d.err ? '<span class="badge badge-error">' + d.err + '</span>' : '—') + '</td></tr>';
+    });
+    elE.innerHTML = hE + '</tbody></table>';
+  }
+
+  // ── Fallos ──
+  var elF = document.getElementById('infFallos');
+  if (!inf.fallos.length) {
+    elF.innerHTML = '<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-text">Ningún envío fallido en el periodo</div></div>';
+  } else {
+    var hF = '<table class="log-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Canal</th><th>Cliente</th><th>Destino</th><th>Motivo</th></tr></thead><tbody>';
+    inf.fallos.slice(0, 100).forEach(function(r) {
+      var f = r.createdDate ? new Date(r.createdDate).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+      var motivo = String(r.errorDetail || '—');
+      if (motivo.length > 90) motivo = motivo.slice(0, 87) + '...';
+      hF += '<tr><td>' + f + '</td><td>' + esc(labelEvento(r.event)) + '</td><td>' + badgeCanal(r.channel) + '</td><td>' + esc(r.clientName || '—') + '</td><td style="font-size:10px;">' + esc(r.recipient || '—') + '</td><td style="font-size:10.5px;color:var(--text2);" title="' + esc(r.errorDetail || '') + '">' + esc(motivo) + '</td></tr>';
+    });
+    elF.innerHTML = hF + '</tbody></table>'
+      + (inf.fallos.length > 100 ? '<div class="empty-text" style="margin-top:8px;">Se muestran los 100 más recientes de ' + inf.fallos.length + '. El Excel los lleva todos.</div>' : '');
+  }
+}
+
+// ═══ EXPORTACIÓN A EXCEL (v1.6.0) ═════════════════
+function _nombreFichero(base) {
+  var d = document.getElementById('fDesde').value || 'inicio';
+  var h = document.getElementById('fHasta').value || 'hoy';
+  return base + '_' + d + '_' + h + '.xlsx';
+}
+function _filaDetalle(r) {
+  return [
+    r.createdDate ? new Date(r.createdDate).toLocaleString('es-ES') : '',
+    labelEvento(r.event),
+    labelCanal(r.channel),
+    r.clientName || '',
+    r.recipient || '',
+    r.result === 'ok' ? 'Correcto' : 'Fallido',
+    r.errorDetail || '',
+    r.services || '',
+    r.staffName || '',
+    r.appointmentDate || '',
+    r.appointmentTime || ''
+  ];
+}
+var CABECERA_DETALLE = ['Fecha', 'Tipo', 'Canal', 'Cliente', 'Destinatario', 'Resultado', 'Motivo del fallo', 'Servicios', 'Profesional', 'Fecha cita', 'Hora cita'];
+
+function exportarMonitorExcel() {
+  try {
+    var regs = filtrarActual();
+    if (!regs.length) { showToast('No hay envíos que exportar', 'error'); return; }
+    var datos = [CABECERA_DETALLE].concat(regs.map(_filaDetalle));
+    var wb = XLSX.utils.book_new();
+    var ws = XLSX.utils.aoa_to_sheet(datos);
+    ws['!cols'] = [{ wch: 20 }, { wch: 24 }, { wch: 12 }, { wch: 26 }, { wch: 28 }, { wch: 11 }, { wch: 45 }, { wch: 30 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Envíos');
+    XLSX.writeFile(wb, _nombreFichero('comunicaciones'));
+    showToast('Excel generado', 'ok');
+  } catch (e) {
+    showToast('No se pudo generar el Excel', 'error');
+  }
+}
+
+function exportarInformeExcel() {
+  try {
+    var regs = filtrarActual();
+    if (!regs.length) { showToast('No hay envíos que exportar', 'error'); return; }
+    var inf = calcularInforme(regs);
+    var wb = XLSX.utils.book_new();
+
+    var resumen = [
+      ['INFORME DE COMUNICACIONES'],
+      ['Periodo', textoPeriodo()],
+      ['Generado', new Date().toLocaleString('es-ES')],
+      [],
+      ['Envíos totales', inf.total],
+      ['Correctos', inf.ok],
+      ['Fallidos', inf.err],
+      ['% sin incidencias', inf.total ? inf.tasa + '%' : '—']
+    ];
+    var wsR = XLSX.utils.aoa_to_sheet(resumen);
+    wsR['!cols'] = [{ wch: 26 }, { wch: 34 }];
+    XLSX.utils.book_append_sheet(wb, wsR, 'Resumen');
+
+    var canalData = [['Canal', 'Envíos', '% del total', 'Correctos', 'Fallidos', '% sin incidencias']];
+    Object.keys(inf.porCanal).sort(function(a, b) { return inf.porCanal[b].total - inf.porCanal[a].total; })
+      .forEach(function(c) {
+        var d = inf.porCanal[c];
+        canalData.push([labelCanal(c), d.total, _pct(d.total, inf.total) + '%', d.ok, d.err, _pct(d.ok, d.total) + '%']);
+      });
+    var wsC = XLSX.utils.aoa_to_sheet(canalData);
+    wsC['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 11 }, { wch: 10 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, wsC, 'Por canal');
+
+    var evData = [['Tipo', 'WhatsApp', 'Email', 'Otros', 'Total', 'Correctos', 'Fallidos']];
+    Object.keys(inf.porEvento).sort(function(a, b) { return inf.porEvento[b].total - inf.porEvento[a].total; })
+      .forEach(function(e) {
+        var d = inf.porEvento[e];
+        var wa = d.canales['whatsapp'] ? d.canales['whatsapp'].ok + d.canales['whatsapp'].err : 0;
+        var em = d.canales['email'] ? d.canales['email'].ok + d.canales['email'].err : 0;
+        evData.push([labelEvento(e), wa, em, d.total - wa - em, d.total, d.ok, d.err]);
+      });
+    var wsE = XLSX.utils.aoa_to_sheet(evData);
+    wsE['!cols'] = [{ wch: 26 }, { wch: 11 }, { wch: 10 }, { wch: 9 }, { wch: 9 }, { wch: 11 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, wsE, 'Por tipo');
+
+    if (inf.fallos.length) {
+      var falloData = [CABECERA_DETALLE].concat(inf.fallos.map(_filaDetalle));
+      var wsF = XLSX.utils.aoa_to_sheet(falloData);
+      wsF['!cols'] = [{ wch: 20 }, { wch: 24 }, { wch: 12 }, { wch: 26 }, { wch: 28 }, { wch: 11 }, { wch: 45 }, { wch: 30 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
+      XLSX.utils.book_append_sheet(wb, wsF, 'Fallidos');
+    }
+
+    var detData = [CABECERA_DETALLE].concat(regs.map(_filaDetalle));
+    var wsD = XLSX.utils.aoa_to_sheet(detData);
+    wsD['!cols'] = [{ wch: 20 }, { wch: 24 }, { wch: 12 }, { wch: 26 }, { wch: 28 }, { wch: 11 }, { wch: 45 }, { wch: 30 }, { wch: 18 }, { wch: 12 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, wsD, 'Detalle');
+
+    XLSX.writeFile(wb, _nombreFichero('informe_comunicaciones'));
+    showToast('Informe generado', 'ok');
+  } catch (e) {
+    showToast('No se pudo generar el informe', 'error');
+  }
 }
 
 // ═══ INIT ═════════════════════════════════════════
