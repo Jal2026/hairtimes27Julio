@@ -11,8 +11,28 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
     /* ═══════════════════════════════════════════════════════
-       ESTADÍSTICAS KAMISUITE v2.6.2 — Light theme
+       ESTADÍSTICAS KAMISUITE v2.7.0 — Light theme
        ═════════════════════════════════════════════════════
+       v2.7.0 (30 ago 2026): PRODUCTIVIDAD — SERVICIO Y PRODUCTO EN
+         COLUMNAS SEPARADAS.
+         Acompaña al backend estadisticas.web.js v2.8.0, que deja de
+         tratar la tienda y los especiales como si fueran empleados y
+         atribuye cada venta a la persona que le corresponde (titular de
+         la cita de origen, empleado logueado, o "Salón" cuando no hay
+         login).
+         - "Productividad por Empleado" pasa de 6 a 8 columnas: se abren
+           "Servicios" y "Producto" al lado de los ingresos totales.
+           "Producto" incluye los especiales (bonos, PRIME, tarjetas).
+         - Las ratios EUR/hora y Min/servicio se pintan como "—" cuando
+           no hay jornada o no hay servicios. La fila "Salón" no rinde
+           mal: es que no tiene horas. Un 0,00 €/h ahí se leía como un
+           rendimiento pésimo que no existe.
+         - Mismo cambio replicado en el PDF y en la hoja de Excel.
+         - "Por Staff" no necesita cambio: las etiquetas vienen del
+           backend y "Salón" aparece como una fila más.
+         - Con un backend anterior a v2.8.0 las columnas nuevas salen a
+           cero y el resto de la pantalla sigue igual.
+
        v2.6.2 (12 ago 2026): MEDIOS DE PAGO EN DOS VISTAS + CANJES.
          - El gráfico "Por Método de Pago" pasa a titularse "Importes
            reales por canal": desde el backend v2.6.1 los mixtos ya van
@@ -515,6 +535,9 @@
 
     function eur(n) { return (Math.round(Number(n || 0) * 100) / 100).toFixed(2).replace('.', ',') + '€'; }
     function pct(n) { return (Math.round(Number(n || 0) * 100) / 100).toFixed(2).replace('.', ',') + '%'; }
+    // v2.7.0 — ratio sin denominador: no existe, no es cero.
+    function eurN(n) { return (n === null || n === undefined) ? '—' : eur(n); }
+    function minN(n) { return (n === null || n === undefined) ? '—' : (n + ' min'); }
     function toISODate(dateObj) {
       const y = dateObj.getFullYear();
       const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -1402,9 +1425,11 @@
       let htmlProd = '';
       if (data.productividadStaff && data.productividadStaff.length > 0) {
         htmlProd += '<h3>Productividad por Empleado</h3>';
-        htmlProd += '<table class="tabla-desglose"><thead><tr><th>Empleado</th><th>Ingresos</th><th>Horas</th><th>Servicios</th><th>EUR/hora</th><th>Min/servicio</th></tr></thead><tbody>';
+        htmlProd += '<table class="tabla-desglose"><thead><tr><th>Empleado</th><th>Ingresos</th><th>Servicios €</th><th>Producto €</th><th>Horas</th><th>Servicios</th><th>EUR/hora</th><th>Min/servicio</th></tr></thead><tbody>';
         for (const ps of data.productividadStaff) {
-          htmlProd += `<tr class="svc-row"><td>${ps.nombre}</td><td>${eur(ps.ingresos)}</td><td>${ps.horas}h</td><td>${ps.servicios}</td><td>${eur(ps.eurosPorHora)}</td><td>${ps.minutosPorServicio} min</td></tr>`;
+          // v2.7.0 — ingresosServicios / ingresosProducto los manda el
+          // backend v2.8.0; con uno anterior salen a cero.
+          htmlProd += `<tr class="svc-row"><td>${ps.nombre}</td><td>${eur(ps.ingresos)}</td><td>${eur(ps.ingresosServicios || 0)}</td><td>${eur(ps.ingresosProducto || 0)}</td><td>${ps.horas}h</td><td>${ps.servicios}</td><td>${eurN(ps.eurosPorHora)}</td><td>${minN(ps.minutosPorServicio)}</td></tr>`;
         }
         htmlProd += '</tbody></table>';
       }
@@ -1791,11 +1816,11 @@
         doc.text('Productividad por Empleado', m, y); y += 5;
         doc.autoTable({
           startY: y,
-          head: [['Empleado', 'Ingresos', 'Horas', 'Servicios', 'EUR/hora', 'Min/serv.']],
-          body: _lastData.productividadStaff.map(ps => [ps.nombre, eur(ps.ingresos), ps.horas + 'h', String(ps.servicios), eur(ps.eurosPorHora), ps.minutosPorServicio + ' min']),
+          head: [['Empleado', 'Ingresos', 'Servicios €', 'Producto €', 'Horas', 'Servicios', 'EUR/hora', 'Min/serv.']],
+          body: _lastData.productividadStaff.map(ps => [ps.nombre, eur(ps.ingresos), eur(ps.ingresosServicios || 0), eur(ps.ingresosProducto || 0), ps.horas + 'h', String(ps.servicios), eurN(ps.eurosPorHora), minN(ps.minutosPorServicio)]),
           theme: 'striped', styles: bodyStyle, headStyles: headStyle,
           margin: { left: m, right: m },
-          columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' } }
+          columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' } }
         });
         y = doc.lastAutoTable.finalY + 10;
       }
@@ -1999,9 +2024,9 @@
       }
 
       if (_lastData.productividadStaff && _lastData.productividadStaff.length > 0) {
-        const prodData = [['Empleado', 'Ingresos (€)', 'Horas', 'Servicios', 'EUR/hora', 'Min/servicio']];
-        for (const ps of _lastData.productividadStaff) prodData.push([ps.nombre, ps.ingresos, ps.horas, ps.servicios, ps.eurosPorHora, ps.minutosPorServicio]);
-        const wsProd = XLSX.utils.aoa_to_sheet(prodData); wsProd['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 14 }]; XLSX.utils.book_append_sheet(wb, wsProd, 'Productividad');
+        const prodData = [['Empleado', 'Ingresos (€)', 'Servicios (€)', 'Producto (€)', 'Horas', 'Servicios', 'EUR/hora', 'Min/servicio']];
+        for (const ps of _lastData.productividadStaff) prodData.push([ps.nombre, ps.ingresos, ps.ingresosServicios || 0, ps.ingresosProducto || 0, ps.horas, ps.servicios, (ps.eurosPorHora === null || ps.eurosPorHora === undefined) ? '' : ps.eurosPorHora, (ps.minutosPorServicio === null || ps.minutosPorServicio === undefined) ? '' : ps.minutosPorServicio]);
+        const wsProd = XLSX.utils.aoa_to_sheet(prodData); wsProd['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 14 }]; XLSX.utils.book_append_sheet(wb, wsProd, 'Productividad');
       }
 
       const compTag = _comparativaActivo ? '_COMP' : '';
