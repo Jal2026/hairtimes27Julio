@@ -1,6 +1,53 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.7.2
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.8.0
 // =====================================================
+// v2.8.0 (30 ago 2026): LA TIENDA NO ES UNA PERSONA.
+//
+//   DEFECTO. El informe apartaba del reparto por empleado UN solo
+//   discriminador, 'TIENDA_POS'. Los otros dos marcadores que tampoco son
+//   personas —'TIENDA' (venta de producto con orden y factura) y
+//   'ESPECIALES' (bonos, PRIME, tarjetas)— se colaban tal cual y
+//   normalizarStaff los convertía en dos empleados fantasma llamados
+//   "Tienda" y "Especiales".
+//   Consecuencias visibles en Hair-Times (agosto 2026): una cuarta barra
+//   "Tienda" con 223,45 € en "Por Staff"; los porcentajes de Ricardo,
+//   Raquel y Angela calculados contra un total que incluía ventas que no
+//   hizo ninguno de los tres; y una fila "Tienda" en Productividad con 0
+//   horas y 0 servicios que dejaba €/hora y min/servicio a cero.
+//
+//   REGLA DE ATRIBUCIÓN (decisión de producto de Jal, 30-ago-2026). La
+//   venta de producto SÍ es rendimiento y SÍ debe contar en la
+//   productividad del profesional, porque en un salón con capa de acceso
+//   suele llevar comisión. Se resuelve en tres saltos:
+//     1. Si la venta nació DENTRO de una cita → al titular de esa cita.
+//        tiendaProductos v1.5.14 guarda la cita en `reservaId`.
+//     2. Si no nació de una cita pero hay login → al empleado que la
+//        cobró (`soldBy`, lo graba tiendaProductos v1.5.13).
+//     3. Sin login no se sabe quién vendió → a "Salón", que es una fila
+//        más del informe con su importe. NO se reparte entre nadie.
+//   El mismo criterio se aplica a los ESPECIALES.
+//
+//   NO HAY NADA QUE REETIQUETAR. `reservaId` y `soldBy` ya viajan en cada
+//   fila de PaymentReservations desde agosto: el informe simplemente no
+//   los miraba. El histórico se lee bien sin tocar un solo dato.
+//
+//   COLUMNAS SEPARADAS en Productividad: `ingresosServicios` e
+//   `ingresosProducto` (este último incluye los ESPECIALES). Así:
+//     · min/servicio se calcula SOLO con servicios reales — vender un
+//       champú ya no baja artificialmente la media de nadie;
+//     · €/hora se calcula con el ingreso TOTAL de la persona, producto
+//       incluido, que es lo coherente si va a haber comisión.
+//
+//   RATIOS VACÍAS, NO A CERO. `eurosPorHora` y `minutosPorServicio`
+//   devuelven null cuando no hay horas o no hay servicios. La fila "Salón"
+//   no rinde mal: es que no tiene jornada. El widget lo pinta como "—".
+//
+//   TIENDA_POS entra ahora en el reparto por persona, pero sigue saliendo
+//   del bucle antes del parseo de líneas: su detalle lo construye
+//   `productosPOS` y se fusiona en el bloque de productos, como hasta
+//   ahora. No se toca ni el desglose por categorías, ni el ranking de
+//   servicios, ni la segregación fiscal de externos de v2.7.1.
+//
 // v2.7.2 (18 ago 2026): DESGLOSE DE EXTERNOS, TODAS LAS LÍNEAS.
 //   El desglose leía SOLO el primer servicio de cada cobro externo y le
 //   imputaba el importe ÍNTEGRO. Un cobro de 76,50€ con pedicura, manicura
@@ -212,9 +259,10 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const VERSION = '2.7.2';
+const VERSION = '2.8.0';
 const TAG = `[Stats v${VERSION}]`;
 const COLECCION_PAGOS = 'PaymentReservations';
+const CMS_RESERVAS = 'KamisuiteReservations';
 const CMS_EXTERNAL_SERVICES = 'ExternalServices';
 const CMS_EXTERNAL_RECORDS = 'SvExternalRecords';
 const CMS_PAGOS_EXTERNOS = 'PagoreservasExternos';
@@ -227,6 +275,19 @@ const PREFIJO_PAGO_EXT = 'EXT_';
 const TIMEZONE_MADRID = 'Europe/Madrid';
 const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const DEFAULT_VAT_RATE = 21;
+
+// ── v2.8.0 ─────────────────────────────────────────────────────────────
+// Valores que PaymentReservations.staff usa como DISCRIMINADOR de tipo de
+// cobro y que NO son personas. Nunca deben aparecer como empleado en un
+// gráfico ni en una tabla de personal.
+//   TIENDA      → venta de producto con orden + factura (tiendaProductos)
+//   TIENDA_POS  → venta standalone desde Tienda Productos
+//   ESPECIALES  → bono / PRIME / tarjeta vendidos desde Recepción
+const MARCADORES_NO_PERSONA = new Set(['TIENDA', 'TIENDA_POS', 'ESPECIALES']);
+
+// Bote del salón: ventas de mostrador sin capa de acceso, donde no se
+// puede saber quién las hizo. Es una fila más del informe; no se reparte.
+const ETIQUETA_SALON = 'Salón';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // v2.7.0 — HELPERS DE MÓDULO
@@ -540,6 +601,58 @@ export const obtenerEstadisticas = webMethod(
       };
 
       // ══════════════════════════════════════════════════════════════
+      // 2·bis. v2.8.0 — TITULAR DE LA CITA DE ORIGEN
+      // ══════════════════════════════════════════════════════════════
+      //    Las ventas de producto y de ESPECIALES se graban con un
+      //    discriminador en `staff` que NO es una persona. Cuando la venta
+      //    nació dentro de una cita, `reservaId` apunta a esa cita: de ahí
+      //    sale el profesional al que pertenece el mérito.
+      //    Solo se consultan las citas estrictamente necesarias.
+      const titularPorReserva = {};
+      {
+        const idsReserva = new Set();
+        for (const p of pagos) {
+          const raw = String(p.staff || '').trim().toUpperCase();
+          if (!MARCADORES_NO_PERSONA.has(raw)) continue;
+          const rid = String(p.reservaId || '').trim();
+          if (rid) idsReserva.add(rid);
+        }
+        const lista = Array.from(idsReserva);
+        for (let i = 0; i < lista.length; i += 50) {
+          const lote = lista.slice(i, i + 50);
+          try {
+            const rRes = await wixData.query(CMS_RESERVAS)
+              .hasSome('_id', lote)
+              .limit(50)
+              .find({ suppressAuth: true });
+            for (const it of (rRes.items || [])) {
+              const titular = String(it.staffName || '').trim();
+              if (titular) titularPorReserva[it._id] = titular;
+            }
+          } catch (eRes) {
+            console.warn(`${TAG} titularPorReserva lote ${i}: ${eRes.message}`);
+          }
+        }
+        console.log(`${TAG} v2.8.0 — ventas con cita de origen: ${Object.keys(titularPorReserva).length}/${lista.length}`);
+      }
+
+      // v2.8.0 — A QUIÉN PERTENECE UN COBRO.
+      //   Cobro de servicio  → el titular que ya lleva la fila.
+      //   Venta de producto o ESPECIAL:
+      //     1) cita de origen  → titular de la cita
+      //     2) empleado logueado que la cobró (`soldBy`)
+      //     3) sin login       → "Salón"
+      const resolverPersona = (p) => {
+        const raw = String(p.staff || '').trim().toUpperCase();
+        if (!MARCADORES_NO_PERSONA.has(raw)) return normalizarStaff(p.staff);
+        const rid = String(p.reservaId || '').trim();
+        if (rid && titularPorReserva[rid]) return normalizarStaff(titularPorReserva[rid]);
+        const vendedor = String(p.soldBy || '').trim();
+        if (vendedor) return normalizarStaff(vendedor);
+        return ETIQUETA_SALON;
+      };
+
+      // ══════════════════════════════════════════════════════════════
       // 3. PROCESAR PAGOS
       // ══════════════════════════════════════════════════════════════
       let totalIngresos = 0;
@@ -608,7 +721,29 @@ export const obtenerEstadisticas = webMethod(
         porBoton[botonKey].n++;
         porBoton[botonKey].importe += importe;
 
-        const staffRaw = (p.staff || '').toUpperCase();
+        // ── v2.8.0 · A QUIÉN PERTENECE ESTE COBRO ─────────────────────
+        //    El reparto por persona se hace ANTES de sacar del bucle a la
+        //    tienda standalone: hasta v2.7.2 ese `continue` dejaba sus
+        //    ventas fuera del rendimiento de nadie.
+        const staffRaw = String(p.staff || '').trim().toUpperCase();
+        const esVenta = MARCADORES_NO_PERSONA.has(staffRaw);   // producto o especial
+        const staff = resolverPersona(p);
+
+        porStaff[staff] = (porStaff[staff] || 0) + importe;
+
+        if (!productividadPorStaff[staff]) {
+          productividadPorStaff[staff] = {
+            ingresos: 0,
+            ingresosServicios: 0,
+            ingresosProducto: 0,
+            minutos: 0,
+            servicios: 0
+          };
+        }
+        productividadPorStaff[staff].ingresos += importe;
+        if (esVenta) productividadPorStaff[staff].ingresosProducto += importe;
+        else productividadPorStaff[staff].ingresosServicios += importe;
+
         if (staffRaw === 'TIENDA_POS') {
           const desc = (p.descripcion || '').trim();
           let nombreProd = desc.replace(/^🛒\s*/, '').replace(/\s*\([\d.,]+€?\)\s*$/, '').trim();
@@ -618,14 +753,6 @@ export const obtenerEstadisticas = webMethod(
           productosPOS[nombreProd].total += importe;
           continue;
         }
-
-        const staff = normalizarStaff(p.staff);
-        porStaff[staff] = (porStaff[staff] || 0) + importe;
-
-        if (!productividadPorStaff[staff]) {
-          productividadPorStaff[staff] = { ingresos: 0, minutos: 0, servicios: 0 };
-        }
-        productividadPorStaff[staff].ingresos += importe;
 
         const desc = p.descripcion || '';
         if (!desc) continue;
@@ -663,6 +790,9 @@ export const obtenerEstadisticas = webMethod(
               porStaff[staff] = (porStaff[staff] || 0) - precio;
               if (productividadPorStaff[staff]) {
                 productividadPorStaff[staff].ingresos -= precio;
+                // v2.8.0 — una línea externa siempre es de servicio, nunca
+                // de producto: se descuenta de la columna que corresponde.
+                productividadPorStaff[staff].ingresosServicios -= precio;
               }
               if (p.fechaPago) {
                 const diaExt = new Date(p.fechaPago).toLocaleDateString('en-CA', { timeZone: TIMEZONE_MADRID });
@@ -1213,6 +1343,9 @@ export const obtenerEstadisticas = webMethod(
       for (const k of Object.keys(porBoton)) porBoton[k].importe = round2(porBoton[k].importe);
       for (const k of Object.keys(productividadPorStaff)) {
         productividadPorStaff[k].ingresos = round2(productividadPorStaff[k].ingresos);
+        // v2.8.0
+        productividadPorStaff[k].ingresosServicios = round2(productividadPorStaff[k].ingresosServicios);
+        productividadPorStaff[k].ingresosProducto = round2(productividadPorStaff[k].ingresosProducto);
       }
 
       // ── v2.7.0: EJE DE DÍAS CONTINUO ──────────────────────────────
@@ -1375,12 +1508,20 @@ export const obtenerEstadisticas = webMethod(
         .sort((a, b) => b[1].ingresos - a[1].ingresos)
         .map(([nombre, data]) => ({
           nombre,
-          ingresos: Math.round(data.ingresos * 100) / 100,
+          ingresos: round2(data.ingresos),
+          // v2.8.0 — columnas separadas. `ingresosProducto` incluye los
+          // ESPECIALES (bonos, PRIME, tarjetas).
+          ingresosServicios: round2(data.ingresosServicios),
+          ingresosProducto: round2(data.ingresosProducto),
           minutos: data.minutos,
-          horas: Math.round((data.minutos / 60) * 100) / 100,
+          horas: round2(data.minutos / 60),
           servicios: data.servicios,
-          eurosPorHora: data.minutos > 0 ? Math.round((data.ingresos / (data.minutos / 60)) * 100) / 100 : 0,
-          minutosPorServicio: data.servicios > 0 ? Math.round((data.minutos / data.servicios) * 100) / 100 : 0
+          // v2.8.0 — null, no cero: sin jornada la ratio NO EXISTE. Una
+          // fila "Salón" a 0,00 €/hora leería como rendimiento pésimo.
+          eurosPorHora: data.minutos > 0 ? round2(data.ingresos / (data.minutos / 60)) : null,
+          minutosPorServicio: data.servicios > 0 ? round2(data.minutos / data.servicios) : null,
+          // v2.8.0 — bote del salón: ventas sin persona identificable.
+          esSalon: nombre === ETIQUETA_SALON
         }));
 
       // ── Extras (sin propinas, que van aparte) ──
