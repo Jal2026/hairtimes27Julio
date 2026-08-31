@@ -11,8 +11,24 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
     /* ═══════════════════════════════════════════════════════
-       ESTADÍSTICAS KAMISUITE v2.7.0 — Light theme
+       ESTADÍSTICAS KAMISUITE v2.7.1 — Light theme
        ═════════════════════════════════════════════════════
+       v2.7.1 (31 ago 2026): RESUMEN FISCAL EN PANTALLA.
+         Nuevo bloque "Resumen fiscal" en el informe principal, debajo del
+         desglose por categorías. Cinco líneas: Facturación Internos
+         (servicios + productos, IVA incluido), Descuentos aplicados,
+         Facturación por Comisión Externos (IVA incluido), Base imponible
+         y Cuota IVA. Base y cuota se calculan sobre el total facturado
+         (internos + comisión externos) para que el bloque cuadre con las
+         dos líneas de facturación de arriba.
+         - La fila "Descuentos aplicados" queda cableada a
+           data.totalDescuentos y se oculta mientras el backend no lo
+           devuelva (hoy estadisticas.web.js no lo calcula).
+         - Solo maquetación sobre datos que ya envía el backend
+           (granTotal, vatRate). No se cambia ningún cálculo existente.
+         - Reutiliza tabla-desglose-container / tabla-desglose / grand-total
+           / col-iva. Sin CSS nuevo.
+
        v2.7.0 (30 ago 2026): PRODUCTIVIDAD — SERVICIO Y PRODUCTO EN
          COLUMNAS SEPARADAS.
          Acompaña al backend estadisticas.web.js v2.8.0, que deja de
@@ -401,6 +417,8 @@
     <table class="tabla-desglose" id="tablaDesglose"></table>
   </div>
 
+  <div class="tabla-desglose-container" id="resumenFiscalSection" style="display:none;"></div>
+
   <div class="tabla-desglose-container" id="seccionNuevas" style="display:none;">
     <div id="diaSemanaSection"></div>
     <div id="clientesSection" style="margin-top:20px;"></div>
@@ -413,7 +431,7 @@
     // VARIABLES GLOBALES
     // ═══════════════════════════════════════════════════════════════════════
 
-    const WIDGET_VERSION = '2.6.2';
+    const WIDGET_VERSION = '2.7.1';
 
     let chartIngresos = null;
     let chartMetodo = null;
@@ -529,6 +547,7 @@
       document.getElementById('graficos').innerHTML = '<div class="loading">Cargando estadísticas</div>';
       document.getElementById('tablaContainer').style.display = 'none';
       document.getElementById('seccionNuevas').style.display = 'none';
+      document.getElementById('resumenFiscalSection').style.display = 'none';
       hideComparativaInfo();
       window.parent.postMessage({ type: 'load', fechaDesde, fechaHasta }, '*');
     }
@@ -842,6 +861,7 @@
       document.getElementById('graficos').innerHTML = '<div class="loading">Cargando comparativa</div>';
       document.getElementById('tablaContainer').style.display = 'none';
       document.getElementById('seccionNuevas').style.display = 'none';
+      document.getElementById('resumenFiscalSection').style.display = 'none';
 
       window.parent.postMessage({
         type: 'loadComparativa',
@@ -895,6 +915,7 @@
         document.getElementById('etiquetaImpuesto').textContent = 'Impuesto';
         document.getElementById('tablaContainer').style.display = 'none';
         document.getElementById('seccionNuevas').style.display = 'none';
+        document.getElementById('resumenFiscalSection').style.display = 'none';
         if (!_comparativaActivo) { document.querySelectorAll('.delta').forEach(d => d.classList.remove('visible')); }
         return;
       }
@@ -1130,6 +1151,7 @@
       }
 
       renderTablaDesglose(data);
+      renderResumenFiscal(data);
       renderNuevasSecciones(data);
     }
 
@@ -1364,6 +1386,40 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // RESUMEN FISCAL (v2.7.1) — bloque en pantalla del informe principal
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function renderResumenFiscal(data) {
+      const cont = document.getElementById('resumenFiscalSection');
+      if (!cont) return;
+      const gt = data && data.granTotal;
+      if (!gt) { cont.innerHTML = ''; cont.style.display = 'none'; return; }
+
+      const vr = data.vatRate || 21;
+      const r2 = x => Math.round(Number(x || 0) * 100) / 100;
+      const totalConIva = r2(gt.total);
+      const comisionExternos = r2(gt.comisionExternos);
+      const facturaInternos = r2(totalConIva - comisionExternos);
+      const baseImponible = r2(totalConIva / (1 + vr / 100));
+      const cuotaIva = r2(totalConIva - baseImponible);
+      const descuentos = (data.totalDescuentos !== null && data.totalDescuentos !== undefined)
+        ? Number(data.totalDescuentos) : null;
+
+      let h = '<h3>Resumen fiscal</h3>';
+      h += '<table class="tabla-desglose"><tbody>';
+      h += `<tr class="svc-row"><td>Facturación Internos (IVA incluido)</td><td>${eur(facturaInternos)}</td></tr>`;
+      if (descuentos !== null && descuentos > 0) {
+        h += `<tr class="svc-row"><td>Descuentos aplicados</td><td>-${eur(descuentos)}</td></tr>`;
+      }
+      h += `<tr class="svc-row"><td>Facturación por Comisión Externos (IVA incluido)</td><td>${eur(comisionExternos)}</td></tr>`;
+      h += `<tr class="svc-row"><td>Base imponible</td><td>${eur(baseImponible)}</td></tr>`;
+      h += `<tr class="grand-total"><td>Cuota IVA (${vr}%)</td><td class="col-iva">${eur(cuotaIva)}</td></tr>`;
+      h += '</tbody></table>';
+      cont.innerHTML = h;
+      cont.style.display = 'block';
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // NUEVAS SECCIONES (sin cambios respecto a v2.4)
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -1450,6 +1506,7 @@
       document.getElementById('graficos').innerHTML = `<div class="no-datos">Error: ${message}</div>`;
       document.getElementById('tablaContainer').style.display = 'none';
       document.getElementById('seccionNuevas').style.display = 'none';
+      document.getElementById('resumenFiscalSection').style.display = 'none';
     }
 
     // ═══════════════════════════════════════════════════════════════════════
