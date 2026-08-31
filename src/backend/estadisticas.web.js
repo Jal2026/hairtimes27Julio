@@ -1,6 +1,14 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.8.0
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.8.1
 // =====================================================
+// v2.8.1 (31 ago 2026): TOTAL DE DESCUENTOS EN EL RETORNO.
+//   Nuevo campo `totalDescuentos`: suma de los descuentos aplicados en los
+//   cobros internos del período, parseando el token "🏷️ Descuento ..." de
+//   PaymentReservations.descripcion con el MISMO helper que ya usa el
+//   cierre. Alimenta la línea "Descuentos aplicados" del bloque Resumen
+//   fiscal del widget (v2.7.1). No cambia ningún total existente: es un
+//   dato informativo que se añade al objeto de retorno.
+//
 // v2.8.0 (30 ago 2026): LA TIENDA NO ES UNA PERSONA.
 //
 //   DEFECTO. El informe apartaba del reparto por empleado UN solo
@@ -259,7 +267,7 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const VERSION = '2.8.0';
+const VERSION = '2.8.1';
 const TAG = `[Stats v${VERSION}]`;
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -295,6 +303,41 @@ const ETIQUETA_SALON = 'Salón';
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+// v2.8.1 — Extrae el importe de descuento del token "🏷️ Descuento ..." de
+// PaymentReservations.descripcion. Copia literal del helper del cierre
+// (cierreLogicExtendido), que soporta los dos formatos que escribe Recepción:
+//   "🏷️ Descuento -50% (-19.75€)"  → { discPct:50, discEur:19.75 }
+//   "🏷️ Descuento -25€"            → { discPct:0,  discEur:25 }
+function parsearDescuentoEnDescripcion(descripcion) {
+  if (!descripcion) return { discPct: 0, discEur: 0, label: '' };
+  const tokens = String(descripcion).split(/,\s*/);
+  for (const raw of tokens) {
+    const t = raw.trim();
+    const tLower = t.toLowerCase();
+    if (!t.startsWith('🏷') && !tLower.includes('descuento')) continue;
+    // Patrón porcentaje con eur entre paréntesis:  -50% (-19.75€)
+    const m1 = t.match(/-\s*([\d.,]+)\s*%\s*\(\s*-\s*([\d.,]+)\s*€?\s*\)/);
+    if (m1) {
+      const pct = parseFloat(m1[1].replace(',', '.')) || 0;
+      const eur = parseFloat(m1[2].replace(',', '.')) || 0;
+      return { discPct: pct, discEur: eur, label: `-${pct}%` };
+    }
+    // Patrón porcentaje sin paréntesis:  -50%
+    const m1b = t.match(/-\s*([\d.,]+)\s*%/);
+    if (m1b) {
+      const pct = parseFloat(m1b[1].replace(',', '.')) || 0;
+      return { discPct: pct, discEur: 0, label: `-${pct}%` };
+    }
+    // Patrón importe fijo:  -25€
+    const m2 = t.match(/-\s*([\d.,]+)\s*€/);
+    if (m2) {
+      const eur = parseFloat(m2[1].replace(',', '.')) || 0;
+      return { discPct: 0, discEur: eur, label: `-${eur}€` };
+    }
+  }
+  return { discPct: 0, discEur: 0, label: '' };
 }
 
 // Normaliza el tipoPago del ledger al nombre de BOTÓN que el operador
@@ -1568,6 +1611,14 @@ export const obtenerEstadisticas = webMethod(
 
       console.log(`${TAG} OK: ${pagos.length} pagos, ventas=${totalVentas}€ (base=${ivaGlobal.base}€, IVA=${ivaGlobal.cuota}€ @${vatRate}%), propinas=${totalPropinas}€, ext=${externosResult.citas} citas bruta=${externosResult.ventaBruta}€ comisión=${externosResult.comisionTotal}€, canjes=${canjesBono.n}/${canjesBono.valorConsumido}€ (fuera de facturación)`);
 
+      // v2.8.1 — Total de descuentos aplicados en los cobros internos del
+      //   período. Mismo parseo del token "🏷️ Descuento ..." que el cierre.
+      //   Informativo: no interviene en ventas, base ni IVA.
+      const totalDescuentos = round2(pagos.reduce((s, p) => {
+        const d = parsearDescuentoEnDescripcion(p.descripcion);
+        return s + (d.discEur > 0 ? d.discEur : 0);
+      }, 0));
+
       return {
         ok: true, hayDatos: true,
         vatRate,
@@ -1576,6 +1627,7 @@ export const obtenerEstadisticas = webMethod(
         totalPropinas,
         totalBaseImponible: ivaGlobal.base,
         totalImpuesto: ivaGlobal.cuota,
+        totalDescuentos,
         totalTransacciones: pagos.length,
         ingresosPorDia: datosIngresosDia,
         ingresosPorDiaRanking: datosIngresosDiaRanking,
