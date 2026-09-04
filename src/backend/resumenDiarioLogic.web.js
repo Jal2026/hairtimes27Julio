@@ -1,9 +1,19 @@
 // =====================================================
 // KAMISUITE - Backend: Resumen Diario por email
 // =====================================================
-// VERSION: 1.0.0
+// VERSION: 1.1.0
 // FECHA: 4 de septiembre de 2026
 // ARCHIVO: backend/resumenDiarioLogic.web.js
+//
+// v1.1.0: HORA DE ENVÍO CON MINUTOS.
+//         La v1.0.0 solo permitía horas en punto porque la tarea se
+//         despertaba una vez por hora. Ahora se despierta cada cuarto
+//         de hora y la hora se configura como texto HH:MM.
+//         · dailySummaryHour (Number) → dailySummaryTime (Text 'HH:MM')
+//         · cron '0 * * * *' → '*/15 * * * *' (ver jobs.config)
+//         · El envío sale en el primer cuarto de hora igual o posterior
+//           a la hora configurada: 17:15 sale a las 17:15; 17:20 saldría
+//           a las 17:30. Lo natural es usar :00, :15, :30 o :45.
 //
 // v1.0.0: Correo de cierre de jornada. Overview corto para el gerente,
 //         NO un informe. El informe completo vive en Recepción PRO y el
@@ -55,7 +65,8 @@
 //
 // CAMPOS NUEVOS EN SalonConfig (crear en el CMS antes de usar):
 //   · dailySummaryActive     Boolean — interruptor. VACÍO = APAGADO.
-//   · dailySummaryHour       Number  — hora de envío en punto (0-23), Madrid.
+//   · dailySummaryTime       Text    — hora de envío 'HH:MM' (Madrid).
+//                                      Ej.: '21:00', '17:15'. Vacío = no envía.
 //   · dailySummaryRecipients Text    — correos separados por comas.
 //                                      Vacío → generalEmail del salón.
 //   Lectura defensiva: si los campos aún no existen, el módulo se queda
@@ -64,8 +75,9 @@
 //
 // TAREA PROGRAMADA:
 //   Wix fija el cron en jobs.config, no por salón. Para que la hora sea
-//   configurable, el job se despierta CADA HORA y solo envía cuando la
-//   hora Madrid coincide con dailySummaryHour. Efecto lateral bueno:
+//   configurable, el job se despierta CADA CUARTO DE HORA y solo envía
+//   cuando el momento actual cae en el tramo de 15 minutos que abre la
+//   hora configurada en dailySummaryTime. Efecto lateral bueno:
 //   el cambio de horario verano/invierno se resuelve solo, porque la
 //   comparación se hace siempre en hora local de Madrid.
 //   Guarda anti-duplicado: si ya hay un envío 'resumen_diario' en
@@ -84,7 +96,7 @@ import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
 import { obtenerDatosCierreExtendidos } from 'backend/cierreLogicExtendido.web.js';
 import { obtenerDatosCierreExternos } from 'backend/cierreExternosLogic.web.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const TAG = `[ResumenDiario][${VERSION}]`;
 
 const TIMEZONE_MADRID = 'Europe/Madrid';
@@ -113,15 +125,42 @@ function mananaMadrid() {
   return diaMadrid(new Date(Date.now() + 24 * 60 * 60 * 1000));
 }
 
-// Hora Madrid actual (0-23).
-// Se normaliza con % 24 porque algunos motores devuelven "24" a las 00:00
-// con hour12:false. Defensivo, no cosmético.
-function horaActualMadrid() {
-  const txt = new Date().toLocaleString('en-GB', {
-    timeZone: TIMEZONE_MADRID, hour: '2-digit', hour12: false
+// Minutos transcurridos desde medianoche en hora Madrid (0-1439).
+// Se trabaja en minutos y no en 'HH:MM' para poder comparar tramos sin
+// depender del formato de texto. La hora se normaliza con % 24 porque
+// algunos motores devuelven "24" a las 00:00 con hour12:false.
+function minutosActualesMadrid() {
+  const txt = new Date().toLocaleTimeString('en-GB', {
+    timeZone: TIMEZONE_MADRID, hour: '2-digit', minute: '2-digit', hour12: false
   });
-  const n = parseInt(String(txt).replace(/[^0-9]/g, ''), 10);
-  return Number.isFinite(n) ? (n % 24) : -1;
+  const m = String(txt).match(/(\d{1,2})\D(\d{2})/);
+  if (!m) return -1;
+  const h = Number(m[1]) % 24;
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || min > 59) return -1;
+  return h * 60 + min;
+}
+
+// 'HH:MM' → minutos desde medianoche. Devuelve null si no es válido.
+// Tolerante con '7:05', '07:05' y espacios; no acepta nada más.
+function parsearHoraConfig(txt) {
+  const s = String(txt || '').trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2})\s*[:.\s]\s*(\d{1,2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// Texto legible de unos minutos desde medianoche, para los registros.
+function minutosATexto(mins) {
+  if (!Number.isFinite(mins) || mins < 0) return '--:--';
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 // Ventana UTC amplia alrededor de un día Madrid. El filtro fino se hace
@@ -195,7 +234,7 @@ async function leerConfigResumen() {
       .find({ suppressAuth: true });
 
     if (!res.items.length) {
-      return { activo: false, hora: null, destinatarios: [], motivo: 'SalonConfig vacío' };
+      return { activo: false, minutos: null, horaTexto: '', destinatarios: [], motivo: 'SalonConfig vacío' };
     }
 
     const cfg = res.items[0];
@@ -204,10 +243,10 @@ async function leerConfigResumen() {
     // = apagado (decisión Jal: nadie recibe correos sin pedirlos).
     const activo = cfg.dailySummaryActive === true;
 
-    const horaRaw = cfg.dailySummaryHour;
-    const hora = (horaRaw === null || horaRaw === undefined || horaRaw === '')
-      ? null
-      : Math.trunc(Number(horaRaw));
+    // Hora de envío como texto 'HH:MM' (v1.1.0). Se guarda también el
+    // texto original para poder decir en los registros qué se leyó.
+    const horaTexto = String(cfg.dailySummaryTime || '').trim();
+    const minutos = parsearHoraConfig(horaTexto);
 
     // Lista de destinatarios. Vacía → correo general del salón.
     const listaTxt = String(cfg.dailySummaryRecipients || '').trim();
@@ -223,11 +262,11 @@ async function leerConfigResumen() {
     // Sin duplicados (mismo correo repetido en la lista = un solo envío).
     destinatarios = Array.from(new Set(destinatarios.map(e => e.toLowerCase())));
 
-    return { activo, hora, destinatarios, brandName: cfg.brandName || '' };
+    return { activo, minutos, horaTexto, destinatarios, brandName: cfg.brandName || '' };
 
   } catch (e) {
     console.error(`${TAG} ⚠️ Error leyendo SalonConfig (fail-safe → apagado): ${e.message}`);
-    return { activo: false, hora: null, destinatarios: [], motivo: e.message };
+    return { activo: false, minutos: null, horaTexto: '', destinatarios: [], motivo: e.message };
   }
 }
 
@@ -679,9 +718,14 @@ export const enviarResumenDiario = webMethod(
 // =====================================================
 // ENTRADA DEL CRON HORARIO
 // =====================================================
-// Se despierta cada hora. Solo envía cuando la hora Madrid coincide con
-// la configurada. Orden deliberado: primero el interruptor y la hora
-// (una sola query), y solo entonces el trabajo pesado.
+// Se despierta cada cuarto de hora. Solo envía cuando el momento actual
+// cae dentro del tramo de 15 minutos que abre la hora configurada.
+// Se compara por tramo y no por igualdad exacta porque la tarea no se
+// ejecuta al segundo: si el cron entra a las 17:15:04, la comparación
+// estricta contra '17:15' fallaría y el correo no saldría nunca.
+// Orden deliberado: primero el interruptor y la hora (una sola query),
+// y solo entonces el trabajo pesado.
+const TRAMO_MIN = 15;
 
 export const ejecutarResumenDiarioProgramado = webMethod(
   Permissions.Admin,
@@ -692,17 +736,26 @@ export const ejecutarResumenDiarioProgramado = webMethod(
       return { ok: true, version: VERSION, skipped: true, reason: 'resumen diario desactivado en Salón Config' };
     }
 
-    if (cfg.hora === null || !Number.isFinite(cfg.hora) || cfg.hora < 0 || cfg.hora > 23) {
-      console.log(`${TAG} ⏸️ Hora de envío no configurada o fuera de rango: ${cfg.hora}`);
-      return { ok: true, version: VERSION, skipped: true, reason: 'hora de envío sin configurar' };
+    if (cfg.minutos === null) {
+      console.log(`${TAG} ⏸️ Hora de envío vacía o mal escrita: "${cfg.horaTexto}" (se espera HH:MM)`);
+      return { ok: true, version: VERSION, skipped: true, reason: 'hora de envío sin configurar o con formato inválido' };
     }
 
-    const ahora = horaActualMadrid();
-    if (ahora !== cfg.hora) {
-      return { ok: true, version: VERSION, skipped: true, reason: `no es la hora (${ahora}h Madrid, configurada ${cfg.hora}h)` };
+    const ahora = minutosActualesMadrid();
+    if (ahora < 0) {
+      console.error(`${TAG} ⚠️ No se pudo leer la hora local (se aborta)`);
+      return { ok: true, version: VERSION, skipped: true, reason: 'hora local ilegible' };
     }
 
-    console.log(`${TAG} ▶️ Hora de envío alcanzada (${cfg.hora}h Madrid)`);
+    const dentroDelTramo = (ahora >= cfg.minutos) && (ahora - cfg.minutos < TRAMO_MIN);
+    if (!dentroDelTramo) {
+      return {
+        ok: true, version: VERSION, skipped: true,
+        reason: `no es la hora (${minutosATexto(ahora)} Madrid, configurada ${minutosATexto(cfg.minutos)})`
+      };
+    }
+
+    console.log(`${TAG} ▶️ Hora de envío alcanzada (${minutosATexto(cfg.minutos)} Madrid)`);
     return await enviarResumenDiario({ fechaISO: hoyMadrid() });
   }
 );
