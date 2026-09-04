@@ -5,6 +5,22 @@
 // FECHA: 4 de septiembre de 2026
 // ARCHIVO: backend/resumenDiarioLogic.web.js
 //
+// v1.1.4: SE ELIMINA TODO LO QUE NO TENÍA PRECEDENTE EN EL PROYECTO.
+//         La tarea seguía sin ejecutarse y sin dejar rastro. El módulo
+//         de lógica carga y funciona (probado con el botón manual), así
+//         que el fallo estaba en el arranque. Lo único del arranque sin
+//         precedente eran las CUATRO entradas de jobs.config apuntando
+//         al mismo archivo (v1.1.3), invento propio igual que el '*/15'
+//         de la v1.1.0.
+//         · jobs.config vuelve a UNA sola entrada, cron '0 * * * *'.
+//         · resumenDiarioJob.js queda calcado a reminderJob.js, que
+//           lleva meses ejecutándose: mismo formato de import, misma
+//           forma de export, sin comentarios delante del import.
+//         · TRAMO_MIN 15 → 60 (despertares horarios).
+//         · Coste: se pierde la precisión de cuarto de hora. La hora
+//           configurada se redondea HACIA ARRIBA a la hora siguiente.
+//           '21:00' sale a las 21:00 exactas.
+//
 // v1.1.3: PRECISIÓN DE CUARTO DE HORA SIN SALIR DEL PLAN PLUS.
 //         El límite de Wix (1 repetición por hora como máximo) es POR
 //         TAREA, no por sitio: los planes normales admiten hasta 20
@@ -136,7 +152,7 @@ import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
 import { obtenerDatosCierreExtendidos } from 'backend/cierreLogicExtendido.web.js';
 import { obtenerDatosCierreExternos } from 'backend/cierreExternosLogic.web.js';
 
-const VERSION = '1.1.3';
+const VERSION = '1.1.4';
 const TAG = `[ResumenDiario][${VERSION}]`;
 
 const TIMEZONE_MADRID = 'Europe/Madrid';
@@ -766,7 +782,7 @@ export const enviarResumenDiario = webMethod(
 // estricta contra '20:15' fallaría y el correo no saldría nunca.
 // Orden deliberado: primero el interruptor y la hora (una sola query),
 // y solo entonces el trabajo pesado.
-const TRAMO_MIN = 15;
+const TRAMO_MIN = 60;
 
 export const ejecutarResumenDiarioProgramado = webMethod(
   Permissions.Admin,
