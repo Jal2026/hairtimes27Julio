@@ -1,9 +1,19 @@
 // =====================================================
 // KAMISUITE - Backend: Resumen Diario por email
 // =====================================================
-// VERSION: 1.1.4
+// VERSION: 1.1.5
 // FECHA: 4 de septiembre de 2026
 // ARCHIVO: backend/resumenDiarioLogic.web.js
+//
+// v1.1.5: SE RESTAURAN LAS CUATRO TAREAS ESCALONADAS DE LA v1.1.3.
+//         Los registros del sitio demostraron que la v1.1.3 SÍ se
+//         ejecutaba (ticks a las 22:30 y 22:45, leyendo interruptor,
+//         hora y destinatarios). La v1.1.4 las eliminó por una
+//         sospecha equivocada.
+//         · jobs.config vuelve a 4 entradas (:00, :15, :30, :45).
+//         · TRAMO_MIN 60 → 15.
+//         · Vuelve la precisión de cuarto de hora: '23:15' sale a las
+//           23:15.
 //
 // v1.1.4: SE ELIMINA TODO LO QUE NO TENÍA PRECEDENTE EN EL PROYECTO.
 //         La tarea seguía sin ejecutarse y sin dejar rastro. El módulo
@@ -152,7 +162,7 @@ import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
 import { obtenerDatosCierreExtendidos } from 'backend/cierreLogicExtendido.web.js';
 import { obtenerDatosCierreExternos } from 'backend/cierreExternosLogic.web.js';
 
-const VERSION = '1.1.4';
+const VERSION = '1.1.5';
 const TAG = `[ResumenDiario][${VERSION}]`;
 
 const TIMEZONE_MADRID = 'Europe/Madrid';
@@ -782,7 +792,7 @@ export const enviarResumenDiario = webMethod(
 // estricta contra '20:15' fallaría y el correo no saldría nunca.
 // Orden deliberado: primero el interruptor y la hora (una sola query),
 // y solo entonces el trabajo pesado.
-const TRAMO_MIN = 60;
+const TRAMO_MIN = 15;
 
 export const ejecutarResumenDiarioProgramado = webMethod(
   Permissions.Admin,
