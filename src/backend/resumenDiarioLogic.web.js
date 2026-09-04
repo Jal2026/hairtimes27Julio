@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE - Backend: Resumen Diario por email
 // =====================================================
-// VERSION: 1.1.0
+// VERSION: 1.1.4
 // FECHA: 4 de septiembre de 2026
 // ARCHIVO: backend/resumenDiarioLogic.web.js
 //
