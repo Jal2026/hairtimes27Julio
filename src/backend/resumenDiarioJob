@@ -1,0 +1,5 @@
+import { ejecutarResumenDiarioProgramado } from 'backend/resumenDiarioLogic.web';
+
+export async function resumenDiarioHorario() {
+  await ejecutarResumenDiarioProgramado();
+}
