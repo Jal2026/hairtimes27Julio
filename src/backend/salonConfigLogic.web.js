@@ -1,8 +1,39 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.12
+   salonConfigLogic.web.js  v1.0.13
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.13 · 4 Sep 2026 · Resumen diario del día por email
+     - ALL_FIELDS     += dailySummaryActive, dailySummaryTime,
+                         dailySummaryRecipients
+     - BOOLEAN_FIELDS += dailySummaryActive
+     - Correo de cierre de jornada con la actividad productiva y las
+       ventas del día. Tres campos:
+         · dailySummaryActive     Booleano — interruptor del envío.
+         · dailySummaryTime       Texto 'HH:MM' — hora de envío (Madrid).
+         · dailySummaryRecipients Texto — destinatarios separados por
+           comas, puntos y coma o saltos de línea. Vacío → generalEmail.
+     - Semántica del interruptor OPUESTA a la de emailReminder /
+       whatsappReminder: aquí solo envía con true EXPLÍCITO. Vacío,
+       null o error de lectura → APAGADO. Es deliberado y es una
+       decisión de producto (Jal, 4-sep-2026): el recordatorio es un
+       servicio que el cliente espera y por eso falla hacia encendido;
+       este correo es interno y nadie debe empezar a recibirlo por el
+       hecho de desplegar. Por eso su toggle NO lleva defaultOn en el
+       widget.
+     - dailySummaryTime va como TEXTO, no como número: la tarea se
+       despierta cada cuarto de hora y admite minutos ('17:15'). Si
+       fuese Número solo cabrían horas en punto.
+     - CMS: hay que crear los 3 campos en SalonConfig con esos IDs
+       exactos. Sin ellos en ALL_FIELDS el merge de updateSalonConfig
+       los descartaría y getSalonConfig no los devolvería; sin
+       dailySummaryActive en BOOLEAN_FIELDS el interruptor se guardaría
+       como texto y la comprobación `=== true` nunca se cumpliría.
+     - LO CONSUME: resumenDiarioLogic.web.js v1.1.0 (leerConfigResumen)
+       y su tarea programada resumenDiarioJob.js.
+     - Pareja widget: widget_salon_config v1.0.17 (los tres campos en la
+       sección Comunicaciones, debajo de los dos recordatorios).
+     - Page code sin cambios: pasa el payload completo tal cual.
    v1.0.12 · 28 Ago 2026 · bookingBufferMinutes — antelación mínima de
      las reservas ONLINE
      - ALL_FIELDS    += bookingBufferMinutes
@@ -249,7 +280,12 @@ const ALL_FIELDS = [
   // v1.0.9 — textos de aviso de caducidad (bonos / prime / tarjetas promo)
   'textVoucherAlert',
   'textPrimeAlert',
-  'textCardAlert'
+  'textCardAlert',
+  // v1.0.13 — resumen diario del día por email
+  //           (lo consume resumenDiarioLogic v1.1.0)
+  'dailySummaryActive',
+  'dailySummaryTime',
+  'dailySummaryRecipients'
 ];
 
 // ── Campos booleanos (para parseo correcto) ──
@@ -266,6 +302,9 @@ const BOOLEAN_FIELDS = [
   // v1.0.11 — toggles del recordatorio de cita por canal
   'emailReminder',
   'whatsappReminder',
+  // v1.0.13 — interruptor del resumen diario. Sin defaultOn: nace
+  // apagado a propósito (ver changelog).
+  'dailySummaryActive',
 ];
 
 // ── Campos numéricos ──
