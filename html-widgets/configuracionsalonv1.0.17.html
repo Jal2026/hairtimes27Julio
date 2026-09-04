@@ -9,10 +9,34 @@
 <title>KAMISUITE · Configuración Salón</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   widget_salon_config.html  v1.0.16
+   widget_salon_config.html  v1.0.17
    KAMISUITE — Widget Edición Configuración Salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.17 · 4 Sep 2026 · Resumen diario del día por email
+     - SECTIONS[comunicaciones].fields += dailySummaryActive,
+       dailySummaryTime, dailySummaryRecipients
+     - Correo de cierre de jornada al equipo del salón, con la
+       actividad productiva y las ventas del día.
+     - El interruptor NO lleva `defaultOn`, y esa ausencia es
+       deliberada: al contrario que los dos recordatorios de cita, este
+       correo nace APAGADO. El motor solo envía con true explícito, así
+       que pintar el vacío como apagado dice la verdad. Poner defaultOn
+       aquí sería el error simétrico al que arregló la v1.0.16.
+     - La hora va como campo de TEXTO 'HH:MM' y no como número porque
+       admite minutos. La tarea se despierta cada cuarto de hora: una
+       hora que no caiga en punto, y cuarto, media o menos cuarto se
+       envía en el siguiente. El texto de ayuda lo advierte.
+     - Los destinatarios van en textarea a ancho completo: son varios
+       correos y en un campo de una línea no se leen.
+     - CMS: crear en SalonConfig `dailySummaryActive` (Booleano),
+       `dailySummaryTime` (Texto) y `dailySummaryRecipients` (Texto),
+       con esos IDs exactos.
+     - Pareja backend: salonConfigLogic v1.0.13 (ALL_FIELDS +
+       BOOLEAN_FIELDS). Motor: resumenDiarioLogic v1.1.0.
+     - Page code sin cambios.
+     - CERO cambios de CSS: se reutilizan los tipos boolean, text y
+       textarea que la pantalla ya sabe pintar.
    v1.0.16 · 30 Ago 2026 · Los dos toggles del recordatorio dejan de
      mentir cuando el campo está vacío
      - PROBLEMA: un interruptor solo tiene dos posiciones, pero en el CMS
@@ -1104,7 +1128,7 @@ select.field-input {
     <div>
       <span class="header-brand">KAMISUITE</span>
       <span class="header-title"> · CONFIGURACIÓN SALÓN</span>
-      <span class="header-version">v1.0.16</span>
+      <span class="header-version">v1.0.17</span>
     </div>
   </div>
   <div class="header-right">
@@ -1407,6 +1431,11 @@ const SECTIONS = [
       // que decir lo mismo o el siguiente guardado lo apagaría de verdad.
       { id: 'whatsappReminder', label: 'Recordatorio por WhatsApp', type: 'boolean', defaultOn: true, desc: 'Aviso automático de la cita del día siguiente. Requiere el canal WhatsApp activo.' },
       { id: 'emailReminder',    label: 'Recordatorio por email',    type: 'boolean', defaultOn: true, desc: 'Aviso automático de la cita del día siguiente. Requiere el canal Email activo.' },
+      // v1.0.17 — resumen diario del día. SIN defaultOn: nace apagado
+      // a propósito (el motor solo envía con true explícito).
+      { id: 'dailySummaryActive',     label: 'Resumen diario del día',  type: 'boolean', desc: 'Correo al cierre de la jornada con el trabajo, las reservas y las ventas del día.' },
+      { id: 'dailySummaryTime',       label: 'Hora del resumen',        type: 'text', placeholder: 'Ej: 21:00', desc: 'Hora de envío en formato HH:MM. Se envía en punto, y cuarto, y media o menos cuarto: una hora intermedia sale en el siguiente.' },
+      { id: 'dailySummaryRecipients', label: 'Destinatarios del resumen', type: 'textarea', fullWidth: true, placeholder: 'ana@salon.com, jose@salon.com', desc: 'Separados por comas, puntos y coma o saltos de línea. Si se deja vacío, se envía al email general del salón.' },
     ]
   },
   {
