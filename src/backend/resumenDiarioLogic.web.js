@@ -5,6 +5,44 @@
 // FECHA: 4 de septiembre de 2026
 // ARCHIVO: backend/resumenDiarioLogic.web.js
 //
+// v1.1.3: PRECISIÓN DE CUARTO DE HORA SIN SALIR DEL PLAN PLUS.
+//         El límite de Wix (1 repetición por hora como máximo) es POR
+//         TAREA, no por sitio: los planes normales admiten hasta 20
+//         tareas programadas. Así que en vez de UNA tarea despertando
+//         4 veces por hora (prohibido, se ignora en silencio), van
+//         CUATRO tareas escalonadas a :00, :15, :30 y :45, cada una
+//         una vez por hora (permitido). Las cuatro llaman a este mismo
+//         motor.
+//         · TRAMO_MIN 60 → 15.
+//         · La hora SIGUE en SalonConfig.dailySummaryTime: '20:15' sale
+//           a las 20:15. Cambiarla no exige tocar código ni publicar.
+//         · Ver resumenDiarioJob.js v1.1.3 y jobs.config (6 tareas).
+//
+// v1.1.2: VUELTA AL CRON HORARIO. CORRIGE UN FALLO GRAVE DE LA v1.1.0.
+//         La v1.1.0 puso el cron en '*/15 * * * *' para admitir minutos.
+//         Wix IGNORA en silencio cualquier tarea programada por debajo
+//         de 1 hora (mínimo 1 h en planes free y premium normales; solo
+//         Elite y Business Elite bajan a 5 min). No avisa, no registra,
+//         no falla: la descarta. Resultado: la tarea nunca se ejecutó y
+//         no había ni una línea en los registros.
+//         · cron '*/15 * * * *' → '0 * * * *' (ver jobs.config)
+//         · TRAMO_MIN 15 → 60, obligatorio: con despertares horarios y
+//           una ventana de 15 min, una hora configurada como '17:15' no
+//           coincidiría NUNCA (el tick de las 18:00 queda a 45 min).
+//         · dailySummaryTime SIGUE siendo Texto 'HH:MM' y sigue
+//           admitiendo minutos, pero el envío se redondea HACIA ARRIBA
+//           a la hora siguiente: '17:15' sale a las 18:00.
+//         · Para minutos reales haría falta plan Elite / Business Elite
+//           y entonces '*/15' sí sería válido.
+//
+// v1.1.1: DIAGNÓSTICO. Cada despertar del cron deja ahora una línea en
+//         los registros ANTES de leer nada. Hasta la v1.1.0, si el
+//         interruptor estaba apagado la tarea se cortaba en silencio, y
+//         eso hacía indistinguible "apagado" de "la tarea no se está
+//         ejecutando". Con esto, silencio total en los registros solo
+//         puede significar UNA cosa: la tarea no corre (sitio sin
+//         publicar o job no registrado). Sin cambios de comportamiento.
+//
 // v1.1.0: HORA DE ENVÍO CON MINUTOS.
 //         La v1.0.0 solo permitía horas en punto porque la tarea se
 //         despertaba una vez por hora. Ahora se despierta cada cuarto
@@ -74,10 +112,12 @@
 //   el hecho de desplegar.
 //
 // TAREA PROGRAMADA:
-//   Wix fija el cron en jobs.config, no por salón. Para que la hora sea
-//   configurable, el job se despierta CADA CUARTO DE HORA y solo envía
-//   cuando el momento actual cae en el tramo de 15 minutos que abre la
-//   hora configurada en dailySummaryTime. Efecto lateral bueno:
+//   Wix fija el cron en jobs.config, no por salón, y NO admite que una
+//   MISMA tarea se repita más de una vez por hora. Por eso hay CUATRO
+//   tareas escalonadas (:00, :15, :30, :45), cada una horaria: juntas
+//   despiertan cada cuarto de hora sin infringir el límite. El motor
+//   envía cuando el momento actual cae en el tramo de 15 minutos que
+//   abre la hora configurada en dailySummaryTime. Efecto lateral bueno:
 //   el cambio de horario verano/invierno se resuelve solo, porque la
 //   comparación se hace siempre en hora local de Madrid.
 //   Guarda anti-duplicado: si ya hay un envío 'resumen_diario' en
@@ -96,7 +136,7 @@ import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
 import { obtenerDatosCierreExtendidos } from 'backend/cierreLogicExtendido.web.js';
 import { obtenerDatosCierreExternos } from 'backend/cierreExternosLogic.web.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.3';
 const TAG = `[ResumenDiario][${VERSION}]`;
 
 const TIMEZONE_MADRID = 'Europe/Madrid';
@@ -718,11 +758,12 @@ export const enviarResumenDiario = webMethod(
 // =====================================================
 // ENTRADA DEL CRON HORARIO
 // =====================================================
-// Se despierta cada cuarto de hora. Solo envía cuando el momento actual
-// cae dentro del tramo de 15 minutos que abre la hora configurada.
-// Se compara por tramo y no por igualdad exacta porque la tarea no se
-// ejecuta al segundo: si el cron entra a las 17:15:04, la comparación
-// estricta contra '17:15' fallaría y el correo no saldría nunca.
+// Lo llaman las cuatro tareas escalonadas, así que entra cada cuarto de
+// hora. Solo envía cuando el momento actual cae dentro del tramo de 15
+// minutos que abre la hora configurada.
+// Se compara por tramo y no por igualdad exacta porque la tarea no
+// entra al segundo: si el cron arranca a las 20:15:04, una comparación
+// estricta contra '20:15' fallaría y el correo no saldría nunca.
 // Orden deliberado: primero el interruptor y la hora (una sola query),
 // y solo entonces el trabajo pesado.
 const TRAMO_MIN = 15;
@@ -730,11 +771,19 @@ const TRAMO_MIN = 15;
 export const ejecutarResumenDiarioProgramado = webMethod(
   Permissions.Admin,
   async () => {
+    // v1.1.1 — Huella de vida. Va la PRIMERA, antes de tocar el CMS:
+    // si esta línea no aparece en los registros, la tarea no se está
+    // ejecutando y el problema está fuera de este archivo.
+    console.log(`${TAG} ⏰ Tick del cron · ${minutosATexto(minutosActualesMadrid())} Madrid`);
+
     const cfg = await leerConfigResumen();
 
     if (!cfg.activo) {
+      console.log(`${TAG} ⏸️ Interruptor APAGADO (dailySummaryActive no está en true). Hora leída: "${cfg.horaTexto}" · destinatarios: ${cfg.destinatarios.length}`);
       return { ok: true, version: VERSION, skipped: true, reason: 'resumen diario desactivado en Salón Config' };
     }
+
+    console.log(`${TAG} ✅ Interruptor encendido · hora configurada "${cfg.horaTexto}" · ${cfg.destinatarios.length} destinatario(s)`);
 
     if (cfg.minutos === null) {
       console.log(`${TAG} ⏸️ Hora de envío vacía o mal escrita: "${cfg.horaTexto}" (se espera HH:MM)`);
