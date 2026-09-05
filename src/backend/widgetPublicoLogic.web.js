@@ -1,7 +1,30 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.8
+// VERSION: 0.9.9
+//
+// v0.9.9 — QUE NINGÚN MINUTO VUELVA A PERDERSE EN SILENCIO.
+//   No cambia ni un solo comportamiento: no toca el cálculo, ni el filtro
+//   de huecos, ni la oferta, ni lo que ve el cliente. Solo deja rastro.
+//
+//   1) FASE SIN RESOLVER → AVISO EN EL LOG. Los dos `if (!svc) continue`
+//      de calcularBaseDurationCascada y calcularDurPrincipalCascada se
+//      saltaban un `ref` no encontrado sin decir nada. Así se perdió el
+//      Lavado desde julio hasta el 5-sep-2026 sin que nadie lo viera.
+//      Con v0.9.8 el índice ya no filtra por uso, así que hoy resuelven
+//      todos; pero el silencio seguía ahí para el día que alguien
+//      desactive un lavado, borre un servicio usado como fase o monte un
+//      servicio nuevo con un ref mal escrito. Ahora se dice, con el
+//      nombre del servicio y el ref, y se ve el mismo día.
+//
+//   2) LA LÍNEA DE RESERVA CREADA DICE QUÉ RECIBIÓ. Antes escribía solo
+//      reservaId e importe. Con eso es imposible reconstruir a posteriori
+//      con qué hora y con qué duración se creó una cita, que es
+//      exactamente lo que faltó para cerrar el desfase de 15 min del
+//      5-sep-2026 (cita ofrecida a las 13:00 como último hueco posible y
+//      creada a las 13:15). Ahora la línea incluye fecha, hora, duración
+//      recibida y profesional(es), en el mismo formato que la línea de
+//      huecos, para poder comparar las dos de un vistazo.
 //
 // v0.9.8 — ⛔ LAS FASES INCLUIDAS NO SUMABAN EN LA DURACIÓN.
 //   BUG DE PRODUCCIÓN (5-sep-2026, Hair-Times): cita online de Tinte Raiz
@@ -764,7 +787,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.8';
+const VERSION = '0.9.9';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -1006,7 +1029,14 @@ function calcularBaseDurationCascada(it, porSetupUid) {
     }
     if (f.tipo === 'servicio' && typeof f.ref === 'string' && f.ref && f.obligatorio === true) {
       const svc = porSetupUid && porSetupUid[f.ref];
-      if (!svc) continue; // ref huérfano — patrón defensivo
+      // v0.9.9 — Antes se saltaba en SILENCIO. Un ref que no resuelve son
+      // minutos que desaparecen del cálculo sin dejar rastro: es exactamente
+      // como se perdió el Lavado hasta v0.9.8. Ahora queda dicho en el log
+      // con el nombre del servicio, para que se vea el mismo día.
+      if (!svc) {
+        console.warn(`${TAG} ⚠️ FASE OBLIGATORIA SIN RESOLVER en "${it.label || it.setupUid}": ref ${f.ref} no está en el catálogo activo. Sus minutos NO se cuentan y la cita puede desbordar el cierre.`);
+        continue;
+      }
       const svcHasVariants = (svc.hasVariants === true || String(svc.hasVariants) === 'true');
       if (svcHasVariants) continue; // CASO B — el widget lo suma como choice
       // CASO A: obligatoria sin variantes → aplicación + proceso propio si lo tiene.
@@ -1090,7 +1120,13 @@ function calcularDurPrincipalCascada(it, porSetupUid) {
 
     if (f.tipo === 'servicio' && typeof f.ref === 'string' && f.ref) {
       const svc = porSetupUid && porSetupUid[f.ref];
-      if (!svc) continue; // ref huérfano — patrón defensivo de construirFasesPack
+      // v0.9.9 — Mismo aviso que en calcularBaseDurationCascada: aquí el
+      // ref sin resolver falsea el PUNTO DE CORTE entre los dos
+      // profesionales, no solo la duración total.
+      if (!svc) {
+        console.warn(`${TAG} ⚠️ FASE SIN RESOLVER (corte de tramo) en "${it.label || it.setupUid}": ref ${f.ref} no está en el catálogo activo.`);
+        continue;
+      }
 
       const esObligatoria = (f.obligatorio === true);
       const svcHasVariants = (svc.hasVariants === true || String(svc.hasVariants) === 'true');
@@ -2631,7 +2667,7 @@ export const crearReservaPublica = webMethod(
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
       if (resultado?.ok) {
-        console.log(`${TAG} ✅ crearReservaPublica: reservaId=${resultado.reservaId} | ${resultado.precioTotal}€ | ${elapsed}s`);
+        console.log(`${TAG} ✅ crearReservaPublica: reservaId=${resultado.reservaId} | ${fecha} ${horaHHmm} +${toNum(durationMin)}min | staff=${staffNameFinal || staffIdFinal}${staffIdExtraFinal ? ` +extra=${staffNameExtraFinal || staffIdExtraFinal}` : ''} | ${resultado.precioTotal}€ | ${elapsed}s`);
 
         // ─────────────────────────────────────────────────────────────
         // v0.9.0 — REPARTO ENTRE DOS PROFESIONALES (fases del tramo B)
