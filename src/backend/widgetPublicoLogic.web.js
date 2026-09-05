@@ -1,7 +1,61 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.7
+// VERSION: 0.9.8
+//
+// v0.9.8 — ⛔ LAS FASES INCLUIDAS NO SUMABAN EN LA DURACIÓN.
+//   BUG DE PRODUCCIÓN (5-sep-2026, Hair-Times): cita online de Tinte Raiz
+//   + Corte Mujer (Complemento) para el sábado a las 13:15, con cierre a
+//   las 14:00. El motor midió 65 min; la cita ocupó 85 y terminó a las
+//   14:40, cuarenta minutos después de cerrar.
+//
+//   CAUSA. `calcularBaseDurationCascada` y `calcularDurPrincipalCascada`
+//   resuelven cada `ref` del mapeoFases contra un índice de servicios.
+//   Ese índice se construía a partir del catálogo YA filtrado por
+//   `USOS_PUBLICOS`. Las fases incluidas —Lavado (15'), Secado (15'),
+//   Lavado y neutralizado (30')— llevan uso='kamisuite' por diseño,
+//   porque no se venden sueltas. No estaban en el índice, `porSetupUid[f.ref]`
+//   devolvía undefined, y el `if (!svc) continue` se las saltaba sin un
+//   solo aviso en el log. El Tinte Raiz medía 45 (15 aplicación + 30
+//   proceso) en vez de 60.
+//
+//   ALCANCE. Siete servicios activos de Hair-Times arrastran fases con
+//   uso='kamisuite': Tinte Raiz, Tinte Completo, Tinte Vegetal, Tinte
+//   Hombre, Mechas Medias Personalizadas, Mechas Completas Personalizadas
+//   y MOLDEADO. Seis con lavado OBLIGATORIO. Toda reserva online de color
+//   se venía calculando con 15 min de menos (30 en MOLDEADO). Sólo se hacía
+//   visible pegado al cierre; el resto del día se comía el hueco siguiente.
+//   No es un dato mal puesto en un salón: la regla está en el código y
+//   afecta a cualquier salón cuyo catálogo use fases internas.
+//
+//   ARREGLO — DOS ÍNDICES, no uno:
+//     · `porSetupUid`      → catálogo activo de uso público. Sigue
+//       alimentando `complements` en adaptarServicio, es decir, lo que el
+//       cliente VE en pantalla. Intacto.
+//     · `porSetupUidFases` → catálogo activo COMPLETO, sin filtro de uso.
+//       Sólo resuelve los `ref` del mapeoFases para medir la cascada.
+//   Abrir un único índice habría hecho aparecer Lavado, Secado y los
+//   complementos de mechas como casillas marcables en el widget público
+//   (están en `it.complementos` de Tinte Raiz, Tinte Completo y MOLDEADO).
+//   Por eso van separados.
+//
+//   TRES PUNTOS CORREGIDOS, todos con el mismo defecto:
+//     1) getServiciosCategoria → nuevo `porSetupUidFases`, pasado a
+//        adaptarServicio, que lo usa sólo para `baseDuration`.
+//     2) getHuecosDisponibles, bloque 3-bis (modo dos tramos) → la query
+//        del índice deja de filtrar por uso.
+//     3) resolverDurPrincipalTramo (guardia de crearReservaPublica) → ídem,
+//        para que la guardia mida el corte igual que el motor.
+//
+//   NO SE TOCA: el filtro de oferta al público, los complementos visibles,
+//   el filtro de cierre, el margen de extensión, la antelación mínima de
+//   v0.9.7 ni el reparto entre dos profesionales.
+//
+//   PENDIENTE, aparte de esto: la cita se aceptó a las 13:15 cuando ni
+//   siquiera con 65 min cabía (el bucle corta en 13:00). Hay un desajuste
+//   de 15 min todavía sin identificar entre la hora ofrecida y la hora
+//   creada. Con esta corrección deja de tener efecto práctico —la cita ya
+//   no se ofrece a ninguna hora que desborde el cierre— pero sigue vivo.
 //
 // v0.9.7 — ⛔ NO SE PUEDE RESERVAR EN EL PASADO (antelación mínima).
 //   BUG DE PRODUCCIÓN (28-ago-2026, Hair-Times): a las 19:21 el widget
@@ -710,7 +764,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.7';
+const VERSION = '0.9.8';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 const CMS_CATALOGO   = 'ServiceCatalog';
@@ -1088,7 +1142,7 @@ function calcularDurPrincipalCascada(it, porSetupUid) {
 //   - requiresExtraPro: false por ahora (no lo modela el catálogo).
 //     El widget puede ocultar el bloque sin problema (deuda v1.0).
 
-function adaptarServicio(it, porSetupUid) {
+function adaptarServicio(it, porSetupUid, porSetupUidFases) {
   // v0.7.4 — OBLIGATORIEDAD por FASE explícita. Cada fase tipo:'servicio'
   // del mapeoFases admite el flag `obligatorio` (Boolean, default false).
   // Si esa fase coincide en `ref` con el setupUid de un complemento, su
@@ -1252,7 +1306,14 @@ function adaptarServicio(it, porSetupUid) {
     // se reservaba con dur del widget = aplicación + corte, pero la reserva
     // real incluía además PROCESO + Lavado + Secado → desbordaba el `to`).
     // Sin mapeoFases: comportamiento idéntico a v0.7.9 (it.duration seco).
-    baseDuration: calcularBaseDurationCascada(it, porSetupUid),
+    // v0.9.8 — La cascada se resuelve contra `porSetupUidFases` (catálogo
+    // activo COMPLETO), no contra `porSetupUid` (solo uso público). Las
+    // fases incluidas (Lavado, Secado, Lavado y neutralizado) llevan
+    // uso='kamisuite' por diseño —no se venden sueltas— y por eso NO
+    // estaban en el índice de oferta: `porSetupUid[f.ref]` daba undefined
+    // y sus minutos se perdían en silencio. `porSetupUid` se sigue usando
+    // para `complements` (lo que se OFRECE en pantalla), que no cambia.
+    baseDuration: calcularBaseDurationCascada(it, porSetupUidFases || porSetupUid),
     // v0.7.0 — descuento promocional desde ServiceCatalog. Regla dura
     // idéntica a Recepción Pro V2 (recepcionProLogic v1.0.19):
     //   · Solo si descuentoActivo === true (estricto, NO != false).
@@ -1434,8 +1495,15 @@ export const getServiciosCategoria = webMethod(
         console.warn(`${TAG} 🩹 ${rescatados.length} servicio(s) con el dato flojo (active/uso) admitidos igualmente: ${rescatados.map(it => `${it.label}(active=${JSON.stringify(it.active)}, uso=${JSON.stringify(it.uso)})`).join(' | ')}`);
       }
 
+      // Índice de OFERTA: solo lo que puede mostrarse al cliente.
       const porSetupUid = {};
       for (const it of all) if (it.setupUid) porSetupUid[it.setupUid] = it;
+
+      // v0.9.8 — Índice de FASES: catálogo activo COMPLETO, sin filtro de
+      // uso. Sirve ÚNICAMENTE para resolver los `ref` del mapeoFases al
+      // calcular la duración en cascada. No alimenta ninguna lista visible.
+      const porSetupUidFases = {};
+      for (const it of todos) if (it.setupUid && esActivo(it)) porSetupUidFases[it.setupUid] = it;
 
       // 4. Filtrar principales del/los group(s) y adaptar
       const delGrupo = all.filter(it => clavesGrupo.has(claveGrupo(it.group)));
@@ -1443,7 +1511,7 @@ export const getServiciosCategoria = webMethod(
       const servicios = delGrupo
         .filter(it => TIPOS_PRINCIPALES.includes(String(it.tipo || '').trim().toLowerCase()))
         .sort((a, b) => toNum(a.order) - toNum(b.order))
-        .map(it => adaptarServicio(it, porSetupUid));
+        .map(it => adaptarServicio(it, porSetupUid, porSetupUidFases));
 
       // v0.9.2 — Diagnóstico: si el grupo tiene servicios pero ninguno es
       // principal, decirlo con nombre y rol. Es la causa más habitual de
@@ -1939,9 +2007,13 @@ export const getHuecosDisponibles = webMethod(
           console.warn(`${TAG} ⚠️ proExtraId recibido sin principalSetupUid → no se puede calcular el corte. Modo mono.`);
         } else {
           try {
+            // v0.9.8 — Sin `.hasSome('uso', USOS_PUBLICOS)`. Este índice solo
+            // resuelve el principal y los `ref` de su mapeoFases para medir
+            // el corte del tramo; no alimenta nada visible. Con el filtro de
+            // uso, las fases incluidas (uso='kamisuite') quedaban fuera y
+            // durPrincipal salía corto.
             const rCat = await wixData.query(CMS_CATALOGO)
               .eq('active', true)
-              .hasSome('uso', USOS_PUBLICOS)
               .limit(1000)
               .find({ suppressAuth: true });
             const allCat = rCat.items || [];
@@ -2156,9 +2228,11 @@ export const getHuecosDisponibles = webMethod(
 async function resolverDurPrincipalTramo(principalSetupUid, durTotal) {
   if (!principalSetupUid || !(durTotal > 0)) return null;
   try {
+    // v0.9.8 — Sin filtro de uso, por el mismo motivo que en el bloque 3-bis
+    // de getHuecosDisponibles: el corte que valida la guardia al crear debe
+    // medirse con las MISMAS fases que midió el motor al ofrecer la hora.
     const rCat = await wixData.query(CMS_CATALOGO)
       .eq('active', true)
-      .hasSome('uso', USOS_PUBLICOS)
       .limit(1000)
       .find({ suppressAuth: true });
     const allCat = rCat.items || [];
