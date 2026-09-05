@@ -1,6 +1,36 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.3.0
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.3.1
 // =====================================================
+// v1.3.1 (5 sep 2026): UNA PERSONA, UNA FILA. Se limpia el prefijo de
+//      ordenación del nombre del profesional.
+//
+//      DEFECTO. Una misma empleada aparecía dos veces en el rendimiento
+//      por profesional —"Angela" y "C_Angela"— con sus citas y su dinero
+//      repartidos entre las dos filas. Se vio en el correo de resumen
+//      diario del 5-sep, pero afecta igual al informe del día en
+//      Recepción PRO, que lee de aquí.
+//
+//      CAUSA. El nombre del personal admite un prefijo de ordenación de
+//      la forma `X_` (una letra y un guion bajo) que NUNCA debe verse.
+//      Recepción PRO y el catálogo consultivo ya lo quitaban al leer
+//      (`.replace(/^[A-Z]_/, '')`); este módulo no. Además, el titular
+//      de una reserva llega guardado tal cual se escribió al crearla, y
+//      las reservas nacidas en la web con "cualquier profesional" lo
+//      guardaron CON prefijo. Resultado: dos claves de agrupación
+//      distintas para la misma persona.
+//
+//      ARREGLO. Un único helper `nombreStaffLimpio()` aplicado en los
+//      tres puntos donde se resuelve un nombre dentro del rendimiento
+//      productivo: el mapa de personal, la tabla de resource id →
+//      nombre y el titular de la reserva. Misma expresión que ya usa
+//      Recepción PRO, sin inventar convención nueva.
+//
+//      ALCANCE. Solo cambia CÓMO SE ESCRIBE el nombre; ningún importe
+//      se mueve de sitio ni cambia de dueño. El histórico se arregla
+//      solo, porque la limpieza es de lectura: no hay que reetiquetar
+//      ni una fila. El bloque "Cobrado por staff" (que agrupa por quien
+//      cobró, no por el titular) no se toca.
+//
 // v1.3.0 (30 ago 2026): LA VENTA TIENE DUEÑO.
 //
 //      DEFECTO. El rendimiento por profesional del informe del día se
@@ -314,7 +344,16 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.3.0]';
+const TAG = '[CierreExt v1.3.1]';
+
+// v1.3.1 — Prefijo de ordenación del nombre del personal.
+// El nombre puede venir como 'C_Angela': la letra y el guion bajo son
+// solo para ordenar la lista, no forman parte del nombre y no deben
+// verse ni servir de clave de agrupación. Misma expresión que usan
+// recepcionProLogic y catalogoConsultaLogic al leer StaffConfig.
+function nombreStaffLimpio(v) {
+  return String(v || '').trim().replace(/^[A-Z]_/, '').trim();
+}
 const COLECCION_PAGOS    = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations';
 const COLECCION_PAGOS_EXT = 'PagoreservasExternos';   // v1.2.1 - ledger de externos
@@ -524,7 +563,7 @@ function itemsDe(v, key) {
 //
 // Devuelve un Map staffName → { servicios:[{nombre,cantidad,precio}], bruto }.
 function repartirLineasPorStaff(reserva, servicios, staffPorResourceId) {
-  const titular = String(reserva.staffName || 'Sin staff').trim() || 'Sin staff';
+  const titular = nombreStaffLimpio(reserva.staffName) || 'Sin staff';
   const fasesSvc = itemsDe(reserva.fases, 'items').filter(f => f && f.tipo === 'servicio');
   const vistas = {};
   const out = new Map();
@@ -579,7 +618,7 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}, pagosExt
   // campo desde v1.0.0).
   const staffPorResourceId = {};
   for (const s of staffList) {
-    const nombre = (s.displayName || s.canonicalName || '').trim();
+    const nombre = nombreStaffLimpio(s.displayName || s.canonicalName);
     const key = nombre.toUpperCase();
     if (key) staffMap[key] = {
       isExternal: !!s.isExternal,
@@ -610,7 +649,7 @@ function procesarRendimiento(reservas, staffList, pagosPorReserva = {}, pagosExt
 
     const bruto = Number(r.precioTotal) || 0;
     const claveCli = r.contactId || r.clientPhone || r.clientName || r._id;
-    const staffName = (r.staffName || 'Sin staff').trim();
+    const staffName = nombreStaffLimpio(r.staffName) || 'Sin staff';
     const staffKey = staffName.toUpperCase();
     const staffInfo = staffMap[staffKey] || { isExternal: false, commissionPct: 0 };
 
