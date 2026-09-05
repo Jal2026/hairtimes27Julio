@@ -1,9 +1,29 @@
 // =====================================================
 // KAMISUITE - Backend: Resumen Diario por email
 // =====================================================
-// VERSION: 1.1.5
-// FECHA: 4 de septiembre de 2026
+// VERSION: 1.1.6
+// FECHA: 5 de septiembre de 2026
 // ARCHIVO: backend/resumenDiarioLogic.web.js
+//
+// v1.1.6: EL BOTÓN DE PRUEBA YA NO CANCELA EL ENVÍO AUTOMÁTICO.
+//         Caso real del 5-sep: prueba manual a las 00:15 (4 correos,
+//         los 4 OK) y, a las 20:15, la tarea escribió "⏸️ El resumen
+//         de 2026-09-05 ya se envió" sin mandar nada.
+//         Causa: la guarda anti-duplicado busca en CommunicationLog
+//         apuntes de hoy con event='resumen_diario', y el envío
+//         manual dejaba exactamente ese apunte. forzar:true saltaba
+//         la guarda para SÍ MISMO, pero la cerraba para el automático
+//         de esa noche.
+//         · Los envíos manuales (forzar:true) se apuntan ahora con
+//           event='resumen_diario_prueba'.
+//         · La guarda sigue igual: solo mira 'resumen_diario', que ya
+//           únicamente escribe la tarea programada.
+//         · Sin cambios en la composición del correo ni en el envío:
+//           el destinatario recibe exactamente lo mismo.
+//         · Efecto en el Monitor de Comunicaciones: las pruebas se
+//           distinguen de los envíos reales. El tipo nuevo aparecerá
+//           en crudo hasta que se toque ese widget (igual que hoy le
+//           pasa a 'resumen_diario').
 //
 // v1.1.5: SE RESTAURAN LAS CUATRO TAREAS ESCALONADAS DE LA v1.1.3.
 //         Los registros del sitio demostraron que la v1.1.3 SÍ se
@@ -125,7 +145,10 @@
 //   brevoLogic._enviarEmail YA inserta la fila en CommunicationLog con
 //   el event que se le pasa. Este módulo NO llama a registrarComunicacion:
 //   hacerlo duplicaría el apunte de cada envío.
-//   Evento registrado: 'resumen_diario'.
+//   Eventos registrados: 'resumen_diario' (envío automático de la
+//   tarea programada) y 'resumen_diario_prueba' (envío manual con
+//   forzar:true). Se separan para que una prueba no cierre la guarda
+//   anti-duplicado del envío de esa noche (v1.1.6).
 //
 // CAMPOS NUEVOS EN SalonConfig (crear en el CMS antes de usar):
 //   · dailySummaryActive     Boolean — interruptor. VACÍO = APAGADO.
@@ -147,7 +170,8 @@
 //   el cambio de horario verano/invierno se resuelve solo, porque la
 //   comparación se hace siempre en hora local de Madrid.
 //   Guarda anti-duplicado: si ya hay un envío 'resumen_diario' en
-//   CommunicationLog de hoy, no se repite.
+//   CommunicationLog de hoy, no se repite. Los envíos manuales de
+//   prueba quedan fuera de esa cuenta (v1.1.6).
 //
 // FUNCIONES EXPORTADAS:
 //   · construirResumenDiario({ fechaISO })  → datos + HTML (sin enviar)
@@ -162,7 +186,7 @@ import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
 import { obtenerDatosCierreExtendidos } from 'backend/cierreLogicExtendido.web.js';
 import { obtenerDatosCierreExternos } from 'backend/cierreExternosLogic.web.js';
 
-const VERSION = '1.1.5';
+const VERSION = '1.1.6';
 const TAG = `[ResumenDiario][${VERSION}]`;
 
 const TIMEZONE_MADRID = 'Europe/Madrid';
@@ -173,6 +197,13 @@ const CMS_STAFF        = 'StaffConfig';
 const CMS_LOG          = 'CommunicationLog';
 
 const EVENTO_LOG = 'resumen_diario';
+
+// v1.1.6 — Evento con el que se apunta un envío MANUAL (forzar:true).
+// Es distinto a propósito: la guarda anti-duplicado consulta el
+// histórico filtrando por EVENTO_LOG, así que una prueba manual deja
+// rastro visible en el Monitor pero NO cierra el candado del envío
+// automático de esa misma noche.
+const EVENTO_LOG_PRUEBA = 'resumen_diario_prueba';
 
 // =====================================================
 // HELPERS DE FECHA
@@ -738,6 +769,14 @@ export const enviarResumenDiario = webMethod(
 
       const asunto = `Resumen del día · ${fechaLegible(dia)}`;
 
+      // v1.1.6 — Un envío manual (forzar:true, botón de prueba) se apunta
+      // con su propio evento. Antes usaba el mismo que el automático y,
+      // aunque el envío salía bien, dejaba en el histórico la marca que
+      // la guarda interpreta como "el resumen de hoy ya salió": el correo
+      // de la hora configurada se cancelaba esa noche.
+      // El automático NUNCA pasa forzar, así que su apunte no cambia.
+      const eventoApunte = forzar ? EVENTO_LOG_PRUEBA : EVENTO_LOG;
+
       let enviados = 0;
       const errores = [];
 
@@ -749,7 +788,7 @@ export const enviarResumenDiario = webMethod(
             to: destino,
             subject: asunto,
             bodyHtml: construido.html,
-            event: EVENTO_LOG
+            event: eventoApunte
           });
 
           if (r && r.ok) {
