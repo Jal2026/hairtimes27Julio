@@ -1,7 +1,29 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.9.9
+// VERSION: 0.10.0
+//
+// v0.10.0 — EL NOMBRE QUE SE GUARDA EN LA RESERVA VA LIMPIO.
+//   El nombre del personal admite un prefijo de ordenación de la forma
+//   `X_` (una letra y un guion bajo) que nunca debe verse. Recepción PRO
+//   y el catálogo consultivo ya lo quitaban al leer StaffConfig; este
+//   motor no, así que toda reserva web hecha con "cualquier profesional"
+//   —o con un segundo profesional para los complementos— quedaba grabada
+//   con el nombre prefijado.
+//
+//   Consecuencia visible: la misma empleada salía dos veces, como
+//   "Angela" y "C_Angela", en el rendimiento por profesional del informe
+//   del día y del correo de resumen diario, con sus citas y su dinero
+//   partidos entre las dos filas.
+//
+//   Se limpia en los tres puntos donde este motor resuelve un nombre de
+//   StaffConfig, con la misma expresión que ya usa Recepción PRO. No
+//   cambia nada más: ni la elección de profesional, ni el cálculo de
+//   huecos, ni el reparto de fases, ni el precio. Solo el texto que se
+//   graba y el que viaja al email y al WhatsApp de confirmación.
+//
+//   El histórico ya grabado no se reetiqueta: lo corrige al leer
+//   cierreLogicExtendido v1.3.1.
 //
 // v0.9.9 — QUE NINGÚN MINUTO VUELVA A PERDERSE EN SILENCIO.
 //   No cambia ni un solo comportamiento: no toca el cálculo, ni el filtro
@@ -787,8 +809,17 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.9.9';
+const VERSION = '0.10.0';
 const TAG = `[WidgetPublico][${VERSION}]`;
+
+// v0.10.0 — Prefijo de ordenación del nombre del personal.
+// 'C_Angela' → 'Angela'. La letra y el guion bajo solo sirven para
+// ordenar la lista; no forman parte del nombre y no deben grabarse en
+// la reserva ni mostrarse al cliente. Misma expresión que usan
+// recepcionProLogic y catalogoConsultaLogic al leer StaffConfig.
+function nombreStaffLimpio(v) {
+  return String(v || '').trim().replace(/^[A-Z]_/, '').trim();
+}
 
 const CMS_CATALOGO   = 'ServiceCatalog';
 const CMS_CATEGORIAS = 'HairSalonServices';
@@ -1893,7 +1924,7 @@ async function resolverStaffLibre({ fecha, horaHHmm, durationMin, idStaffPermiti
     if (!haySolape) {
       libres.push({
         staffId: sid,
-        staffName: (staff.displayName || staff.canonicalName || '')
+        staffName: nombreStaffLimpio(staff.displayName || staff.canonicalName)
       });
     }
   }
@@ -2484,7 +2515,7 @@ export const crearReservaPublica = webMethod(
               };
             }
             staffIdExtraFinal = rowExtra.wixResourceId || rowExtra._id;
-            staffNameExtraFinal = rowExtra.displayName || rowExtra.canonicalName || '';
+            staffNameExtraFinal = nombreStaffLimpio(rowExtra.displayName || rowExtra.canonicalName);
             console.log(`${TAG} 👥 Dos tramos: principal ${durPrincipalTramo}min | complementos ${toNum(durationMin) - durPrincipalTramo}min con ${staffNameExtraFinal || staffIdExtraFinal}`);
           } catch (eExtra) {
             console.warn(`${TAG} ⚠️ No se pudo resolver el segundo profesional: ${eExtra.message} → toda la cita al principal.`);
