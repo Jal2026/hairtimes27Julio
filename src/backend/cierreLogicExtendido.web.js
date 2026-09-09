@@ -1,6 +1,68 @@
 // =====================================================
-// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.3.1
+// BACKEND cierreLogicExtendido.web.js — KAMISUITE v1.4.0
 // =====================================================
+// v1.4.0 (9 sep 2026): RANKING DE ARTÍCULOS POR LO COBRADO + LAS
+//      ANULACIONES DEJAN DE SUMAR DOS VECES.
+//
+//      ── A) RANKING (`cierre.ranking`) ────────────────────────────
+//      Novedad pedida por Jal para el correo de resumen del día: qué
+//      artículos generaron más dinero en la jornada.
+//
+//      Reglas de producto fijadas por Jal (9-sep-2026):
+//        · Compiten los SERVICIOS (cada complemento con su propio
+//          nombre, porque así se guarda), la TIENDA agrupada en una
+//          sola línea y los ESPECIALES agrupados en otra.
+//        · Se ordena POR LO COBRADO, no por tarifa.
+//        · El eje es el DÍA DE COBRO (día contable), el mismo de todo
+//          el cierre financiero. Por eso vive aquí, en procesarCierre,
+//          y no en el rendimiento productivo.
+//        · Los externos NO compiten: su cobro no pasa por esta
+//          colección y su venta bruta no es dinero del salón.
+//        · Las propinas NO compiten: no son un artículo vendido. Sí
+//          entran en el reparto del descuento, porque forman parte del
+//          importe cobrado; simplemente no abren línea de ranking.
+//
+//      Descuento: la descripción del cobro guarda las líneas a tarifa
+//      y el importe cobrado ya viene neto. Se reparte el descuento
+//      proporcionalmente entre las líneas de ese cobro (mismo factor
+//      neto/bruto que ya usa procesarRendimiento) para que la suma del
+//      ranking nunca supere lo que entró en caja.
+//
+//      Consecuencia deliberada de ordenar por lo cobrado: un canje de
+//      bono entra a 0 € y no mueve el ranking. El servicio se prestó,
+//      pero ese día no entró dinero por él.
+//
+//      Dinero cobrado cuya descripción no permite reconocer ninguna
+//      línea (filas antiguas sin detalle) no se inventa como artículo:
+//      se acumula aparte en `rankingSinDesglosar` para que la cifra
+//      siga siendo auditable.
+//
+//      ── B) ANULACIONES ───────────────────────────────────────────
+//      DEFECTO. Al anular un cobro se inserta una fila de reversión
+//      con el importe negado —el total del día cuadra— pero que hereda
+//      la descripción del original precedida de "↩️ ANULACIÓN de ",
+//      con los precios EN POSITIVO. Todo lo que se calcula parseando
+//      esa descripción volvía a sumar en positivo:
+//        · Productos cobrados hoy: la primera línea se descartaba sola
+//          (el prefijo rompe el reconocimiento del token) pero la
+//          segunda y siguientes se contaban DOS VECES, y el total de
+//          tienda subía con ellas.
+//        · Descuentos aplicados: una anulación reinyectaba el descuento
+//          del cobro original como si fuera un descuento nuevo.
+//        · Propinas: mismo efecto, y al restarse de la base imponible
+//          ensuciaban el desglose de IVA.
+//
+//      ARREGLO. Antes de parsear, se quita el prefijo de anulación y
+//      se aplica signo negativo a TODAS las líneas de esa fila. Así el
+//      par original + reversión se anula línea a línea igual que ya se
+//      anulaba en el importe global. Si la reversión es de un cobro de
+//      otro día, la salida de dinero se ve hoy en negativo, que es lo
+//      correcto.
+//
+//      El importe total, el reparto por canal y el bloque de especiales
+//      NO se tocan: ya cuadraban, porque leen el importe (negado) y no
+//      la descripción.
+//
 // v1.3.1 (5 sep 2026): UNA PERSONA, UNA FILA. Se limpia el prefijo de
 //      ordenación del nombre del profesional.
 //
@@ -344,7 +406,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[CierreExt v1.3.1]';
+const TAG = '[CierreExt v1.4.0]';
 
 // v1.3.1 — Prefijo de ordenación del nombre del personal.
 // El nombre puede venir como 'C_Angela': la letra y el guion bajo son
@@ -378,6 +440,44 @@ const MARCADORES_NO_PERSONA = new Set([STAFF_TIENDA, STAFF_TIENDA_POS, STAFF_ESP
 // Bote del salón: ventas de mostrador sin capa de acceso, donde no se
 // puede saber quién las hizo. Fila propia del informe; no se reparte.
 const ETIQUETA_SALON = 'Salón';
+
+// ── v1.4.0 · ANULACIÓN DE COBROS ───────────────────────────────────────
+// paymentReservationsLogic.anularPaymentReservation inserta una fila
+// hermana con el importe negado y estadoCobro = 'REVERSION'. Esa fila
+// hereda la descripción del cobro original con este prefijo delante y
+// los precios EN POSITIVO. Para que las líneas se anulen igual que se
+// anula el importe hay que (1) quitar el prefijo y (2) restar en vez de
+// sumar. Ambos valores están copiados literalmente de ese backend: si
+// allí cambian, hay que cambiarlos aquí.
+const ESTADO_COBRO_REVERSION = 'REVERSION';
+const PREFIJO_ANULACION_RE = /^↩️\s*ANULACIÓN\s+de\s*/i;
+
+// ¿Es la fila de reversión de una anulación?
+function esFilaReversion(p) {
+  return String(p && p.estadoCobro || '').trim().toUpperCase() === ESTADO_COBRO_REVERSION;
+}
+
+// Descripción lista para parsear líneas: sin el prefijo de anulación.
+// En una fila normal devuelve la descripción tal cual.
+function descripcionParaLineas(p) {
+  const d = String(p && p.descripcion || '');
+  return esFilaReversion(p) ? d.replace(PREFIJO_ANULACION_RE, '') : d;
+}
+
+// ── v1.4.0 · RANKING DE ARTÍCULOS COBRADOS ─────────────────────────────
+// Nombres de las dos líneas agregadas que compiten contra los servicios.
+// El consumidor decide cómo rotularlas; aquí solo se identifican.
+const RANKING_TIENDA = 'TIENDA';
+const RANKING_ESPECIALES = 'ESPECIALES';
+
+// Una propina viaja como una línea más de la descripción, pero no es un
+// artículo vendido y no abre línea de ranking. Mismo criterio que ya
+// aplica extraerPropinasDeDescripcion para dejarla fuera de la base
+// imponible: token con lápiz cuyo texto menciona la propina.
+function esLineaPropina(nombre) {
+  const n = String(nombre || '').trim();
+  return n.startsWith('✏️') && n.toUpperCase().includes('PROPINA');
+}
 
 // =====================================================
 // HELPERS COMUNES
@@ -997,11 +1097,22 @@ function procesarCierre(pagos, staffList, vatRate, titularPorReserva = {}) {
   let canjesCount = 0;          // v1.2.0 — canjes de 0€ (no son dinero)
   const anomaliasArr = [];      // v1.2.0 — cobros que no se pueden repartir
   const ventaPorStaff = new Map();  // v1.3.0 — producto + especiales con dueño
+  const rankingAgg = new Map();     // v1.4.0 — artículo → dinero cobrado
+  let rankingSinDesglosar = 0;      // v1.4.0 — cobrado sin línea reconocible
 
   for (const p of noCancelados) {
     const importe = Number(p.importeTotal) || 0;
     totalReal += importe;
-    totalPropinas += extraerPropinasDeDescripcion(p.descripcion);
+
+    // v1.4.0 — Una fila de reversión hereda la descripción del cobro
+    // anulado con los precios en positivo. Se le quita el prefijo y se
+    // le da signo negativo para que sus líneas anulen a las del
+    // original, igual que su importe ya anula al importe original.
+    const esReversion = esFilaReversion(p);
+    const signo = esReversion ? -1 : 1;
+    const descLineas = descripcionParaLineas(p);
+
+    totalPropinas += signo * extraerPropinasDeDescripcion(descLineas);
 
     // v1.2.0 — reparto por canal físico. La parte tarjeta / efectivo /
     // bizum de un cobro Mixto suma en su canal correspondiente; ya no
@@ -1023,12 +1134,12 @@ function procesarCierre(pagos, staffList, vatRate, titularPorReserva = {}) {
       });
     }
 
-    const prods = parsearProductos(p.descripcion);
+    const prods = parsearProductos(descLineas);
     for (const prod of prods) {
       if (!productosAgg.has(prod.nombre)) productosAgg.set(prod.nombre, { nombre: prod.nombre, cantidad: 0, total: 0 });
       const agg = productosAgg.get(prod.nombre);
-      agg.cantidad += prod.cantidad;
-      agg.total = Math.round((agg.total + prod.subtotal) * 100) / 100;
+      agg.cantidad += signo * prod.cantidad;
+      agg.total = Math.round((agg.total + signo * prod.subtotal) * 100) / 100;
 
       // v1.1.6 — Detalle con CLIENTE y VENDEDOR. `soldBy` lo escribe
       // tiendaProductos v1.5.13 con el empleado logueado en Recepción;
@@ -1038,8 +1149,8 @@ function procesarCierre(pagos, staffList, vatRate, titularPorReserva = {}) {
       productosDetalle.push({
         cliente: (p.nombreCliente || '').trim(),
         producto: prod.nombre,
-        cantidad: prod.cantidad,
-        importe: Math.round(prod.subtotal * 100) / 100,
+        cantidad: signo * prod.cantidad,
+        importe: Math.round(signo * prod.subtotal * 100) / 100,
         metodo: p.tipoPago || '',
         soldBy: String(p.soldBy || '').trim(),
         hora: horaMadrid(p.fechaPago),
@@ -1048,17 +1159,65 @@ function procesarCierre(pagos, staffList, vatRate, titularPorReserva = {}) {
     }
 
     // v1.1.1: descuentos parseados desde la descripcion del pago
-    const desc = parsearDescuentoEnDescripcion(p.descripcion);
+    // v1.4.0: sobre la descripción sin prefijo de anulación y con signo,
+    // para que una anulación reste el descuento en vez de reinyectarlo.
+    const desc = parsearDescuentoEnDescripcion(descLineas);
     if (desc.discEur > 0) {
       descuentosArr.push({
         cliente: (p.nombreCliente || '').trim(),
-        importe: Math.round(desc.discEur * 100) / 100,
-        labelDesc: desc.label
+        importe: Math.round(signo * desc.discEur * 100) / 100,
+        labelDesc: desc.label,
+        esAnulacion: esReversion            // v1.4.0
       });
-      descuentoTotal += desc.discEur;
+      descuentoTotal += signo * desc.discEur;
     }
 
     const staffName = String(p.staff || 'Sin staff').trim();
+
+    // ── v1.4.0 · RANKING DE ARTÍCULOS POR LO COBRADO ──────────────────
+    // Eje: día de cobro (el de todo este bloque). Cifra: lo realmente
+    // cobrado, no la tarifa.
+    //
+    // Un cobro de ESPECIALES no tiene líneas parseables —su descripción
+    // es el concepto del bono / PRIME / tarjeta— y además Jal lo quiere
+    // agrupado en UNA sola línea. Se toma el importe entero.
+    //
+    // El resto se reparte línea a línea. La descripción guarda las
+    // líneas a TARIFA y el importe ya viene NETO, así que el descuento
+    // se reparte proporcionalmente con el mismo factor neto/bruto que
+    // usa procesarRendimiento. Con importe 0 (canje de bono) el factor
+    // es 0 y ese cobro no mueve el ranking: se prestó el servicio pero
+    // ese día no entró dinero por él.
+    const sumarRanking = (nombre, tipo, valor) => {
+      if (!nombre) return;
+      const key = `${tipo}::${nombre}`;
+      if (!rankingAgg.has(key)) rankingAgg.set(key, { nombre, tipo, importe: 0, lineas: 0 });
+      const agg = rankingAgg.get(key);
+      agg.importe += valor;
+      agg.lineas += signo;
+    };
+
+    if (staffName.toUpperCase() === STAFF_ESPECIALES) {
+      sumarRanking(RANKING_ESPECIALES, 'especiales', importe);
+    } else {
+      const svcLineas = extraerServiciosFacturables(descLineas);
+      const brutoSvc  = svcLineas.reduce((s, sv) => s + sv.precio, 0);
+      const brutoProd = prods.reduce((s, pr) => s + pr.subtotal, 0);
+      const brutoLineas = brutoSvc + brutoProd;
+
+      if (brutoLineas > 0) {
+        const factor = importe / brutoLineas;
+        for (const sv of svcLineas) {
+          if (esLineaPropina(sv.nombre)) continue;   // la propina no es artículo
+          sumarRanking(sv.nombre, 'servicio', sv.precio * factor);
+        }
+        if (brutoProd > 0) sumarRanking(RANKING_TIENDA, 'tienda', brutoProd * factor);
+      } else if (Math.abs(importe) >= 0.005) {
+        // Cobro sin ninguna línea reconocible (filas antiguas sin
+        // detalle). No se inventa un artículo: se aparta.
+        rankingSinDesglosar += importe;
+      }
+    }
 
     // ── v1.1.7 · QUIÉN COBRÓ ──────────────────────────────────────────
     // Agrupamos por `soldBy`, el empleado que estaba logueado al pasar el
@@ -1151,7 +1310,12 @@ function procesarCierre(pagos, staffList, vatRate, titularPorReserva = {}) {
     anomaliasCobro: anomaliasArr,                   // v1.2.0
     anomaliasCobroTotal: round(anomaliasArr.reduce((s, a) => s + a.importe, 0)),  // v1.2.0
     iva: { vatRate, totalCobrado: totalReal, totalPropinas, totalSinPropinas: baseConIVA, baseImponible: iva.base, cuotaIVA: iva.cuota },
-    productos: Array.from(productosAgg.values()),
+    // v1.4.0 — Una venta anulada el mismo día queda a cero unidades y
+    // cero euros tras compensarse con su reversión. Esa fila fantasma no
+    // se muestra. El detalle línea a línea sí conserva las dos entradas,
+    // porque ahí interesa ver la venta y su devolución.
+    productos: Array.from(productosAgg.values())
+      .filter(x => Math.round(x.cantidad) !== 0 || Math.abs(x.total) >= 0.005),
     productosDetalle: productosDetalle.sort((a, b) => a.fechaMs - b.fechaMs),   // v1.1.6
     productosTotal: round(productosDetalle.reduce((acc, x) => acc + x.importe, 0)),
     staff: Array.from(staffAgg.values()).map(s => ({ ...s, cobrado: round(s.cobrado) })).sort((a, b) => b.cobrado - a.cobrado),
@@ -1176,7 +1340,24 @@ function procesarCierre(pagos, staffList, vatRate, titularPorReserva = {}) {
       .sort((a, b) => b.total - a.total),
     ventaPorStaffTotal: round(
       Array.from(ventaPorStaff.values()).reduce((s, v) => s + v.total, 0)
-    )
+    ),
+
+    // ── v1.4.0 · RANKING DE ARTÍCULOS POR LO COBRADO ──
+    // Lista COMPLETA y ordenada de mayor a menor. Quien la consuma
+    // decide cuántas posiciones enseña (el correo de resumen muestra
+    // tres). `tipo` distingue 'servicio' | 'tienda' | 'especiales' para
+    // que el rótulo lo ponga la superficie y no el motor.
+    // Se descartan las líneas que quedan a cero tras compensarse con su
+    // anulación, y las negativas puras (devolución de un cobro de otro
+    // día), que no son artículos vendidos hoy.
+    ranking: Array.from(rankingAgg.values())
+      .map(x => ({ nombre: x.nombre, tipo: x.tipo, importe: round(x.importe), lineas: x.lineas }))
+      .filter(x => x.importe >= 0.005)
+      .sort((a, b) => b.importe - a.importe),
+    rankingTotal: round(
+      Array.from(rankingAgg.values()).reduce((s, x) => s + x.importe, 0)
+    ),
+    rankingSinDesglosar: round(rankingSinDesglosar)
   };
 }
 
