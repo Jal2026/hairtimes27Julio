@@ -1,9 +1,43 @@
 // =====================================================
 // KAMISUITE - Backend: Resumen Diario por email
 // =====================================================
-// VERSION: 1.1.6
-// FECHA: 5 de septiembre de 2026
+// VERSION: 1.2.0
+// FECHA: 9 de septiembre de 2026
 // ARCHIVO: backend/resumenDiarioLogic.web.js
+//
+// v1.2.0: EL CORREO INCORPORA CAJA. Decisión de Jal (9-sep-2026) que
+//         revierte en parte la del 4-sep, cuando caja, IVA y métodos de
+//         pago se dejaron fuera a propósito. Tres bloques nuevos:
+//
+//         · TOP 3 DEL DÍA — los tres artículos que más dinero
+//           generaron. Compiten los servicios (cada complemento con su
+//           propio nombre), la tienda agrupada en una línea y los
+//           especiales en otra. Ordenado POR LO COBRADO y por DÍA DE
+//           COBRO. Los externos no compiten.
+//         · COBRADO POR MÉTODO DE PAGO — el reparto por canal físico,
+//           con la parte de tarjeta, efectivo y bizum de los cobros
+//           mixtos ya repartida en su canal.
+//         · DESGLOSE DE IVA — base imponible y cuota, con las propinas
+//           apartadas de la base.
+//
+//         CERO CÁLCULO NUEVO AQUÍ TAMPOCO. Los tres salen del motor del
+//         informe del día (cierreLogicExtendido v1.4.0), igual que el
+//         resto del correo. El ranking se calcula allí y no aquí porque
+//         solo allí están los cobros uno a uno; hacerlo por separado
+//         habría abierto la puerta a que el correo y la pantalla dieran
+//         cifras distintas.
+//
+//         REQUIERE cierreLogicExtendido v1.4.0. Con un motor anterior
+//         el bloque del Top 3 sencillamente no se pinta y el correo
+//         sale igual que hasta ahora; los otros dos sí funcionan con el
+//         motor viejo, porque esos datos ya viajaban.
+//
+//         AVISO DE LECTURA. Los bloques de caja hablan del dinero que
+//         entró hoy; el "Trabajo del día" que abre el correo habla de
+//         las citas de hoy. Son dos ejes distintos y no tienen por qué
+//         cuadrar ningún día en que se cobre una cita de otro día. El
+//         correo lo advierte en una línea para que nadie lo lea como un
+//         descuadre.
 //
 // v1.1.6: EL BOTÓN DE PRUEBA YA NO CANCELA EL ENVÍO AUTOMÁTICO.
 //         Caso real del 5-sep: prueba manual a las 00:15 (4 correos,
@@ -106,25 +140,30 @@
 // PROPÓSITO:
 //   Enviar, a la hora que cada salón configure, un correo con la
 //   actividad productiva y las ventas del día, más lo que hay mañana.
-//   Caja, arqueo, IVA y métodos de pago quedan FUERA a propósito
-//   (decisión de producto, Jal · 4 sep 2026).
+//   El arqueo de caja sigue FUERA: eso se hace en Recepción con el
+//   cajón delante. Métodos de pago e IVA SÍ entran desde la v1.2.0.
 //
-// CONTENIDO DEL CORREO (7 bloques):
+// CONTENIDO DEL CORREO (10 bloques):
 //   1. Trabajo del día      — total, citas, clientes
 //   2. Por profesional      — importe y citas de cada uno
 //   3. Citas sin cobrar     — hora, cliente, profesional, importe
 //   4. Reservas entradas hoy— total, web / recepción
 //   5. Ventas               — tienda (importe) · especiales (línea a línea)
-//   6. Externos             — venta bruta y comisión del salón
-//   7. Mañana               — citas, hora de inicio y bloqueos de staff
+//   6. Top 3 del día        — artículos que más dinero generaron  [v1.2.0]
+//   7. Externos             — venta bruta y comisión del salón
+//   8. Cobrado por método   — tarjeta / efectivo / bizum           [v1.2.0]
+//   9. Desglose de IVA      — base imponible y cuota               [v1.2.0]
+//  10. Mañana               — citas, hora de inicio y bloqueos de staff
 //
-// FUENTES (todas V2, sin cálculo nuevo salvo los bloques 4 y 7):
-//   · cierreLogicExtendido.obtenerDatosCierreExtendidos → bloques 1,2,3,5
+// FUENTES (todas V2, sin cálculo nuevo salvo los bloques 4 y 10):
+//   · cierreLogicExtendido.obtenerDatosCierreExtendidos → bloques
+//     1,2,3,5,6,8,9
 //     (rendimiento.total / .clientes / .clientesTotal / .staff / .pendientes,
-//      cierre.productosTotal / .especiales / .especialesTotal)
-//   · cierreExternosLogic.obtenerDatosCierreExternos    → bloque 6
+//      cierre.productosTotal / .especiales / .especialesTotal,
+//      cierre.ranking [v1.4.0] / .porMetodo / .iva)
+//   · cierreExternosLogic.obtenerDatosCierreExternos    → bloque 7
 //     (externos.ventaBruta / .comisionTotal / .citas)
-//   · KamisuiteReservations (query propia)              → bloques 4 y 7
+//   · KamisuiteReservations (query propia)              → bloques 4 y 10
 //   · StaffConfig (query propia)                        → nombre del staff
 //     de cada bloqueo: la fila de bloqueo guarda staffId y deja staffName
 //     vacío (recepcionProLogic v1.0.20+).
@@ -186,7 +225,7 @@ import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
 import { obtenerDatosCierreExtendidos } from 'backend/cierreLogicExtendido.web.js';
 import { obtenerDatosCierreExternos } from 'backend/cierreExternosLogic.web.js';
 
-const VERSION = '1.1.6';
+const VERSION = '1.2.0';
 const TAG = `[ResumenDiario][${VERSION}]`;
 
 const TIMEZONE_MADRID = 'Europe/Madrid';
@@ -611,7 +650,25 @@ function construirHtml(d) {
     p.push(`</table>`);
   }
 
-  // ── 6 · EXTERNOS (solo si hubo) ─────────────────────
+  // ── 6 · TOP 3 DEL DÍA ───────────────────────────────
+  // Llega hecho del motor del informe. Con un motor anterior a v1.4.0
+  // no llega nada y el bloque no aparece: el correo sale como antes.
+  if (Array.isArray(d.top) && d.top.length) {
+    p.push(`<div style="${S_H2}">Top 3 del día</div>`);
+    p.push(`<table style="${S_TBL}">`);
+    let pos = 0;
+    for (const it of d.top) {
+      pos += 1;
+      const sub = it.tipo === 'tienda' ? 'Venta de productos'
+                : it.tipo === 'especiales' ? 'Bonos, tarjetas y PRIME'
+                : '';
+      p.push(filaHtml(`${pos}. ${esc(it.nombre)}`, eur(it.importe), sub));
+    }
+    p.push(`</table>`);
+    p.push(`<p style="${S_MUT}">Por dinero cobrado. La tienda cuenta como una sola línea y los especiales como otra.</p>`);
+  }
+
+  // ── 7 · EXTERNOS (solo si hubo) ─────────────────────
   if (d.externos && d.externos.citas > 0) {
     p.push(`<div style="${S_H2}">Servicios externos</div>`);
     p.push(`<table style="${S_TBL}">`);
@@ -621,7 +678,39 @@ function construirHtml(d) {
     p.push(`<p style="${S_MUT}">La venta bruta no es dinero del salón: solo entra la comisión.</p>`);
   }
 
-  // ── 7 · MAÑANA ──────────────────────────────────────
+  // ── 8 y 9 · CAJA DEL DÍA ────────────────────────────
+  const caja = d.caja || { totalReal: 0, transacciones: 0, porMetodo: [], iva: {} };
+  const ivaCaja = caja.iva || {};
+
+  p.push(`<div style="${S_H2}">Caja del día</div>`);
+  if (caja.porMetodo && caja.porMetodo.length) {
+    p.push(`<table style="${S_TBL}">`);
+    for (const m of caja.porMetodo) {
+      p.push(filaHtml(esc(m.metodo), eur(m.importe)));
+    }
+    p.push(filaHtml(
+      '<strong>Total cobrado</strong>',
+      `<strong>${eur(caja.totalReal)}</strong>`,
+      `${caja.transacciones} cobro${caja.transacciones === 1 ? '' : 's'}`
+    ));
+    p.push(`</table>`);
+
+    p.push(`<div style="margin:12px 0 4px;${S_MUT}">IVA ${ivaCaja.vatRate || 0}%</div>`);
+    p.push(`<table style="${S_TBL}">`);
+    if (round2(ivaCaja.totalPropinas) > 0) {
+      p.push(filaHtml('Propinas', eur(ivaCaja.totalPropinas), 'No forman base imponible'));
+      p.push(filaHtml('Cobrado sin propinas', eur(ivaCaja.totalSinPropinas)));
+    }
+    p.push(filaHtml('Base imponible', eur(ivaCaja.baseImponible)));
+    p.push(filaHtml('<strong>Cuota de IVA</strong>', `<strong>${eur(ivaCaja.cuotaIVA)}</strong>`));
+    p.push(`</table>`);
+
+    p.push(`<p style="${S_MUT}">Es el dinero que entró hoy en caja. El trabajo del día de arriba se cuenta por la fecha de la cita, así que las dos cifras no tienen por qué coincidir: una cita de otro día cobrada hoy suma aquí y no allí.</p>`);
+  } else {
+    p.push(`<p style="${S_MUT}">No entró dinero en caja hoy.</p>`);
+  }
+
+  // ── 10 · MAÑANA ─────────────────────────────────────
   p.push(`<div style="${S_H2}">Mañana</div>`);
   p.push(`<table style="${S_TBL}">`);
   p.push(filaHtml('Citas', `<strong>${d.manana.citas}</strong>`));
@@ -716,7 +805,36 @@ export const construirResumenDiario = webMethod(
         })),
         especialesTotal: round2(cie.especialesTotal),
 
-        // 6 — externos
+        // 6 — top 3 del día. Lo calcula el motor del informe, que es
+        // donde están los cobros uno a uno. Con un motor anterior a
+        // v1.4.0 no llega la lista y el bloque no se pinta.
+        top: Array.isArray(cie.ranking)
+          ? cie.ranking.slice(0, 3).map(x => ({
+              nombre: x.nombre || '',
+              tipo: x.tipo || 'servicio',
+              importe: round2(x.importe)
+            }))
+          : [],
+
+        // 8 y 9 — caja del día. Eje distinto al del trabajo del día:
+        // aquí manda la fecha de cobro.
+        caja: {
+          totalReal: round2(cie.totalReal),
+          transacciones: Number(cie.transacciones) || 0,
+          porMetodo: (cie.porMetodo || []).map(m => ({
+            metodo: m.metodo || '',
+            importe: round2(m.importe)
+          })),
+          iva: {
+            vatRate: Number(cie.iva && cie.iva.vatRate) || 0,
+            totalPropinas: round2(cie.iva && cie.iva.totalPropinas),
+            totalSinPropinas: round2(cie.iva && cie.iva.totalSinPropinas),
+            baseImponible: round2(cie.iva && cie.iva.baseImponible),
+            cuotaIVA: round2(cie.iva && cie.iva.cuotaIVA)
+          }
+        },
+
+        // 7 — externos
         externos: (ext && ext.ok && ext.externos)
           ? {
               citas: Number(ext.externos.citas) || 0,
@@ -725,7 +843,7 @@ export const construirResumenDiario = webMethod(
             }
           : { citas: 0, ventaBruta: 0, comisionTotal: 0 },
 
-        // 7 — mañana
+        // 10 — mañana
         manana
       };
 
