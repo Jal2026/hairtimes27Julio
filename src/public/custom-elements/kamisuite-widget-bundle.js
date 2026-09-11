@@ -3,7 +3,7 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.0.21 (bundle)
+ * VERSION:   2.0.25 (bundle)
  *
  * v2.0.21 — Imagenes redimensionadas en origen (rendimiento en movil 4G).
  *   Pareja del page code `Servicios (Item)` v0.3.6, que ahora envia dos
@@ -1071,7 +1071,45 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.0.21
+   VERSION: 2.0.25
+   v2.0.25 — 🩹 ARRANQUE DEL QUITABLE + FRASES DE CONSECUENCIA.
+     (A) FIX: un servicio quitable por regla inversa arrancaba en "No" porque
+     _initState ponía todos los bool a false. Ahora arranca en "Sí" (puesto por
+     defecto), como debe; el cliente lo quita con aviso. (B) La pantalla de
+     reserva confirmada muestra ahora la consecuencia de la regla: "✓ Incluye
+     <servicio>" cuando el disparador se eligió, y "ⓘ No incluye <servicio>.
+     Puede añadirlo en el salón." cuando el cliente usó el desbloqueo. Nuevo
+     helper `_consecuenciasReglas()`. Sin reglas, cero cambio.
+   v2.0.24 — 🔓 DESBLOQUEO CON AVISO (mitad inversa quitable).
+     Pareja de widgetPublicoLogic v0.11.12 y recepcionProLogic v1.0.59. Cuando
+     una regla inversa lleva `permiteQuitar`, el servicio B (simple) sale puesto
+     por defecto ("Sí", +precio, cuenta en total y tiempo) pero con toggle No/Sí:
+     al pulsar "No" salta un aviso claro ("El <servicio> NO irá incluido. Si lo
+     deseleccionas, tu reserva no incluye ese servicio.") y solo se quita si el
+     cliente confirma. Así el precio base vuelve a ser alcanzable (p.ej. "desde
+     40 €") sin que nadie se lo salte por descuido. Nuevo `_obligadosQuitables()`,
+     ramas en `_calc`, `_renderComplements` y en el payload de `_submit`.
+     `_obligadosDePago` pasa a cubrir solo los inversos NO quitables. Reutiliza
+     clases CSS existentes; el aviso usa confirm() nativo (imposible de ignorar).
+   v2.0.23 — 🔁 MITAD INVERSA DE LA REGLA (vista en vivo).
+     Pareja de widgetPublicoLogic v0.11.11 y recepcionProLogic v1.0.58. Cuando
+     una regla lleva `inverso` y su servicio A NO está elegido, el servicio B
+     (simple) se muestra "Sí · +precio · obligatorio", bloqueado, y suma precio
+     y tiempo aunque el cliente no lo marque. En cuanto elige A, B pasa a
+     "Incluido · 0 €". Así B nunca falta: o incluido con A, o obligatorio sin A.
+     Nuevo helper compartido `_serviciosElegidos()`, nuevo `_obligadosDePago()`,
+     y ramas en `_calc` y `_renderComplements`. Reutiliza clases CSS existentes.
+   v2.0.22 — 🔗 REGLAS DE INCLUSIÓN CONDICIONAL (vista en vivo).
+     Pareja de widgetPublicoLogic v0.11.10 y recepcionProLogic v1.0.57. El
+     motor emite ahora `cfg.reglas = [{si, entonces}]`. Al marcar el servicio
+     A (`si`), el servicio B (`entonces`) pasa a mostrarse "Incluido · 0 €",
+     su precio deja de sumar y su tiempo se añade — igual que hará el motor al
+     crear la cita, para que la pantalla coincida con el cargo final. Al
+     desmarcar A, B vuelve a su estado normal. Solo actúa sobre complementos
+     simples (bool). Sin reglas, cero cambio: `cfg.reglas` llega vacío.
+     Cambios acotados: nuevo helper `_incluidosGratis()`, dos ramas en `_calc`
+     y una en `_renderComplements` (rama bool). Reutiliza clases CSS existentes
+     (kr-label, kr-seg, kr-seg__opt, is-sel); no añade estilos nuevos.
    v2.0.21 — Imagenes redimensionadas en origen (imageCard / imageSq).
    FECHA:   20 de agosto de 2026
 
@@ -1646,8 +1684,17 @@ window.KR_applySkin = function (el, name) {
       this.days = this._buildDays();
       const firstFree = this.days.find(d => !d.full) || this.days[0];
       const comp = {};
+      // v2.0.25 — Los servicios "quitables por regla inversa" (inverso +
+      // permiteQuitar) arrancan PUESTOS (true), no en "No". Al inicializar
+      // nada está elegido, así que todos los B de reglas inverso+permiteQuitar
+      // salen por defecto marcados; el cliente puede quitarlos con aviso.
+      const quitInit = new Set();
+      (cfg.reglas || []).forEach(r => {
+        if (r && r.inverso && r.permiteQuitar && r.entonces) quitInit.add(r.entonces);
+      });
       (cfg.complements || []).forEach(c => {
-        comp[c.id] = c.type === "bool" ? false : (c.default || c.options[0].id);
+        if (c.type === "bool") comp[c.id] = quitInit.has(c.id) ? true : false;
+        else comp[c.id] = (c.default || c.options[0].id);
       });
       this.state = {
         dayId: firstFree.id,
@@ -1948,6 +1995,103 @@ window.KR_applySkin = function (el, name) {
     _dayById(id) { return this.days.find(d => d.id === id); }
 
     /* ---- pricing / duration ------------------------------------------ */
+
+    // v2.0.23 — Set de setupUids que el cliente tiene elegidos ahora mismo.
+    // Un servicio cuenta como elegido si está marcado (bool sí, o una opción
+    // ≠ 'none' en choice/exclusive). Base común de las dos mitades de una
+    // regla. Mismo criterio que el motor (compsMap).
+    _serviciosElegidos() {
+      const cfg = this._service;
+      const chosen = new Set();
+      if (!cfg || !this.state || !this.state.comp) return chosen;
+      (cfg.complements || []).forEach(c => {
+        const v = this.state.comp[c.id];
+        if (c.type === "bool") { if (v) chosen.add(c.id); }
+        else if (v && v !== "none") {
+          if (c.type === "exclusive") chosen.add(v); // v = setupUid de la opción elegida
+          else chosen.add(c.id);                     // choice: c.id = setupUid del servicio
+        }
+      });
+      return chosen;
+    }
+
+    // v2.0.22 — REGLAS DE INCLUSIÓN. Devuelve el Set de setupUids que ahora
+    // mismo van "incluidos gratis" porque el servicio que los dispara (`si`)
+    // está elegido. Solo aplica a complementos simples como B (`entonces`).
+    _incluidosGratis() {
+      const cfg = this._service;
+      const out = new Set();
+      const reglas = (cfg && Array.isArray(cfg.reglas)) ? cfg.reglas : [];
+      if (!reglas.length) return out;
+      const chosen = this._serviciosElegidos();
+      reglas.forEach(r => {
+        if (r && r.si && r.entonces && chosen.has(r.si)) out.add(r.entonces);
+      });
+      return out;
+    }
+
+    // v2.0.23 — MITAD INVERSA. Devuelve el Set de setupUids que ahora mismo son
+    // OBLIGATORIOS y de PAGO: B de una regla con `inverso` cuyo A NO está
+    // elegido. Espejo de refsObligadosDePago del motor. Nunca puede coincidir
+    // con _incluidosGratis (una exige A elegido, la otra A no elegido).
+    // v2.0.24 — Solo los NO quitables. Los quitables van en _obligadosQuitables.
+    _obligadosDePago() {
+      const cfg = this._service;
+      const out = new Set();
+      const reglas = (cfg && Array.isArray(cfg.reglas)) ? cfg.reglas : [];
+      if (!reglas.length) return out;
+      const chosen = this._serviciosElegidos();
+      reglas.forEach(r => {
+        if (r && r.inverso && !r.permiteQuitar && r.si && r.entonces && !chosen.has(r.si)) out.add(r.entonces);
+      });
+      return out;
+    }
+
+    // v2.0.24 — MITAD INVERSA CON DESBLOQUEO. Devuelve el Set de setupUids que
+    // van puestos POR DEFECTO pero el cliente PUEDE quitar con aviso: B de una
+    // regla con `inverso` + `permiteQuitar` cuyo A NO está elegido. Cuentan como
+    // puestos salvo que el cliente los haya quitado (state.comp[id] === false).
+    _obligadosQuitables() {
+      const cfg = this._service;
+      const out = new Set();
+      const reglas = (cfg && Array.isArray(cfg.reglas)) ? cfg.reglas : [];
+      if (!reglas.length) return out;
+      const chosen = this._serviciosElegidos();
+      reglas.forEach(r => {
+        if (r && r.inverso && r.permiteQuitar && r.si && r.entonces && !chosen.has(r.si)) out.add(r.entonces);
+      });
+      return out;
+    }
+
+    // v2.0.25 — Frases de consecuencia de las reglas para el resumen de la
+    // reserva confirmada. Dos casos:
+    //   · A elegido  → "Incluye <B>" (la regla añade B gratis).
+    //   · A no elegido, B quitable y quitado por el cliente → "No incluye <B>.
+    //     Puede añadirlo en el salón." (dejó constancia del desbloqueo).
+    // El nombre de B se toma de su complemento en el catálogo.
+    _consecuenciasReglas() {
+      const cfg = this._service;
+      const reglas = (cfg && Array.isArray(cfg.reglas)) ? cfg.reglas : [];
+      if (!reglas.length || !this.state || !this.state.comp) return [];
+      const chosen = this._serviciosElegidos();
+      const labelDe = (uid) => {
+        const c = (cfg.complements || []).find(x => x.id === uid);
+        return c ? (c.label || '') : '';
+      };
+      const out = [];
+      reglas.forEach(r => {
+        if (!r || !r.si || !r.entonces) return;
+        const lab = labelDe(r.entonces);
+        if (!lab) return;
+        if (chosen.has(r.si)) {
+          out.push({ tipo: 'incluye', texto: `Incluye ${lab}` });
+        } else if (r.inverso && r.permiteQuitar && this.state.comp[r.entonces] === false) {
+          out.push({ tipo: 'no-incluye', texto: `No incluye ${lab}. Puede añadirlo en el salón.` });
+        }
+      });
+      return out;
+    }
+
     _calc() {
       const cfg = this._service;
       let price = 0, dur = cfg.baseDuration;
@@ -2001,12 +2145,28 @@ window.KR_applySkin = function (el, name) {
       // v2.0.19 — mismas dos ramas de siempre; lo único que cambia es
       // que un precio null marca `unknown` en vez de `tbd`. Suma de
       // importes y duraciones idéntica a v2.0.18, sin tocar nada.
+      // v2.0.22 — REGLAS: si un complemento simple (bool) está "incluido
+      // gratis" por una regla activa, cuenta su DURACIÓN pero NO su precio,
+      // y lo hace AUNQUE el cliente no lo haya marcado (el motor lo
+      // materializa igual). Espejo exacto de recepcionProLogic v1.0.57.
+      // v2.0.23 — MITAD INVERSA: si un complemento simple está "obligado de
+      // pago" (regla inversa, A no elegido), cuenta duración Y precio, aunque
+      // no esté marcado. Espejo de refsObligadosDePago (v1.0.58).
+      const incGratis = this._incluidosGratis();
+      const obligPago = this._obligadosDePago();
+      const obligQuit = this._obligadosQuitables();
       cfg.complements && cfg.complements.forEach(c => {
         const v = this.state.comp[c.id];
         if (c.type === "bool") {
+          if (incGratis.has(c.id)) { dur += c.duration; return; }
+          if (obligPago.has(c.id)) { if (c.price == null) unknown = true; else price += c.price; dur += c.duration; return; }
+          // v2.0.24 — quitable: puesto por defecto (cuenta) salvo que el cliente
+          // lo haya quitado explícitamente (state === false).
+          if (obligQuit.has(c.id)) { if (v !== false) { if (c.price == null) unknown = true; else price += c.price; dur += c.duration; } return; }
           if (v) { if (c.price == null) unknown = true; else price += c.price; dur += c.duration; }
         } else {
           const o = c.options.find(o => o.id === v) || c.options[0];
+          if (incGratis.has(c.id)) { dur += (o ? o.duration : 0); return; }
           if (o.price == null) unknown = true; else price += o.price;
           dur += o.duration;
         }
@@ -2424,15 +2584,72 @@ window.KR_applySkin = function (el, name) {
         this.compsBox.appendChild(vField);
       }
 
+      // v2.0.22 — servicios incluidos gratis ahora mismo por una regla activa.
+      const incGratis = this._incluidosGratis();
+      // v2.0.23 — servicios obligados de pago ahora mismo (mitad inversa).
+      const obligPago = this._obligadosDePago();
+      // v2.0.24 — servicios puestos por defecto pero quitables con aviso.
+      const obligQuit = this._obligadosQuitables();
+
       this._service.complements.forEach(c => {
         const field = el("div", "kr-field");
         // BOOL: sigue con label + segmento Sí/No como hasta v2.0.13.
         if (c.type === "bool") {
-          const lab = el("label", "kr-label", c.label
-            + (c.price ? ` <small>· +${EUR(c.price)}</small>` : "")
-            + (c.hint ? ` <small>· ${c.hint}</small>` : ""));
-          field.appendChild(lab);
-          field.appendChild(this._boolControl(c));
+          if (incGratis.has(c.id)) {
+            // v2.0.22 — Incluido gratis por regla: se muestra bloqueado, sin
+            // toggle. Reutiliza kr-seg / kr-seg__opt / is-sel del propio CSS.
+            const lab = el("label", "kr-label", c.label
+              + ` <small>· incluido · 0 €</small>`
+              + (c.hint ? ` <small>· ${c.hint}</small>` : ""));
+            field.appendChild(lab);
+            const seg = el("div", "kr-seg");
+            const b = el("button", "kr-seg__opt is-sel", "Incluido");
+            b.type = "button";
+            b.disabled = true;
+            seg.appendChild(b);
+            field.appendChild(seg);
+          } else if (obligPago.has(c.id)) {
+            // v2.0.23 — Obligado de pago (mitad inversa, A no elegido): se
+            // muestra seleccionado y bloqueado, con su precio. La clienta no
+            // lo puede quitar. Reutiliza las clases del propio CSS.
+            const lab = el("label", "kr-label", c.label
+              + (c.price ? ` <small>· +${EUR(c.price)} · obligatorio</small>` : ` <small>· obligatorio</small>`)
+              + (c.hint ? ` <small>· ${c.hint}</small>` : ""));
+            field.appendChild(lab);
+            const seg = el("div", "kr-seg");
+            const b = el("button", "kr-seg__opt is-sel", "Sí");
+            b.type = "button";
+            b.disabled = true;
+            seg.appendChild(b);
+            field.appendChild(seg);
+          } else if (obligQuit.has(c.id)) {
+            // v2.0.24 — Puesto por defecto, quitable con aviso (mitad inversa +
+            // permiteQuitar, A no elegido). Toggle No/Sí con Sí por defecto;
+            // al pulsar "No" sale un aviso claro y solo se quita si confirma.
+            const puesto = (this.state.comp[c.id] !== false);
+            const lab = el("label", "kr-label", c.label
+              + (c.price ? ` <small>· +${EUR(c.price)}</small>` : "")
+              + (c.hint ? ` <small>· ${c.hint}</small>` : ""));
+            field.appendChild(lab);
+            const seg = el("div", "kr-seg");
+            const bNo = el("button", "kr-seg__opt" + (!puesto ? " is-sel" : ""), "No");
+            const bSi = el("button", "kr-seg__opt" + (puesto ? " is-sel" : ""), "Sí");
+            bNo.type = "button"; bSi.type = "button";
+            bNo.addEventListener("click", () => {
+              if (this.state.comp[c.id] === false) return; // ya quitado
+              const aviso = `El ${c.label} NO irá incluido. Si lo deseleccionas, tu reserva no incluye ese servicio.`;
+              if (window.confirm(aviso)) { this.state.comp[c.id] = false; this._afterCompChange(); }
+            });
+            bSi.addEventListener("click", () => { this.state.comp[c.id] = true; this._afterCompChange(); });
+            seg.appendChild(bNo); seg.appendChild(bSi);
+            field.appendChild(seg);
+          } else {
+            const lab = el("label", "kr-label", c.label
+              + (c.price ? ` <small>· +${EUR(c.price)}</small>` : "")
+              + (c.hint ? ` <small>· ${c.hint}</small>` : ""));
+            field.appendChild(lab);
+            field.appendChild(this._boolControl(c));
+          }
         } else if (c.type === "choice" || c.type === "exclusive") {
           // v2.0.14 — CHOICE (variantes M/L/XL de un servicio) y EXCLUSIVE
           // (grupo con varios servicios distintos, elige uno) se pintan
@@ -3123,10 +3340,15 @@ window.KR_applySkin = function (el, name) {
         //                choice; el motor recepcionProLogic v1.0.34 detecta
         //                el uid dentro de f.refs del item exclusivo y
         //                materializa el servicio en su posición.
+        const _obligQuitPayload = this._obligadosQuitables();
         const complementosSetupUid = (cfg.complements || []).reduce((acc, c) => {
           const v = this.state.comp[c.id];
           if (c.type === 'bool') {
-            if (v) acc.push(c.id);
+            // v2.0.24 — quitable por regla inversa: va en el envío por defecto,
+            // salvo que el cliente lo haya quitado (state === false). Así el
+            // motor lo cobra por la vía normal si el cliente lo deja puesto.
+            if (_obligQuitPayload.has(c.id)) { if (v !== false) acc.push(c.id); }
+            else if (v) acc.push(c.id);
           } else if (c.type === 'exclusive') {
             if (v && v !== 'none') {
               const o = (c.options || []).find(o => o.id === v);
@@ -3274,6 +3496,12 @@ window.KR_applySkin = function (el, name) {
 
       this.body.hidden = true;
       this.confirmHost.hidden = false;
+      // v2.0.25 — Frases de consecuencia de las reglas (incluye / no incluye).
+      const _consec = this._consecuenciasReglas();
+      const consecBlock = _consec.length ? `
+          <div style="margin-top:14px;display:flex;flex-direction:column;gap:6px;text-align:left;">
+            ${_consec.map(x => `<div style="font-size:13px;padding:9px 13px;border-radius:9px;${x.tipo === 'incluye' ? 'background:rgba(46,125,50,.10);color:#2e7d32;' : 'background:rgba(176,110,0,.12);color:#8a5a00;'}">${x.tipo === 'incluye' ? '✓ ' : 'ⓘ '}${x.texto}</div>`).join('')}
+          </div>` : '';
       this.confirmHost.innerHTML = `
         <div class="kr-confirm">
           <div class="kr-confirm__badge">${ICON.check}</div>
@@ -3286,6 +3514,7 @@ window.KR_applySkin = function (el, name) {
             <div class="kr-prow"><span class="kr-prow__k">Duración aprox.</span><span class="kr-prow__v">${durTxt(calc.duration)}</span></div>
             <div class="kr-prow"><span class="kr-prow__k">Pago</span><span class="kr-prow__v">${payTxt}</span></div>
           </div>
+          ${consecBlock}
           ${promoBlockConf}
           <div class="kr-confirm__d" style="margin-top:18px">${closing}</div>
           <button class="kr-linkbtn" type="button" id="kr-again">Hacer otra reserva</button>
