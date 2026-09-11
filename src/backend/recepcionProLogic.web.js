@@ -1,9 +1,83 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.55
-// FECHA: 26 de agosto de 2026
+// VERSION: 1.0.59
+// FECHA: 11 de septiembre de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.59: 🔓 REGLA INVERSA CON DESBLOQUEO PERMITIDO (`permiteQuitar`).
+//          Amplía la mitad inversa (1.0.58) con un flag `permiteQuitar`.
+//          · inverso true + permiteQuitar AUSENTE/false → B se FUERZA como
+//            obligatorio de pago cuando A no se elige (comportamiento 1.0.58,
+//            sin escapatoria).
+//          · inverso true + permiteQuitar true → B YA NO se fuerza en el motor.
+//            Se comporta como complemento normal: el widget lo pone marcado
+//            por defecto y el cliente puede quitarlo tras un aviso claro. Si
+//            lo deja, llega en el payload y se cobra por la vía normal; si lo
+//            quita, no llega y no se cobra (el precio puede bajar al base).
+//          Cambio mínimo y quirúrgico: solo la condición que alimenta
+//          refsObligadosDePago. El resto del armado y del precio, intacto.
+//          Retrocompatible: reglas sin permiteQuitar se comportan como 1.0.58.
+//
+// v1.0.58: 🔁 MITAD INVERSA DE LA REGLA DE INCLUSIÓN.
+//          Amplía la regla { tipo:'regla', subtipo:'incluye', si:A, entonces:B }
+//          con un flag booleano `inverso`. Cuando `inverso === true`:
+//            · Si el cliente ELIGE A  → B va incluido y gratis (igual que antes).
+//            · Si el cliente NO elige A → B pasa a OBLIGATORIO y de PAGO: se
+//              materializa en su posición aunque el cliente no lo eligiera, y
+//              su precio de catálogo se suma al total. La clienta no puede
+//              quedarse sin B (caso "o peinado o secado, pero secado siempre").
+//          Si `inverso` es falso/ausente, la regla se comporta como en 1.0.57
+//          (solo la mitad "incluye gratis"). B debe ser un servicio simple.
+//          Implementación: construirFasesPack calcula además
+//          `refsObligadosDePago` (B de reglas inversas cuyo A NO fue elegido) y
+//          lo devuelve; la rama servicio los materializa como COMPLEMENTO de
+//          pago; y crearPackReserva suma su precio de catálogo si no estaban ya
+//          entre los complementos elegidos. Retrocompatible: sin reglas
+//          inversas, cero cambio.
+//
+// v1.0.57: 🔗 REGLAS DE INCLUSIÓN CONDICIONAL ENTRE SERVICIOS DE LA CASCADA.
+//          Nueva capacidad de plataforma. Permite declarar que si el cliente
+//          elige un servicio A de la cascada, otro servicio B de la misma
+//          cascada —que puede estar en OTRA posición— se incluye GRATIS.
+//          Resuelve el caso "servicios conectados en posiciones distintas"
+//          (ej.: elegir un tratamiento premium en el paso 3 incluye sin coste
+//          un acabado en el paso 6). Es distinto del grupo exclusivo (chip
+//          rojo, elección en UNA posición): la regla enlaza DOS posiciones.
+//
+//          ─── MODELO DE DATOS (aditivo, dentro de mapeoFases) ───
+//          Un nuevo item en el array `items` de mapeoFases:
+//              { tipo:'regla', subtipo:'incluye', si:<setupUid_A>,
+//                entonces:<setupUid_B> }
+//          `si` y `entonces` son setupUids de servicios que YA son fases
+//          tipo:'servicio' de esta misma cascada. El editor de servicios los
+//          rellena desde desplegables que solo ofrecen servicios ya puestos
+//          en la cascada, así que no pueden apuntar a nada inexistente.
+//          El item 'regla' NO es un evento: no se pinta, no ocupa tiempo, no
+//          reordena. Todos los recorridos existentes (aplicacion/proceso/
+//          exclusivo/servicio) lo ignoran de forma natural por no coincidir
+//          con su tipo. Cero cambios de comportamiento si no hay reglas.
+//
+//          ─── COMPORTAMIENTO ───
+//          construirFasesPack calcula `refsIncluidosGratis`: por cada regla
+//          activa cuyo `si` (A) fue elegido por el cliente (está en compsMap),
+//          añade su `entonces` (B). Al recorrer la cascada, si una fase
+//          tipo:'servicio' referencia un B ∈ refsIncluidosGratis, se
+//          materializa como INCLUIDA (gratis) en su posición, con su propia
+//          duración y su propio bloque, AUNQUE el cliente no lo eligiera y
+//          sea cual sea su configuración de fase (opcional / obligatoria).
+//          Prevalece sobre el modelo trinario para ese servicio.
+//          PRECIO: `refsIncluidosGratis` se propaga a crearPackReserva, que
+//          pone a 0 el precio de esos servicios en compsParaPrecio. Así, si
+//          el cliente además los eligió como complemento, no se cobran.
+//          Si la regla no se dispara (A no elegido), B se comporta como
+//          siempre según su propia fase. Retrocompatible al 100%.
+//
+//          LÍMITE CONOCIDO (asumido, como el CASO B): las reglas solo actúan
+//          en la creación de la cita (crearPackReserva, ruta de reserva
+//          pública y de nueva cita en Recepción). No se aplican al añadir un
+//          servicio POST-creación (agregarServicioReserva no recibe
+//          compsPorRef), igual que ocurre con las variantes obligatorias.
 //
 // v1.0.55: 🛒 EL PRODUCTO VUELVE A LA FICHA DE LA CITA, YA SIN HEURÍSTICA.
 //          La v1.0.47 eliminó el cruce de productos vendidos porque era
@@ -1303,7 +1377,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.55';
+const VERSION = '1.0.59';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -2075,6 +2149,34 @@ function construirFasesPack({ principal, porSetupUid, horaInicioISO, compsPorRef
 
   const mapeo = jsonIn(principal.mapeoFases, 'items');
 
+  // v1.0.57 — REGLAS DE INCLUSIÓN CONDICIONAL. Recorre los items
+  // { tipo:'regla', subtipo:'incluye', si:<uidA>, entonces:<uidB> } del mapeo.
+  // Si el cliente eligió A (su uid está en compsMap), el servicio B pasa a
+  // `refsIncluidosGratis`: se materializará INCLUIDO (gratis) en su posición,
+  // sea cual sea su configuración de fase, y aunque el cliente no lo eligiera.
+  // Un item 'regla' no es un evento: no lo pinta ningún recorrido posterior
+  // (no coincide con aplicacion/proceso/exclusivo/servicio).
+  const refsIncluidosGratis = new Set();
+  // v1.0.58 — MITAD INVERSA: B de reglas con `inverso` cuyo A NO fue elegido.
+  // Esos B pasan a obligatorios y de pago: se materializan aunque el cliente
+  // no los eligiera y su precio se suma en crearPackReserva.
+  // v1.0.59 — Solo se FUERZAN los inversos NO quitables. Si la regla permite
+  // quitar (`permiteQuitar`), B NO se fuerza aquí: se comporta como complemento
+  // normal (el widget lo pone por defecto y el cliente puede quitarlo con
+  // aviso; si lo deja, llega en el payload y se cobra por la vía normal).
+  const refsObligadosDePago = new Set();
+  if (Array.isArray(mapeo)) {
+    for (const f of mapeo) {
+      if (f && f.tipo === 'regla' && f.subtipo === 'incluye' && f.si && f.entonces) {
+        if (compsMap.has(f.si)) {
+          refsIncluidosGratis.add(f.entonces);
+        } else if (f.inverso === true && f.permiteQuitar !== true) {
+          refsObligadosDePago.add(f.entonces);
+        }
+      }
+    }
+  }
+
   // v1.0.34 — HELPER interno para materializar un servicio en la cascada
   // desdoblándolo en Aplicación + Proceso cuando svc.minProceso > 0.
   // Uniforme para Caso A/B/C y la nueva rama 'exclusivo'. Cero cambio de
@@ -2136,7 +2238,7 @@ function construirFasesPack({ principal, porSetupUid, horaInicioISO, compsPorRef
       ocupa: true
     });
     cursorISO = endISO;
-    return { fases, refsConsumidos, faltanVariantes };
+    return { fases, refsConsumidos, faltanVariantes, refsIncluidosGratis, refsObligadosDePago };
   }
 
   // Servicio complejo: recorrer mapeoFases en orden literal.
@@ -2221,6 +2323,26 @@ function construirFasesPack({ principal, porSetupUid, horaInicioISO, compsPorRef
         console.warn(`${TAG} ⚠️ Fase ref no encontrada en catálogo: ${f.ref}`);
         continue;
       }
+
+      // v1.0.57 — REGLA DE INCLUSIÓN: una regla activa hace que este servicio
+      // vaya INCLUIDO (gratis) en su posición, aunque el cliente no lo eligiera
+      // y sea cual sea su obligatoriedad. Prevalece sobre el modelo trinario.
+      // El precio se pone a 0 en crearPackReserva vía refsIncluidosGratis.
+      if (refsIncluidosGratis.has(f.ref)) {
+        materializarConProceso(svc, 'INCLUIDA', svc.label || '', svc.duration);
+        refsConsumidos.add(f.ref);
+        continue;
+      }
+
+      // v1.0.58 — MITAD INVERSA: A no elegido y la regla es `inverso`. B pasa
+      // a obligatorio y de pago: se materializa aunque el cliente no lo
+      // eligiera. Su precio se suma en crearPackReserva (refsObligadosDePago).
+      if (refsObligadosDePago.has(f.ref)) {
+        materializarConProceso(svc, 'COMPLEMENTO', svc.label || '', svc.duration);
+        refsConsumidos.add(f.ref);
+        continue;
+      }
+
       const esObligatoria = (f.obligatorio === true);
       const comp = compsMap.get(f.ref);
 
@@ -2258,7 +2380,7 @@ function construirFasesPack({ principal, porSetupUid, horaInicioISO, compsPorRef
     }
   }
 
-  return { fases, refsConsumidos, faltanVariantes };
+  return { fases, refsConsumidos, faltanVariantes, refsIncluidosGratis, refsObligadosDePago };
 }
 
 // =====================================================
@@ -2526,7 +2648,7 @@ export const crearPackReserva = webMethod(
 
       // ─── 5. Construir cascada (aplicación + proceso + comps elegidos en su posición) ───
       const startISO = madridToUTC(fecha, horaHHmm);
-      const { fases: fasesPack, refsConsumidos, faltanVariantes } = construirFasesPack({
+      const { fases: fasesPack, refsConsumidos, faltanVariantes, refsIncluidosGratis, refsObligadosDePago } = construirFasesPack({
         principal,
         porSetupUid,
         horaInicioISO: startISO,
@@ -2576,7 +2698,27 @@ export const crearPackReserva = webMethod(
       // compsParaPrecio: TODOS los complementos elegidos (independiente de si
       // se materializaron en el mapeo o al final). Se usa para precioTotal,
       // serviciosDetail y title.
-      const compsParaPrecio = compsNorm.map(c => ({ label: c.label, price: c.price }));
+      // v1.0.57 — Si una regla de inclusión hizo gratis a un servicio
+      // (refsIncluidosGratis), su precio se pone a 0 aquí: así, aunque el
+      // cliente además lo eligiera como complemento, no se cobra.
+      const _incluidosGratis = (refsIncluidosGratis instanceof Set) ? refsIncluidosGratis : new Set();
+      const compsParaPrecio = compsNorm.map(c => ({
+        label: c.label,
+        price: _incluidosGratis.has(c.setupUid) ? 0 : c.price
+      }));
+
+      // v1.0.58 — MITAD INVERSA: los servicios obligados de pago (B de una
+      // regla inversa cuyo A no se eligió) que NO estén ya entre los elegidos
+      // se añaden al precio con su importe de catálogo. Si el cliente además
+      // lo eligió, ya está en compsParaPrecio y no se duplica.
+      const _obligadosDePago = (refsObligadosDePago instanceof Set) ? refsObligadosDePago : new Set();
+      _obligadosDePago.forEach(uid => {
+        const yaElegido = compsNorm.some(c => c.setupUid === uid);
+        if (!yaElegido) {
+          const svc = porSetupUid[uid];
+          if (svc) compsParaPrecio.push({ label: svc.label || '', price: toNum(svc.price) });
+        }
+      });
 
       if (fasesPack.length === 0) {
         return { ok: false, version: VERSION, error: { message: 'El pack no generó ninguna fase' } };
@@ -2812,6 +2954,18 @@ export const getReservasPorFecha = webMethod(
         family: item.family || '',
         wixAnclaId: item.wixAnclaId || '',
         fechaReserva: item.fechaReserva ? new Date(item.fechaReserva).toISOString() : '',
+        // v1.0.56 — ADITIVO. `fechaReserva` va en UTC, y quien la lea sin
+        // convertirla se equivoca en una o dos horas según el horario de
+        // verano. AKIRA leía el ISO tal cual y anunciaba las 08:00 de una
+        // cita de las 10:00. Se añaden el día y la hora ya en hora de Madrid,
+        // para que nadie tenga que calcular el desfase. Ningún consumidor
+        // existente se ve afectado: son dos claves nuevas.
+        fechaMadrid: item.fechaReserva
+          ? new Date(item.fechaReserva).toLocaleDateString('en-CA', { timeZone: TIMEZONE })
+          : '',
+        horaMadrid: item.fechaReserva
+          ? new Date(item.fechaReserva).toLocaleTimeString('es-ES', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false })
+          : '',
         duracionTotal: toNum(item.duracionTotal),
         clientName: item.clientName || '',
         clientPhone: item.clientPhone || '',
