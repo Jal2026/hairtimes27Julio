@@ -1,7 +1,152 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.10.0
+// VERSION: 0.11.12
+//
+// v0.11.12 — 🔓 EMITE EL FLAG `permiteQuitar` DE LAS REGLAS.
+//   Pareja de recepcionProLogic v1.0.59 y bundle v2.0.24. Cada regla emitida
+//   lleva ahora también `permiteQuitar` (bool). Cuando inverso+permiteQuitar,
+//   el bundle muestra B marcado por defecto pero con toggle: el cliente puede
+//   quitarlo tras un aviso. Aditivo; sin el flag → false.
+//
+// v0.11.11 — 🔁 EMITE EL FLAG `inverso` DE LAS REGLAS.
+//   Pareja de recepcionProLogic v1.0.58 y bundle v2.0.23. Cada regla emitida
+//   lleva ahora `inverso` (bool). Cuando es true, el bundle muestra B como
+//   obligatorio y de pago mientras A no esté elegido, y como incluido gratis
+//   en cuanto A se elige. Aditivo: reglas sin `inverso` → false, comportamiento
+//   idéntico a 0.11.10.
+//
+// v0.11.10 — 🔗 EMITE LAS REGLAS DE INCLUSIÓN AL WIDGET.
+//   Pareja de recepcionProLogic v1.0.57. El motor de armado ya aplica las
+//   reglas { tipo:'regla', subtipo:'incluye', si:A, entonces:B } del mapeoFases
+//   en la creación de la cita (fuente de verdad del precio). Aquí, en la parte
+//   de OFERTA, `adaptarServicio` emite además un array `reglas: [{si,entonces}]`
+//   para que el bundle pueda reflejar en vivo que, al marcar A, el servicio B
+//   pasa a "incluido · 0 €" y su tiempo se suma. Sin este dato el bundle
+//   mostraría a B con su precio hasta el envío; el cargo final ya sería
+//   correcto por el motor, pero la pantalla no coincidiría durante la elección.
+//   Cambio ADITIVO y local a `adaptarServicio`: no toca huecos, disponibilidad,
+//   `complements`, `baseDuration`, filtros ni reparto. Servicios sin reglas
+//   emiten `reglas: []` (cero cambio de comportamiento).
+//
+// v0.11.4 — SE DICE SI ALGO ES OBLIGATORIO O NO.
+//   La respuesta no decía en ninguna parte si lo que faltaba se podía omitir.
+//   Había que deducirlo de una lista, y se acabó diciéndole al usuario que el
+//   sistema exigía elegir complementos cuando ninguno era obligatorio. Ahora
+//   viaja `hayObligatorios`, `sePuedeOmitirTodo` y cómo omitirlos. Y el log
+//   distingue obligatorias de opcionales, que antes iban en un mismo total.
+//
+// v0.11.3 — SE PUEDE DECIR QUE NO.
+//   v0.11.1 hizo bloqueante cualquier decisión sin contestar, pero no dejó
+//   forma de contestar "ninguno": el usuario decía "tal cual", la llamada
+//   volvía sin complementos, y eso se leía otra vez como "sin contestar".
+//   Bucle cerrado: la composición nunca se resolvía y la reserva no llegaba a
+//   prepararse jamás. Ahora una lista vacía o la palabra ninguno/nada/no/tal
+//   cual contestan que no a todos los opcionales de una vez.
+//
+// v0.11.9 — resolverInstanteMadrid. ADITIVO.
+//   `reprogramarReserva` recibe `nuevaFechaISO` y hace `new Date(...)`. Una
+//   cadena sin huso ('2026-09-18T11:00:00') la interpreta el runtime como
+//   hora LOCAL DEL SERVIDOR, que en Wix es UTC: la cita se movería a las
+//   13:00 de Madrid en verano y a las 12:00 en invierno, sin error visible.
+//   Y el desfase depende del horario de verano, que es un CÁLCULO y por tanto
+//   no puede quedar en manos del modelo.
+//   Esta función traduce día + HH:mm de Madrid al instante UTC exacto, con el
+//   mismo criterio de zona que ya usa el motor de huecos. No toca nada.
+//
+// v0.11.8 — UNA ETIQUETA MAL ESCRITA NO PUEDE COSTAR TRES VUELTAS.
+//   Medido en producción: con "corte mujer" la composición devolvió 0
+//   pendientes y 1 no reconocido. Correcto, pero inservible: al haberse
+//   cerrado todo lo demás, `opcionales` y `detalleOpcionales` iban vacíos, así
+//   que el modelo recibía "faltan datos" SIN NADA contra lo que corregir. Se
+//   quedó sin lista, volvió a llamar sin complementos para recuperarla, y la
+//   conversación gastó cuatro viajes a la API y reventó el techo de 14s del
+//   gateway. La composición acabó resolviendo bien —80min, 63€— pero después
+//   de que la conexión ya se hubiera cortado.
+//
+//   Ahora, cuando algo no se reconoce, la respuesta lleva SIEMPRE:
+//     · `catalogo`  — todos los complementos con sus etiquetas exactas y las
+//                     opciones de cada grupo. Es contra lo que corregir.
+//     · `entendido` — lo que sí se entendió de esta llamada, para que no haya
+//                     que volver a preguntárselo a la persona.
+//   Con eso, corregir es un viaje, no tres.
+//
+//   Y el log escribe las etiquetas que no se reconocieron, no solo cuántas.
+//   Con el contador había que adivinar cuál era.
+//
+// v0.11.7 — LA LISTA ES LA RESPUESTA COMPLETA.
+//   Una selección parcial no tenía forma de cerrarse. Contestar "Corte Mujer"
+//   a "¿alguno o ninguno?" marcaba ese complemento y dejaba los otros cuatro
+//   sin contestar, así que la composición volvía a preguntar por ellos. Con
+//   cinco opcionales eso son cinco rondas, y no había manera de decir "este y
+//   nada más": la lista vacía significa NINGUNO, no "ninguno más".
+//
+//   Regla nueva, y es la que se corresponde con cómo habla una persona:
+//   SI EL PARÁMETRO LLEGA, ES LA RESPUESTA ENTERA. Lo que no se nombra, no se
+//   quiere. Ausente sigue siendo "todavía sin preguntar"; presente cierra
+//   todos los opcionales de una vez. La lista vacía deja de ser un caso
+//   especial: es el caso general con cero elementos.
+//
+//   Lo OBLIGATORIO no se toca: sigue quedando pendiente si no se contesta,
+//   exactamente igual que antes. No se puede saltar un Planchado de Botox por
+//   omisión.
+//
+//   Sin efecto fuera de AKIRA: getComposicionServicio es el único consumidor.
+//
+// v0.11.6 — FUERA LA LISTA DE SINÓNIMOS. UNA SOLA FORMA DE DECIR QUE NO.
+//   v0.11.5 llevaba dentro una lista de formas de decir "ninguno" ("tal cual",
+//   "adelante", "solo…", "así está bien"). Eso es comportamiento escrito en
+//   código: cada manera nueva de decir que no obligaba a publicar el backend,
+//   y entender lo que dice una persona es trabajo del modelo, no de esta
+//   función. Quedan las dos formas inequívocas: la palabra "ninguno" y la
+//   LISTA VACÍA. La fila de AkiraCapabilities declara cuál usar.
+//
+//   Y el aviso `comoOmitir` decía "vuelve a llamar con complementos:
+//   \"ninguno\"" — una cadena — mientras el parámetro se declara como lista.
+//   Se le estaba pidiendo al modelo justo lo que su esquema le prohíbe. Ahora
+//   dice lista vacía.
+//
+//   Sin efecto fuera de AKIRA: `_normalizarSeleccionComplementos` solo la usa
+//   getComposicionServicio, y el bundle público no la consume.
+//
+// v0.11.2 — LO OPCIONAL SE OFRECE, NO SE RECITA.
+//   Se devolvían todos los complementos con precios y duraciones, y la
+//   conversación se convertía en una tabla. Ahora lo obligatorio va entero y
+//   lo opcional solo con el nombre, en `opcionales`. El detalle sigue ahí, en
+//   `detalleOpcionales`, para quien lo pida.
+//
+// v0.11.1 — LA COMPOSICIÓN NO SE CIERRA SOLA.
+//   getComposicionServicio daba por cerrada la composición cuando no faltaba
+//   nada OBLIGATORIO. Los complementos opcionales sin contestar se tomaban
+//   como un "no" y ni se ofrecían. Resultado: AKIRA reservaba un tinte sin
+//   preguntar variante ni complementos, cosa que la pantalla nunca hace.
+//   Ahora cualquier decisión sin contestar deja la composición abierta y se
+//   devuelve para preguntarla. Solo afecta a getComposicionServicio, que hoy
+//   no usa nadie más.
+//
+// v0.11.0 — LA COMPOSICIÓN DE LA CITA BAJA AL BACKEND.
+//   ADITIVO PURO. No se toca ni una línea de ninguna función existente:
+//   getCategoriasPublicas, getServiciosCategoria, getProfesionalesPublicos,
+//   getSalonConfig, getHuecosDisponibles y crearReservaPublica quedan
+//   exactamente como en v0.10.0, y el bundle público sigue calculando por
+//   su cuenta como hasta hoy. Nadie consume lo nuevo todavía.
+//
+//   QUÉ SE AÑADE: getComposicionServicio (+ sus helpers y la constante
+//   USOS_INTERNOS). Devuelve, para un servicio, lo que hoy arma el
+//   navegador: qué hay que elegir (variantes, complementos, grupos) y,
+//   una vez elegido, cuánto dura y cuánto cuesta la cita completa, con el
+//   payload ya montado para reservar.
+//
+//   POR QUÉ: `durationMin` —la cifra que gobierna qué horas se ofrecen y
+//   con qué bloque se valida al crear— se calcula en `_calc()` del bundle,
+//   dentro del navegador. Cualquier superficie sin pantalla (AKIRA en la
+//   consola interna, y mañana WhatsApp o teléfono) no puede llegar ahí.
+//   La alternativa era reescribir esa cuenta fuera, que es garantizar que
+//   un día se separen: el mismo fallo del Lavado perdido (v0.9.8) pero
+//   permanente y por duplicado. Se baja aquí una sola vez.
+//
+//   La aritmética es la del bundle v2.0.19, literal. La resolución de
+//   catálogo llama a `adaptarServicio` sin modificarlo.
 //
 // v0.10.0 — EL NOMBRE QUE SE GUARDA EN LA RESERVA VA LIMPIO.
 //   El nombre del personal admite un prefijo de ordenación de la forma
@@ -809,7 +954,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.10.0';
+const VERSION = '0.11.12';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -833,6 +978,11 @@ const CMS_CONFIG     = 'SalonConfig';
 const BUFFER_DEFAULT_MIN = 15;
 
 const USOS_PUBLICOS     = ['publico', 'ambos'];
+// v0.11.0 — Ámbito INTERNO (Recepción PRO / AKIRA). Mismo criterio que
+// USOS_VALIDOS de recepcionProLogic: lo que puede reservar el salón, que
+// no coincide con lo que se ofrece al público. Solo lo usa
+// getComposicionServicio; ninguna función anterior lo mira.
+const USOS_INTERNOS     = ['kamisuite', 'ambos'];
 const TIPOS_PRINCIPALES = ['principal', 'ambos'];
 const NOTA_RECURSO_INTERNO = 'RECURSO INTERNO';
 
@@ -1230,6 +1380,21 @@ function adaptarServicio(it, porSetupUid, porSetupUidFases) {
     }
   }
 
+  // v0.11.10 — REGLAS DE INCLUSIÓN CONDICIONAL. Se emiten al widget como
+  // pares { si, entonces } para que el bundle refleje en vivo que, al marcar
+  // A (`si`), el servicio B (`entonces`) pasa a incluido · 0 € y su tiempo se
+  // suma. La fuente de verdad del precio final sigue siendo el motor de armado
+  // (recepcionProLogic v1.0.57); esto es solo para que la pantalla coincida
+  // durante la elección. Servicios sin reglas → array vacío.
+  const reglas = [];
+  if (Array.isArray(mapeo)) {
+    for (const f of mapeo) {
+      if (f && f.tipo === 'regla' && f.subtipo === 'incluye' && f.si && f.entonces) {
+        reglas.push({ si: String(f.si), entonces: String(f.entonces), inverso: f.inverso === true, permiteQuitar: f.permiteQuitar === true });
+      }
+    }
+  }
+
   const complementosUidsRaw = jsonIn(it.complementos, 'items');
 
   // v0.7.6 — Set de setupUids que YA salen como opción dentro de algún
@@ -1401,6 +1566,9 @@ function adaptarServicio(it, porSetupUid, porSetupUidFases) {
     // MARCADO al menos uno.
     requiresExtraPro: Array.isArray(complements) && complements.length > 0,
     complements,
+    // v0.11.10 — Reglas de inclusión condicional { si, entonces } para el
+    // bundle. [] si el servicio no tiene ninguna.
+    reglas,
     claseServicio: it.claseServicio || '',
     idStaff: idStaffArr,   // v0.6.0 — wixResourceIds permitidos. [] = todos.
     // v0.9.6 — ¿Este servicio se vende también en bono? Dato PÚBLICO y
@@ -2930,6 +3098,712 @@ export const crearReservaPublica = webMethod(
 
     } catch (e) {
       console.error(`${TAG} ❌ crearReservaPublica:`, e.message);
+      return { ok: false, version: VERSION, error: safeErr(e) };
+    }
+  }
+);
+
+// =====================================================
+// 6·bis · GET COMPOSICIÓN SERVICIO        ◄── NUEVO v0.11.0
+// =====================================================
+// PARA QUÉ EXISTE
+// ---------------
+// Hasta v0.10.0, la composición de una cita —qué hay que elegir y cuánto
+// suma— se armaba EN EL NAVEGADOR: el bundle público (`_calc()`) partía de
+// lo que devuelve `adaptarServicio`, aplicaba la variante elegida, sumaba
+// los complementos marcados y de ahí salían las dos cifras que gobiernan
+// todo lo demás: `durationMin` (la que se le pasa a getHuecosDisponibles y
+// luego a crearReservaPublica) y el precio del resumen.
+//
+// Cualquier superficie SIN navegador —AKIRA, y mañana WhatsApp o teléfono—
+// se queda sin esa cuenta. Reimplementarla aparte garantiza que un día se
+// separen y se ofrezcan horas mal medidas: exactamente el fallo del Lavado
+// perdido (v0.9.8) pero por duplicado permanente.
+//
+// Esta función baja esa cuenta al backend SIN tocar el camino del widget.
+// El bundle sigue haciendo lo que hace hoy; nadie más la usa todavía.
+//
+// DOS MODOS EN UNA SOLA FUNCIÓN
+// -----------------------------
+//   · SIN `seleccion` → devuelve la COMPOSICIÓN: variantes, complementos
+//     opcionales, obligatorios y grupos de elección, más `pendiente[]`,
+//     que es literalmente la lista de lo que hay que preguntar antes de
+//     poder reservar. Es el equivalente a abrir el panel del servicio.
+//   · CON `seleccion` → devuelve lo RESUELTO: precio, duración total y el
+//     `payload` ya montado para crearReservaPublica / crearPackReserva
+//     (complementosSetupUid + varianteSel + durationMin + idStaff).
+//     Si falta algo obligatorio NO adivina: devuelve `faltan_datos` con lo
+//     que queda pendiente.
+//
+// ÁMBITO (parámetro `ambito`)
+// ---------------------------
+//   · 'interno' (por defecto) → catálogo de Recepción PRO: uso kamisuite
+//     o ambos. Es lo que ve una recepcionista, y por tanto lo que debe ver
+//     AKIRA en la consola interna.
+//   · 'publico' → uso publico o ambos. Paridad estricta con el widget.
+//
+// ⚠️ DIVERGENCIA REAL ENTRE LAS DOS SUPERFICIES, RESPETADA AQUÍ.
+//    Un complemento OBLIGATORIO y SIN variantes (Caso A del motor: Lavado,
+//    Secado…) lo auto-materializa `construirFasesPack` en su posición de la
+//    cascada sin que nadie lo elija. Recepción PRO lo excluye de la lista
+//    (getCatalogoReserva v1.0.35: pedírselo al estilista es absurdo).
+//    El widget público, en cambio, lo pinta y exige un "sí" antes de
+//    habilitar RESERVAR (bundle v2.0.13). Los dos funcionan en producción.
+//    Aquí se conserva cada comportamiento en su ámbito: 'interno' lo oculta,
+//    'publico' lo mantiene. No se unifica por iniciativa propia.
+//
+// NO INVENTA NADA. Toda la aritmética es la del bundle v2.0.19 y toda la
+// resolución de catálogo es la de `adaptarServicio`, que se llama tal cual.
+// Las etiquetas del usuario se casan por clave normalizada (sin tildes,
+// sin mayúsculas, sin dobles espacios) y SOLO por coincidencia exacta: si
+// una etiqueta no casa con una opción y solo una, se devuelve pendiente
+// con las opciones, nunca se elige por aproximación.
+
+// Clave de comparación de etiquetas. Reutiliza `claveGrupo` para no tener
+// dos criterios de normalización distintos en el mismo archivo.
+function _claveEtiqueta(s) {
+  return claveGrupo(s);
+}
+
+// Etiqueta legible de una variante del principal. El editor las guarda como
+// {nombre, precio, duracion, tamano_estilo}; el bundle lee `label || nombre`.
+function _labelVariante(v, i) {
+  if (v && typeof v === 'object') {
+    const l = v.label || v.nombre || '';
+    return String(l).trim() || ('Opción ' + (i + 1));
+  }
+  return String(v || '').trim() || ('Opción ' + (i + 1));
+}
+
+function _precioVariante(v) {
+  if (!v || typeof v !== 'object') return null;
+  const raw = (v.precio != null) ? v.precio : v.price;
+  if (raw == null) return null;
+  const n = Number(raw);
+  return isNaN(n) ? null : n;
+}
+
+function _duracionVariante(v) {
+  if (!v || typeof v !== 'object') return 0;
+  const raw = (v.duracion != null) ? v.duracion : v.duration;
+  if (raw == null) return 0;
+  const n = Number(raw);
+  return isNaN(n) ? 0 : n;
+}
+
+// Opciones de variante del principal, incluida la BASE.
+// La base es una opción legítima: el patrón real es "base + variantes
+// explícitas del array" (bitácora 4-jul-2026). La regla "la base actúa
+// como M" era específica de bonos, no universal.
+function _opcionesVariantePrincipal(svc) {
+  const out = [{
+    id: 'base',
+    idx: -1,
+    label: 'Base',
+    price: (svc.basePrice == null) ? null : Number(svc.basePrice),
+    duration: toNum(svc.baseDuration)
+  }];
+  const vars = Array.isArray(svc.variantes) ? svc.variantes : [];
+  vars.forEach((v, i) => {
+    out.push({
+      id: 'v' + i,
+      idx: i,
+      label: _labelVariante(v, i),
+      price: _precioVariante(v),
+      duration: _duracionVariante(v)
+    });
+  });
+  return out;
+}
+
+// Normaliza `seleccion.complementos` a un objeto { <idComplemento>: valor }.
+// Admite las dos formas con las que puede llegar desde una conversación:
+//   · objeto  { '<uid|exc:N>': true | false | '<idOpcion>' | '<etiqueta>' }
+//   · array   ['Lavado', 'Peinado M', '<uid>']  → cada entrada se resuelve
+//     contra los complementos y contra las opciones de cada grupo.
+// Toda coincidencia es EXACTA por clave normalizada. Lo que no case se
+// devuelve en `noReconocidos` para poder decirlo, nunca se descarta en
+// silencio ni se aproxima.
+function _normalizarSeleccionComplementos(complementos, comps) {
+  const out = {};
+  const noReconocidos = [];
+
+  // v0.11.3 — "SIN COMPLEMENTOS" TIENE QUE PODER DECIRSE.
+  // Hasta aquí, no contestar y contestar "ninguno" eran indistinguibles: los
+  // dos dejaban los opcionales sin resolver, así que la composición volvía a
+  // pedirlos una y otra vez. Bucle infinito.
+  //
+  // v0.11.6 — DOS FORMAS, NI UNA MÁS. La lista de sinónimos que había aquí
+  // ("tal cual", "adelante", "solo…", "así está bien") era comportamiento en
+  // código: cada forma nueva de decir que no habría obligado a publicar el
+  // backend. Interpretar el lenguaje es del modelo. Aquí solo se reconoce lo
+  // inequívoco: la LISTA VACÍA y la palabra "ninguno".
+  //
+  // Lo que NO se toca: omitir el parámetro sigue significando "todavía sin
+  // preguntar", y por eso la composición sigue abierta y se devuelven los
+  // complementos para ofrecerlos. Distinguir esas dos cosas es lo que impide
+  // que la cita se cierre sin haber preguntado nada.
+  const dijoNinguno = (v) => {
+    if (Array.isArray(v)) return v.length === 0;
+    if (typeof v === 'string') return _claveEtiqueta(v) === 'ninguno';
+    return false;
+  };
+
+  if (dijoNinguno(complementos)) {
+    for (const c of comps) {
+      if (c.required) continue;                    // lo obligatorio no se salta
+      out[c.id] = (c.type === 'bool') ? false : 'none';
+    }
+    return { out, noReconocidos };
+  }
+
+  // AUSENTE = todavía sin preguntar. Es lo que mantiene la composición abierta
+  // y hace que se devuelvan los complementos para ofrecerlos.
+  if (!complementos) return { out, noReconocidos };
+
+  // v0.11.7 — Presente = respuesta completa. Se cierran ahora todos los
+  // opcionales; los nombrados los sobrescriben más abajo. Sin esto, nombrar
+  // uno dejaba los demás abiertos y la composición volvía a preguntar.
+  const cerrarNoNombrados = () => {
+    for (const c of comps) {
+      if (c.required) continue;
+      if (out[c.id] === undefined) out[c.id] = (c.type === 'bool') ? false : 'none';
+    }
+  };
+
+  const porId = {};
+  const porLabel = {};
+  for (const c of comps) {
+    porId[String(c.id)] = c;
+    const k = _claveEtiqueta(c.label);
+    if (k) porLabel[k] = c;
+  }
+
+  // Array de etiquetas o uids sueltos → se interpretan como "esto va".
+  if (Array.isArray(complementos)) {
+    for (const raw of complementos) {
+      const txt = String(raw == null ? '' : raw).trim();
+      if (!txt) continue;
+      const k = _claveEtiqueta(txt);
+
+      // 1) ¿es el id o la etiqueta de un complemento?
+      const c = porId[txt] || porLabel[k] || null;
+      if (c) {
+        out[c.id] = (c.type === 'bool') ? true : out[c.id];
+        if (c.type !== 'bool' && out[c.id] === undefined) out[c.id] = null; // queda pendiente de opción
+        continue;
+      }
+
+      // 2) ¿es la etiqueta o el id de una OPCIÓN de algún grupo?
+      let encontrado = null;
+      for (const cc of comps) {
+        if (cc.type === 'bool' || !Array.isArray(cc.options)) continue;
+        const o = cc.options.find(op =>
+          String(op.id) === txt || _claveEtiqueta(op.label) === k
+        );
+        if (o) { encontrado = { c: cc, o }; break; }
+      }
+      if (encontrado) { out[encontrado.c.id] = encontrado.o.id; continue; }
+
+      noReconocidos.push(txt);
+    }
+    cerrarNoNombrados();
+    return { out, noReconocidos };
+  }
+
+  // Objeto { id|etiqueta : valor }
+  if (typeof complementos === 'object') {
+    for (const clave of Object.keys(complementos)) {
+      const c = porId[clave] || porLabel[_claveEtiqueta(clave)] || null;
+      if (!c) { noReconocidos.push(clave); continue; }
+      const v = complementos[clave];
+
+      if (c.type === 'bool') {
+        if (v === true || v === false) { out[c.id] = v; continue; }
+        const kv = _claveEtiqueta(v);
+        if (kv === 'si' || kv === 'true' || kv === '1') out[c.id] = true;
+        else if (kv === 'no' || kv === 'false' || kv === '0' || kv === 'none') out[c.id] = false;
+        else noReconocidos.push(String(clave) + '=' + String(v));
+        continue;
+      }
+
+      // choice / exclusive → id de opción o etiqueta de opción
+      const txt = String(v == null ? '' : v).trim();
+      const kv = _claveEtiqueta(txt);
+      const o = (c.options || []).find(op => String(op.id) === txt || _claveEtiqueta(op.label) === kv);
+      if (o) out[c.id] = o.id;
+      else noReconocidos.push(String(clave) + '=' + txt);
+    }
+    cerrarNoNombrados();
+  }
+
+  return { out, noReconocidos };
+}
+
+// Lista de lo que falta por decidir. Es el guion de preguntas: cada entrada
+// es una decisión pendiente con sus opciones reales del catálogo.
+function _construirPendiente(svc, comps, variantElegida, compSel) {
+  const pendiente = [];
+
+  if (svc.hasVariants && Array.isArray(svc.variantes) && svc.variantes.length > 0 && variantElegida === null) {
+    pendiente.push({
+      id: 'variante',
+      tipo: 'variante',
+      label: svc.name || 'Servicio',
+      obligatorio: true,
+      opciones: _opcionesVariantePrincipal(svc)
+    });
+  }
+
+  for (const c of comps) {
+    const v = compSel[c.id];
+
+    if (c.type === 'bool') {
+      if (v === true || v === false) continue;
+      pendiente.push({
+        id: c.id,
+        tipo: 'si_no',
+        label: c.label,
+        hint: c.hint || '',
+        obligatorio: !!c.required,
+        price: (c.price == null) ? null : Number(c.price),
+        duration: toNum(c.duration)
+      });
+      continue;
+    }
+
+    // choice / exclusive
+    const resuelto = (typeof v === 'string' && v.length > 0);
+    if (resuelto) continue;
+    // v0.11.3 — Contestado explícitamente que no: no se vuelve a preguntar.
+    // El "no" de un grupo de opciones es la cadena 'none', que ya ha salido
+    // por `resuelto`; aquí solo queda el `false` de los de sí/no.
+    // v0.11.7 — `null` YA NO cierra. Es lo que se guarda cuando se nombra el
+    // grupo sin decir la opción ("Peinado" en vez de "Peinado Medio"), y el
+    // comentario de ese punto dice que queda PENDIENTE DE OPCIÓN. Cerrarlo
+    // aquí hacía justo lo contrario: se pedía el complemento y se descartaba
+    // en silencio.
+    if (v === false) continue;
+    // v0.11.1 — Antes se saltaban los opcionales sin contestar. Eso hacía que
+    // la composición se cerrara sola y AKIRA reservara sin ofrecer nada. En
+    // pantalla, Recepción PRO los ENSEÑA TODOS y decide la persona; aquí
+    // igual: si no se ha contestado, se pregunta.
+    pendiente.push({
+      id: c.id,
+      tipo: (c.type === 'exclusive') ? 'elige_uno' : 'variante_complemento',
+      label: c.label,
+      hint: c.hint || '',
+      obligatorio: !!c.required,
+      opciones: (c.options || []).map(o => ({
+        id: o.id,
+        label: o.label,
+        price: (o.price == null) ? null : Number(o.price),
+        duration: toNum(o.duration)
+      }))
+    });
+  }
+
+  return pendiente;
+}
+
+// Aritmética IDÉNTICA a `_calc()` del bundle v2.0.19. Ni una regla nueva.
+function _calcularTotales(svc, comps, variantElegida, compSel) {
+  let price = 0;
+  let dur = toNum(svc.baseDuration);
+  let unknown = false;
+
+  if (svc.basePrice != null) price += Number(svc.basePrice);
+
+  // La variante SUSTITUYE precio y duración del principal, no los suma.
+  if (variantElegida && variantElegida.idx >= 0) {
+    if (variantElegida.price != null && !isNaN(variantElegida.price)) {
+      price = Number(variantElegida.price);
+      unknown = false;
+    }
+    if (variantElegida.duration > 0) dur = Number(variantElegida.duration);
+  }
+
+  for (const c of comps) {
+    const v = compSel[c.id];
+    if (c.type === 'bool') {
+      if (v === true) {
+        if (c.price == null) unknown = true; else price += Number(c.price);
+        dur += toNum(c.duration);
+      }
+    } else {
+      const o = (c.options || []).find(op => op.id === v) || (c.options || [])[0];
+      if (!o) continue;
+      if (o.price == null) unknown = true; else price += Number(o.price);
+      dur += toNum(o.duration);
+    }
+  }
+
+  const aValorar = unknown || price <= 0;
+  const promoRaw = (aValorar || !svc.promoPct) ? 0 : svc.promoPct;
+  const promoBase = (promoRaw && svc.basePrice != null) ? Number(svc.basePrice) : 0;
+  const ahorro = promoRaw ? Math.round(promoBase * (promoRaw / 100) * 100) / 100 : 0;
+  const promo = (ahorro > 0.005) ? promoRaw : 0;
+  const total = Math.round((price - ahorro) * 100) / 100;
+
+  return { subtotal: price, total, ahorro, promo, duracionMin: dur, aValorar };
+}
+
+// Monta `complementosSetupUid` con el MISMO shape que envía el bundle:
+//   · bool      → el uid suelto (string)
+//   · choice    → { uid: <uid del complemento>, varianteId, varianteLabel, price, duration }
+//   · exclusive → { uid: <uid del servicio elegido>, varianteId, varianteLabel, price, duration }
+function _construirComplementosPayload(comps, compSel) {
+  const acc = [];
+  for (const c of comps) {
+    const v = compSel[c.id];
+    if (c.type === 'bool') {
+      if (v === true) acc.push(c.id);
+      continue;
+    }
+    if (!v || v === 'none') continue;
+    const o = (c.options || []).find(op => op.id === v);
+    if (!o) continue;
+    acc.push({
+      uid: (c.type === 'exclusive') ? o.id : c.id,
+      varianteId: o.id,
+      varianteLabel: o.label || '',
+      price: (o.price == null) ? null : Number(o.price),
+      duration: Number(o.duration) || 0
+    });
+  }
+  return acc;
+}
+
+export const getComposicionServicio = webMethod(
+  Permissions.Anyone,
+  async ({ setupUid, busqueda, seleccion, ambito } = {}) => {
+    const t0 = Date.now();
+    try {
+      const esPublicoAmbito = String(ambito || 'interno').trim().toLowerCase() === 'publico';
+      const usosAmbito = esPublicoAmbito ? USOS_PUBLICOS : USOS_INTERNOS;
+      const nombreAmbito = esPublicoAmbito ? 'publico' : 'interno';
+
+      if (!setupUid && !busqueda) {
+        return { ok: false, version: VERSION, error: { message: 'Indica setupUid o busqueda.' } };
+      }
+
+      // Catálogo completo y filtrado EN CÓDIGO (lección v0.9.4: una fila con
+      // `active` vacío o `uso` con un espacio detrás desaparecía sin rastro).
+      const r = await wixData.query(CMS_CATALOGO)
+        .limit(1000)
+        .find({ suppressAuth: true });
+
+      const todos = r.items || [];
+      const esActivo = (it) => it.active !== false;
+      const enAmbito = (it) => usosAmbito.includes(String(it.uso || '').trim().toLowerCase());
+
+      const activos = todos.filter(esActivo);
+      const ofrecibles = activos.filter(enAmbito);
+
+      // Índice de OFERTA (lo elegible en este ámbito) e índice de FASES
+      // (catálogo activo completo, para resolver los `ref` del mapeoFases al
+      // calcular la duración en cascada). Misma separación que v0.9.8.
+      const porSetupUid = {};
+      for (const it of ofrecibles) if (it.setupUid) porSetupUid[it.setupUid] = it;
+      const porSetupUidFases = {};
+      for (const it of activos) if (it.setupUid) porSetupUidFases[it.setupUid] = it;
+
+      // ── Localizar el servicio ──
+      let fila = null;
+
+      if (setupUid) {
+        fila = porSetupUid[String(setupUid)] || null;
+        if (!fila) {
+          const fuera = porSetupUidFases[String(setupUid)];
+          const msg = fuera
+            ? `"${fuera.label || setupUid}" no es reservable en el ámbito ${nombreAmbito}.`
+            : `Servicio no encontrado: ${setupUid}`;
+          console.warn(`${TAG} ⚠️ getComposicionServicio: ${msg}`);
+          return { ok: false, version: VERSION, error: { message: msg } };
+        }
+      } else {
+        const clave = _claveEtiqueta(busqueda);
+        const principales = ofrecibles.filter(x =>
+          TIPOS_PRINCIPALES.includes(String(x.tipo || '').trim().toLowerCase())
+        );
+        const exactos = principales.filter(x => _claveEtiqueta(x.label) === clave);
+        const parciales = principales.filter(x => _claveEtiqueta(x.label).indexOf(clave) >= 0);
+        const candidatos = exactos.length > 0 ? exactos : parciales;
+
+        const mapaCand = () => candidatos
+          .sort((a, b) => toNum(a.order) - toNum(b.order))
+          .map(x => ({
+            setupUid: x.setupUid || '',
+            label: x.label || '',
+            group: x.group || '',
+            price: toNum(x.price),
+            duration: toNum(x.duration)
+          }));
+
+        if (candidatos.length === 0) {
+          console.log(`${TAG} getComposicionServicio: sin resultados para "${busqueda}" (ámbito ${nombreAmbito}).`);
+          return { ok: true, version: VERSION, estado: 'sin_resultados', busqueda, ambito: nombreAmbito, candidatos: [] };
+        }
+        if (candidatos.length > 1) {
+          console.log(`${TAG} getComposicionServicio: "${busqueda}" es ambiguo (${candidatos.length} candidatos).`);
+          return { ok: true, version: VERSION, estado: 'ambiguo', busqueda, ambito: nombreAmbito, candidatos: mapaCand() };
+        }
+        fila = candidatos[0];
+      }
+
+      // ── Adaptar con el MISMO adaptador del widget ──
+      const svc = adaptarServicio(fila, porSetupUid, porSetupUidFases);
+
+      // Caso A fuera en ámbito interno (ver nota de cabecera).
+      const comps = (svc.complements || []).filter(c => {
+        if (esPublicoAmbito) return true;
+        return !(c.type === 'bool' && c.required === true);
+      });
+
+      const meta = {
+        setupUid: svc.setupUid,
+        label: svc.name,
+        rol: String(fila.tipo || '').trim(),
+        group: fila.group || '',
+        familiaTecnica: fila.family || '',
+        uso: String(fila.uso || '').trim(),
+        minProceso: toNum(fila.minProceso),
+        wixAnclaId: fila.wixAnclaId || '',
+        ambito: nombreAmbito,
+        reservableComoPrincipal: TIPOS_PRINCIPALES.includes(String(fila.tipo || '').trim().toLowerCase()),
+        tieneBono: svc.tieneBono === true
+      };
+
+      // ── Resolver la selección recibida (si la hay) ──
+      const sel = seleccion || null;
+
+      let variantElegida = null;
+      let varianteNoReconocida = null;
+      const opcionesVar = _opcionesVariantePrincipal(svc);
+      const tieneVariantes = svc.hasVariants && Array.isArray(svc.variantes) && svc.variantes.length > 0;
+
+      if (!tieneVariantes) {
+        variantElegida = opcionesVar[0];   // base, y no hay nada que preguntar
+      } else if (sel && (sel.variante !== undefined || sel.varianteIdx !== undefined || sel.varianteId !== undefined)) {
+        const bruto = (sel.varianteIdx !== undefined) ? sel.varianteIdx
+                    : (sel.varianteId !== undefined) ? sel.varianteId
+                    : sel.variante;
+        if (typeof bruto === 'number' && Number.isInteger(bruto)) {
+          variantElegida = opcionesVar.find(o => o.idx === bruto) || null;
+        } else {
+          const txt = String(bruto == null ? '' : bruto).trim();
+          const k = _claveEtiqueta(txt);
+          variantElegida = opcionesVar.find(o => String(o.id) === txt || _claveEtiqueta(o.label) === k) || null;
+        }
+        if (!variantElegida) varianteNoReconocida = String(bruto);
+      }
+
+      const { out: compSel, noReconocidos } = _normalizarSeleccionComplementos(
+        sel ? sel.complementos : null,
+        comps
+      );
+      if (varianteNoReconocida) noReconocidos.push('variante=' + varianteNoReconocida);
+
+      const pendiente = _construirPendiente(svc, comps, variantElegida, compSel);
+
+      // ── SIN selección → composición pura (qué hay que preguntar) ──
+      if (!sel) {
+        console.log(`${TAG} ✅ getComposicionServicio "${svc.name}" (${nombreAmbito}): ${comps.length} complementos, ${pendiente.length} decisiones. ${((Date.now() - t0) / 1000).toFixed(2)}s`);
+        return {
+          ok: true, version: VERSION, estado: 'composicion', ambito: nombreAmbito,
+          servicio: {
+            setupUid: svc.setupUid,
+            label: svc.name,
+            descripcion: svc.description || '',
+            basePrice: svc.basePrice,
+            baseDuration: toNum(svc.baseDuration),
+            promoPct: toNum(svc.promoPct),
+            hasVariants: !!tieneVariantes,
+            variantes: opcionesVar,
+            complementos: comps,
+            idStaffPermitidos: Array.isArray(svc.idStaff) ? svc.idStaff : []
+          },
+          meta,
+          pendiente
+        };
+      }
+
+      // ── CON selección incompleta → decir qué falta, sin adivinar ──
+      // v0.11.1 — Bloquea CUALQUIER decisión sin contestar, no solo las
+      // obligatorias. Un complemento opcional no contestado no es un "no":
+      // es una pregunta que nadie ha hecho todavía.
+      if (pendiente.length > 0 || noReconocidos.length > 0) {
+
+        // v0.11.2 — Lo obligatorio se devuelve entero, con sus opciones y
+        // precios: hay que preguntarlo sí o sí. Lo OPCIONAL va solo con el
+        // nombre. Volcar la tabla completa de complementos con precios y
+        // duraciones cada vez alarga la conversación y la vuelve engorrosa;
+        // una recepcionista dice "¿le añadimos algo?" y solo detalla si le
+        // preguntan. El detalle sigue disponible: se pide la composición otra
+        // vez nombrando el complemento.
+        const obligatorios = pendiente.filter(p => p.obligatorio);
+        const detalleOpcionales = pendiente.filter(p => !p.obligatorio);
+        const opcionales = detalleOpcionales.map(p => p.label);
+
+        // v0.11.4 — Se dice EXPLÍCITAMENTE si hay algo que no se pueda
+        // saltar. Antes había que deducirlo de una lista, y se acabó
+        // contando al usuario que el sistema exigía elegir complementos
+        // cuando ninguno era obligatorio.
+        // v0.11.8 — Catálogo de referencia y lo ya entendido. Solo se montan
+        // cuando hay algo que corregir: en el camino normal no ocupan sitio.
+        const catalogo = noReconocidos.length === 0 ? undefined : comps.map(c => ({
+          etiqueta: c.label,
+          tipo: c.type,
+          obligatorio: !!c.required,
+          opciones: Array.isArray(c.options) ? c.options.map(o => o.label) : undefined
+        }));
+        const entendido = noReconocidos.length === 0 ? undefined : comps
+          .filter(c => {
+            const v = compSel[c.id];
+            return (c.type === 'bool') ? v === true : (!!v && v !== 'none');
+          })
+          .map(c => {
+            const v = compSel[c.id];
+            if (c.type === 'bool') return c.label;
+            const o = (c.options || []).find(op => op.id === v);
+            return (o && o.label) ? `${c.label} ${o.label}` : c.label;
+          });
+
+        console.log(`${TAG} getComposicionServicio "${svc.name}": ${obligatorios.length} obligatoria(s), ${detalleOpcionales.length} opcional(es), ${noReconocidos.length} no reconocido(s)${noReconocidos.length ? ' → ' + noReconocidos.join(' | ') : ''}.`);
+
+        return {
+          ok: true, version: VERSION, estado: 'faltan_datos', ambito: nombreAmbito,
+          servicio: { setupUid: svc.setupUid, label: svc.name },
+          meta,
+          hayObligatorios: obligatorios.length > 0,
+          sePuedeOmitirTodo: obligatorios.length === 0,
+          comoOmitir: obligatorios.length === 0
+            ? 'Ninguna de estas decisiones es obligatoria. Ofrécelas primero; si la persona no quiere ninguna, vuelve a llamar con complementos como lista vacía.'
+            : 'Hay decisiones que no se pueden omitir; el resto sí. Ofrece las opcionales antes de cerrar.',
+          pendiente: obligatorios,
+          opcionales,
+          detalleOpcionales,
+          noReconocidos,
+          catalogo,
+          entendido,
+          comoCorregir: noReconocidos.length === 0 ? undefined
+            : 'No he reconocido esas etiquetas. En `catalogo` tienes las exactas y las opciones de cada grupo. Vuelve a llamar UNA vez con la lista completa y corregida, incluyendo lo que ya está en `entendido`; no hace falta volver a preguntar nada a la persona.'
+        };
+      }
+
+      // ── Selección completa → totales + payload listo para reservar ──
+      const totales = _calcularTotales(svc, comps, variantElegida, compSel);
+      const complementosSetupUid = _construirComplementosPayload(comps, compSel);
+
+      const varianteSel = (variantElegida && variantElegida.idx >= 0)
+        ? {
+            idx: variantElegida.idx,
+            label: variantElegida.label,
+            price: (variantElegida.price == null) ? 0 : Number(variantElegida.price),
+            duration: Number(variantElegida.duration) || 0
+          }
+        : null;
+
+      // v0.11.7 — `etiquetas`: los complementos elegidos ya en texto, listos
+      // para pintarse en la tarjeta de confirmación. `complementos` sigue
+      // siendo la lista de objetos con precio y duración, intacta.
+      const elegido = {
+        variante: variantElegida ? { id: variantElegida.id, label: variantElegida.label } : null,
+        etiquetas: [],
+        complementos: comps
+          .filter(c => {
+            const v = compSel[c.id];
+            return (c.type === 'bool') ? v === true : (!!v && v !== 'none');
+          })
+          .map(c => {
+            const v = compSel[c.id];
+            if (c.type === 'bool') {
+              return { label: c.label, opcion: '', price: (c.price == null) ? null : Number(c.price), duration: toNum(c.duration) };
+            }
+            const o = (c.options || []).find(op => op.id === v);
+            return { label: c.label, opcion: (o && o.label) || '', price: (o && o.price != null) ? Number(o.price) : null, duration: (o ? toNum(o.duration) : 0) };
+          })
+      };
+      elegido.etiquetas = elegido.complementos.map(c => c.opcion ? `${c.label} ${c.opcion}` : c.label);
+
+      console.log(`${TAG} ✅ getComposicionServicio RESUELTO "${svc.name}" (${nombreAmbito}): ${totales.duracionMin}min · ${totales.total}€ · ${complementosSetupUid.length} complemento(s). ${((Date.now() - t0) / 1000).toFixed(2)}s`);
+
+      return {
+        ok: true, version: VERSION, estado: 'resuelto', ambito: nombreAmbito,
+        servicio: { setupUid: svc.setupUid, label: svc.name },
+        meta,
+        elegido,
+        totales,
+        // Listo para getHuecosDisponibles y para crearReservaPublica /
+        // crearPackReserva. Mismos nombres de campo que envía el bundle,
+        // para que el consumidor no tenga que traducir nada.
+        payload: {
+          principalSetupUid: svc.setupUid,
+          complementosSetupUid,
+          varianteSel,
+          durationMin: totales.duracionMin,
+          idStaffPermitidos: Array.isArray(svc.idStaff) ? svc.idStaff : []
+        }
+      };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ getComposicionServicio:`, e.message);
+      return { ok: false, version: VERSION, error: safeErr(e) };
+    }
+  }
+);
+
+// =====================================================
+// 6·bis · RESOLVER INSTANTE MADRID (v0.11.9) — ADITIVO
+// =====================================================
+//
+// Día (AAAA-MM-DD) + hora (HH:mm) de Madrid → instante UTC en ISO.
+// El desfase se mide preguntándole al propio runtime qué hora de Madrid
+// corresponde a un instante candidato, y corrigiendo. Dos pasadas bastan
+// para cualquier cambio de horario de verano.
+export const resolverInstanteMadrid = webMethod(
+  Permissions.SiteMember,
+  async ({ fecha, horaHHmm } = {}) => {
+    try {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fecha || ''))) {
+        return { ok: false, version: VERSION, error: { message: 'fecha inválida (AAAA-MM-DD)' } };
+      }
+      const mm = /^(\d{1,2}):(\d{2})$/.exec(String(horaHHmm || '').trim());
+      if (!mm) {
+        return { ok: false, version: VERSION, error: { message: 'hora inválida (HH:mm)' } };
+      }
+      const h = Number(mm[1]), mi = Number(mm[2]);
+      if (h > 23 || mi > 59) {
+        return { ok: false, version: VERSION, error: { message: 'hora fuera de rango' } };
+      }
+
+      const objetivo = `${fecha} ${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
+      const enMadrid = (d) => {
+        const ymd = d.toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+        const hhmm = d.toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hour12: false });
+        return `${ymd} ${hhmm}`;
+      };
+
+      // Punto de partida: leer la cadena como si fuera UTC, y corregir el
+      // desfase que el propio runtime declare para ese instante.
+      let d = new Date(`${fecha}T${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}:00.000Z`);
+      for (let i = 0; i < 3; i++) {
+        const actual = enMadrid(d);
+        if (actual === objetivo) break;
+        const deltaMin =
+          (Date.parse(`${objetivo.replace(' ', 'T')}:00.000Z`) -
+           Date.parse(`${actual.replace(' ', 'T')}:00.000Z`)) / 60000;
+        if (!deltaMin) break;
+        d = new Date(d.getTime() + deltaMin * 60000);
+      }
+
+      if (enMadrid(d) !== objetivo) {
+        return { ok: false, version: VERSION, error: { message: `No he podido situar ${objetivo} en el calendario de Madrid.` } };
+      }
+
+      return { ok: true, version: VERSION, fecha, horaHHmm: objetivo.slice(11), iso: d.toISOString() };
+    } catch (e) {
+      console.error(`${TAG} ❌ resolverInstanteMadrid:`, e.message);
       return { ok: false, version: VERSION, error: safeErr(e) };
     }
   }
