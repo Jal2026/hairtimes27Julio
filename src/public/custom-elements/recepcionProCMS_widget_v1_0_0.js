@@ -1,6 +1,18 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.114  ·  FIX el buscador de productos perdía el foco
+ *
+ *   Al teclear, el panel se repinta entero con body.innerHTML, lo que
+ *   DESTRUYE el <input id="pdSearch"> y crea uno nuevo. El navegador no
+ *   tiene a quién devolverle el foco, así que había que volver a hacer
+ *   clic en la casilla para escribir cada carácter.
+ *
+ *   Ahora, antes de repintar, se anota si el buscador tenía el foco y
+ *   dónde estaba el cursor, y se restauran después. Solo se restaura si
+ *   el buscador estaba activo: un repintado por añadir al carrito o por
+ *   desplegar variantes no roba el foco a nadie.
+ *
  * VERSION: 1.1.113  ·  El porcentaje de la oferta se lee, no se deduce
  *
  *   El backend (tiendaProductos v1.5.16) manda `descuentoPct` ya
@@ -2054,7 +2066,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.113]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.114]';
 
   // ─── helpers ───
   function esc(s) {
@@ -8180,6 +8192,15 @@ button { font-family: inherit; cursor: pointer; }
         <button class="ks-pay" id="pdConfirm" ${confirmDisabled ? 'disabled' : ''} style="background:#15803d;color:#fff;font-weight:700;flex:1;">REGISTRAR VENTA${total > 0 ? ` · ${total}€` : ''}</button>
       </div>`;
 
+      // v1.1.114 — El repintado destruye el input del buscador. Se anota
+      // si tenía el foco y la posición del cursor ANTES de tirarlo.
+      const activoPrevio = root.activeElement;
+      const buscadorTeniaFoco = !!(activoPrevio && activoPrevio.id === 'pdSearch');
+      let caretPrevio = null;
+      if (buscadorTeniaFoco) {
+        try { caretPrevio = activoPrevio.selectionStart; } catch (_) { caretPrevio = null; }
+      }
+
       body.innerHTML = `
         <input type="text" class="pd-search" id="pdSearch" placeholder="Buscar producto…" value="${esc(this._productoSearchQ || '')}">
         <div class="pd-list">${listaHTML}</div>
@@ -8188,6 +8209,19 @@ button { font-family: inherit; cursor: pointer; }
         ${confirmHTML}
       `;
       this._attachProductoEvents();
+
+      // v1.1.114 — Devolver el foco y el cursor al buscador nuevo. Solo si
+      // lo tenía: así un repintado por carrito o por variantes no lo roba.
+      if (buscadorTeniaFoco) {
+        const nuevoBuscador = body.querySelector('#pdSearch');
+        if (nuevoBuscador) {
+          nuevoBuscador.focus();
+          const pos = (caretPrevio === null || caretPrevio === undefined)
+            ? nuevoBuscador.value.length
+            : caretPrevio;
+          try { nuevoBuscador.setSelectionRange(pos, pos); } catch (_) {}
+        }
+      }
     }
     _attachProductoEvents() {
       const root = this.shadowRoot;
