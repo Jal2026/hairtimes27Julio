@@ -1,0 +1,75 @@
+<!-- ============================================================ -->
+<!-- KAMISUITE · Plantilla RECORDATORIO DE CITA (24h antes)       -->
+<!-- Pegar el HTML de abajo en SalonConfig.reminderLayout (Text)   -->
+<!-- ============================================================ -->
+<!-- Marcadores de CITA (los rellena reminderLogic desde la reserva): -->
+<!--   ${Fecha} ${Nombre} ${Apellido} ${servicios} ${profesional}     -->
+<!--   ${horaInicio} ${horaFinal} ${importeTotal} ${origen} ${estadoPago} -->
+<!-- Marcadores del SALÓN (los rellena brevoLogic desde SalonConfig): -->
+<!--   ${logo} ${salon} ${direccion} ${telefono} ${web}               -->
+<!-- Marcador de SUGERENCIAS (lo rellena sugerenciasProductosLogic):  -->
+<!--   ${bloqueProductos}  → celda SIN padding: el bloque trae el suyo -->
+<!--   Si no hay tienda, colecciones marcadas o productos, llega vacío -->
+<!--   y la celda no deja hueco.                                      -->
+<!-- ============================================================ -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:24px 0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+  <tr><td align="center">
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:94%;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #ececec;">
+
+      <!-- Cabecera: logo del salón -->
+      <tr><td style="padding:28px 34px 4px;" align="center">
+        <img src="${logo}" alt="${salon}" width="420" style="display:block;width:420px;max-width:70%;height:auto;margin:0 auto;">
+      </td></tr>
+
+      <!-- Cuerpo: datos de la cita -->
+      <tr><td style="padding:20px 34px 6px;">
+        <div style="font-size:20px;font-weight:600;color:#1a1a1a;margin-bottom:6px;">Te recordamos tu próxima cita</div>
+        <div style="font-size:14px;color:#6b6b6b;margin-bottom:18px;">Es mañana. Te esperamos.</div>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:15px;color:#2b2b2b;line-height:1.85;">
+          <tr><td><strong>Fecha:</strong> ${Fecha}</td></tr>
+          <tr><td><strong>Nombre:</strong> ${Nombre}</td></tr>
+          <tr><td><strong>Apellido:</strong> ${Apellido}</td></tr>
+          <tr><td><strong>Servicios:</strong> ${servicios}</td></tr>
+          <tr><td><strong>Profesional:</strong> ${profesional}</td></tr>
+          <tr><td><strong>Hora inicio:</strong> ${horaInicio}</td></tr>
+          <tr><td><strong>Hora final:</strong> ${horaFinal}</td></tr>
+          <tr><td><strong>Importe total:</strong> ${importeTotal}</td></tr>
+          <tr><td><strong>Origen:</strong> ${origen}</td></tr>
+          <tr><td><strong>Estado de pago:</strong> ${estadoPago}</td></tr>
+        </table>
+      </td></tr>
+
+      <!-- Botón: acceso al área de cliente -->
+      <tr><td align="center" style="padding:22px 34px 6px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+          <tr>
+            <td align="center" style="border-radius:8px;background:#1a1a1a;">
+              <a href="${web}/areacliente" target="_blank"
+                 style="display:inline-block;padding:13px 30px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;">
+                Acceder a mi área de cliente
+              </a>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+
+      <!-- Avisos -->
+      <tr><td style="padding:10px 34px 4px;color:#4a4a4a;font-size:14px;line-height:1.6;">
+        <p style="margin:14px 0;">Se ruega llegar cinco minutos antes para recepción.</p>
+        <p style="margin:14px 0;">Si no puedes acudir, puedes <strong>CAMBIAR</strong> o <strong>CANCELAR</strong> tu cita desde tu área de cliente.</p>
+        <p style="margin:14px 0 0;">¡Te esperamos!</p>
+      </td></tr>
+
+      <!-- Sugerencias de producto — celda SIN padding (ver cabecera) -->
+      <tr><td>${bloqueProductos}</td></tr>
+
+      <!-- Pie: identidad del salón -->
+      <tr><td style="padding:22px 34px 28px;border-top:1px solid #eeeeee;color:#8a8a8a;font-size:12px;line-height:1.6;text-align:center;">
+        <div style="font-weight:600;color:#6b6b6b;margin-bottom:4px;">${salon}</div>
+        ${direccion} &middot; ${telefono}<br>
+        <a href="${web}" style="color:#8a8a8a;text-decoration:underline;">${web}</a>
+      </td></tr>
+
+    </table>
+  </td></tr>
+</table>
