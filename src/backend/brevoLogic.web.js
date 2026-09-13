@@ -2,7 +2,7 @@
  * ============================================================
  *  brevoLogic.web.js — KAMISUITE Email vía Brevo
  * ============================================================
- *  v1.1.1  ·  27 Agosto 2026
+ *  v1.2.0  ·  13 Septiembre 2026
  * ------------------------------------------------------------
  *  Backend de envío de email (transaccional + marketing) vía
  *  Brevo Transactional API (POST /v3/smtp/email).
@@ -41,8 +41,25 @@
  *                  logoUrl (Image), address, phone, siteUrl, emailProvider,
  *                  layoutBooking (y futuras plantillas por tipo)
  *
+ *  MARCADORES SIN ESCAPAR (v1.2.0)
+ *    Las claves listadas en RAW_KEYS se insertan TAL CUAL, sin escapar a
+ *    HTML. Es la única forma de que un bloque de maquetación construido
+ *    por otro backend (p.ej. las sugerencias de producto) llegue como
+ *    HTML y no como texto literal. El resto de valores se sigue
+ *    escapando uno a uno. El agujero se abre para armazón generado por
+ *    código del proyecto, NUNCA para dato de origen externo: quien
+ *    construye el bloque es responsable de escapar lo que meta dentro.
+ *
  *  CHANGELOG
  *  ---------
+ *  v1.2.0 (13-Sep-2026) — Sustitución sin escapar para claves de bloque.
+ *    - RAW_KEYS = { bloqueProductos }. _sustituir inserta esas claves sin
+ *      pasar por _esc; todas las demás siguen escapándose igual que en
+ *      v1.1.1. Cambio aditivo: ninguna plantilla existente se comporta
+ *      distinto, porque ninguna usa hoy esos marcadores.
+ *    - Un marcador ${...} sin valor se sigue eliminando al final, así que
+ *      una plantilla con ${bloqueProductos} en un salón sin sugerencias
+ *      queda limpia, sin rastro ni hueco.
  *  v1.1.1 (27-Ago-2026) — Logo a URL pública.
  *    - convertWixImageUrl (patrón "Tienda Productos widget", ya presente
  *      en el repo — calendarioVista/salonPhotoLogic/promoGiftCards):
@@ -70,8 +87,8 @@ import wixData from 'wix-data';
 import { fetch } from 'wix-fetch';
 
 // ── Constantes ──────────────────────────────────────────────
-const VERSION = '1.1.1';
-const TAG = '[Brevo v1.1.1]';
+const VERSION = '1.2.0';
+const TAG = '[Brevo v1.2.0]';
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const SALON_CONFIG_COLLECTION = 'SalonConfig';
 const COMMUNICATION_LOG_COLLECTION = 'CommunicationLog';
@@ -162,14 +179,24 @@ function _buildSender(salon) {
     return { name, email };
 }
 
+// ── Claves que se insertan SIN escapar (v1.2.0) ─────────────
+// Bloques de maquetación construidos por backends del proyecto. Si se
+// escapasen, el cliente de correo pintaría las etiquetas como texto.
+// Añadir aquí SOLO claves cuyo valor genere código del proyecto.
+const RAW_KEYS = new Set(['bloqueProductos']);
+
 // ── Sustitución de marcadores ${clave} en una plantilla ─────
 // Los valores se escapan para HTML (seguro en texto y en atributos
-// src/href). Cualquier marcador ${...} sin valor se elimina.
+// src/href), salvo las claves de RAW_KEYS, que van tal cual.
+// Cualquier marcador ${...} sin valor se elimina.
 function _sustituir(plantilla, vars) {
     let out = String(plantilla || '');
     const keys = Object.keys(vars || {});
     for (const k of keys) {
-        out = out.split('${' + k + '}').join(_esc(vars[k]));
+        const valor = RAW_KEYS.has(k)
+            ? String(vars[k] == null ? '' : vars[k])
+            : _esc(vars[k]);
+        out = out.split('${' + k + '}').join(valor);
     }
     out = out.replace(/\$\{[^}]*\}/g, '');
     return out;
