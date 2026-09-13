@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  comunicacionesLogic.web.js — Centralita de Comunicaciones     ║
-// ║  KAMISUITE · v1.4.0                                            ║
+// ║  KAMISUITE · v1.5.0                                            ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: Orquestador único de todas las comunicaciones con clientes.
@@ -30,10 +30,31 @@
 //      bonosPromosPublicLogic                 → registrarComunicacion.
 //    · Page code Comunicaciones (desktop)     → getHistorialComunicaciones.
 //  LLAMA A:
-//    · whatsappLogic (v1.6.1) · brevoLogic (v1.1.1) · Wix triggeredEmails.
+//    · whatsappLogic (v1.6.1) · brevoLogic (v1.2.0) · Wix triggeredEmails.
+//    · sugerenciasProductosLogic (v1.0.0) → bloque de sugerencias.
 //  FLUJO DE PUNTA A PUNTA: verificado.
 //
 // CHANGELOG:
+//   v1.5.0 (13-Sep-2026) — Sugerencias de producto en la confirmación
+//     - La confirmación por Brevo añade la variable `bloqueProductos`
+//       con las tarjetas de producto de la tienda. La plantilla del
+//       salón (layoutBooking) decide DÓNDE aparece: basta con colocar
+//       ${bloqueProductos} donde se quiera. Si la plantilla no lleva el
+//       marcador, no pasa nada: el bloque simplemente no se pinta.
+//     - Categoría de la cita: si el caller manda `datos.group` se usa
+//       tal cual; si no, se resuelve del PRIMER servicio de
+//       `datos.servicios` contra el mapa label→group de ServiceCatalog
+//       (cacheado 5 min, patrón de akiraLogic v1.4.2). Así NO hace
+//       falta tocar recepcionProLogic ni widgetPublicoLogic.
+//     - Solo el camino Brevo. El camino Wix triggered queda EXACTAMENTE
+//       igual: sus plantillas son diseños del editor de Wix y no pueden
+//       recibir un bloque HTML.
+//     - Apagado silencioso: sin tienda, sin correspondencia o ante
+//       cualquier fallo, la variable llega vacía y el correo sale como
+//       antes. El bloque NUNCA puede retrasar ni tumbar un envío.
+//     - Recordatorio SIN CAMBIOS aquí: su email lo gestiona
+//       reminderLogic, que hace su propia inserción.
+//
 //   v1.4.0 (30-Ago-2026) — Trazabilidad completa + consulta del informe
 //     - registrarComunicacion(): apunte en CommunicationLog reutilizable
 //       por cualquier backend que envíe por su cuenta (recordatorio por
@@ -90,16 +111,21 @@ import {
 } from 'backend/whatsappLogic.web.js';
 // v1.3.0: driver de email por plantilla (Brevo)
 import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
+// v1.5.0: bloque de sugerencias de producto para el correo
+import { construirBloqueProductos } from 'backend/sugerenciasProductosLogic.web.js';
 
 // ─── CONSTANTES ──────────────────────────────────────────────────
-const VERSION = '1.4.0';
-const TAG = '[COMMS v1.4.0]';
+const VERSION = '1.5.0';
+const TAG = '[COMMS v1.5.0]';
 const SALON_CONFIG_COLLECTION = 'SalonConfig';
 const COMMUNICATION_LOG_COLLECTION = 'CommunicationLog';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
 
 // v1.3.0: campo de SalonConfig con la plantilla HTML de confirmación
 const TEMPLATE_FIELD_CONFIRMACION = 'layoutBooking';
+
+// v1.5.0: catálogo de servicios, para resolver la categoría de la cita
+const SERVICE_CATALOG_COLLECTION = 'ServiceCatalog';
 
 const CANALES_VALIDOS = new Set(['email', 'whatsapp']);
 
@@ -288,6 +314,79 @@ async function _enviarEmailTriggered({ contactId, email, templateId, variables, 
   }
 }
 
+// ─── v1.5.0 · CATEGORÍA DE LA CITA Y BLOQUE DE PRODUCTOS ────────
+//
+// La cita categoriza por el group de su servicio PRINCIPAL. Los dos
+// callers de la confirmación (recepcionProLogic y widgetPublicoLogic)
+// construyen `servicios` como "Principal + Complemento + ..." y el
+// principal va SIEMPRE el primero. De ahí se resuelve el group contra
+// ServiceCatalog, sin tocar esos dos backends.
+//
+// Si un caller futuro pasa `datos.group`, ese valor manda.
+
+let _mapaLabelGrupo = null;
+let _mapaLabelGrupoTs = 0;
+
+// Normalización de label. Patrón de akiraLogic v1.4.2 (normalizarTexto).
+function _normalizarLabel(s) {
+  return String(s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+async function _getMapaLabelGrupo() {
+  const ahora = Date.now();
+  if (_mapaLabelGrupo && (ahora - _mapaLabelGrupoTs) < CACHE_TTL_MS) return _mapaLabelGrupo;
+  const mapa = {};
+  try {
+    const r = await wixData.query(SERVICE_CATALOG_COLLECTION)
+      .isNotEmpty('label')
+      .limit(1000)
+      .find({ suppressAuth: true });
+    for (const it of (r.items || [])) {
+      const lab = _normalizarLabel(it.label);
+      if (lab) mapa[lab] = it.group || '';
+    }
+  } catch (e) {
+    console.warn(TAG, 'No se pudo leer ServiceCatalog para la categoría:', e.message);
+  }
+  _mapaLabelGrupo = mapa;
+  _mapaLabelGrupoTs = ahora;
+  return mapa;
+}
+
+// Categoría de la cita a partir del primer servicio de la cadena.
+async function _resolverGrupoCita(datos) {
+  const explicito = String((datos && datos.group) || '').trim();
+  if (explicito) return explicito;
+
+  const cadena = String((datos && datos.servicios) || '').trim();
+  if (!cadena) return '';
+
+  // "Tinte + Corte" → "Tinte". Se admite también la coma por si algún
+  // caller compusiera así.
+  const principal = cadena.split(/\s\+\s|,/)[0].trim();
+  if (!principal) return '';
+
+  const mapa = await _getMapaLabelGrupo();
+  return mapa[_normalizarLabel(principal)] || '';
+}
+
+/**
+ * v1.5.0 — Bloque de sugerencias para el correo. NUNCA lanza y NUNCA
+ * bloquea: ante cualquier problema devuelve cadena vacía y el correo
+ * sale exactamente como salía antes, sin bloque y sin huecos.
+ */
+async function _bloqueProductosParaCita(datos) {
+  try {
+    const group = await _resolverGrupoCita(datos);
+    if (!group) return '';
+    return await construirBloqueProductos({ group }) || '';
+  } catch (e) {
+    console.warn(TAG, 'Bloque de productos descartado:', e.message);
+    return '';
+  }
+}
+
 // ─── CANAL: EMAIL BREVO (plantilla de CMS) ──────────────────────
 /**
  * v1.3.0: envía email usando la plantilla HTML de SalonConfig
@@ -426,6 +525,9 @@ function _usarBrevo(config) {
  * @param {string} datos.servicios - Descripción de servicios (ej: "Tinte + Corte")
  * @param {string} datos.estilista - Nombre del profesional
  * @param {object} [datos.emailVariables] - Marcadores del email (${Fecha}, ${Nombre}...)
+ * @param {string} [datos.group] - v1.5.0 · categoría del servicio principal
+ *        (KamisuiteReservations.group). Opcional: si no llega, se resuelve
+ *        del primer servicio de `datos.servicios` contra ServiceCatalog.
  * @param {string[]} [datos.canalesExcluidos] - Canales a omitir: ['email'], ['whatsapp']
  */
 export const notificarConfirmacion = webMethod(
@@ -462,6 +564,17 @@ export const notificarConfirmacion = webMethod(
       siteUrl:    config.siteUrl || ''
     };
 
+    // v1.5.0 — Sugerencias de producto. Solo el camino Brevo puede
+    // pintarlas: la plantilla de Wix triggered es un diseño del editor
+    // y no admite un bloque HTML. Se resuelve ANTES de componer el
+    // correo, con su propio techo de tiempo dentro del módulo; si no
+    // hay nada que sugerir llega '' y el marcador desaparece solo.
+    let variablesEmail = emailVariables;
+    if (_usarBrevo(config)) {
+      const bloqueProductos = await _bloqueProductosParaCita(datos);
+      variablesEmail = Object.assign({}, emailVariables, { bloqueProductos });
+    }
+
     // v1.3.0: seleccionar canal de email según emailProvider
     const emailTask = _usarBrevo(config)
       ? _enviarEmailBrevo({
@@ -469,7 +582,7 @@ export const notificarConfirmacion = webMethod(
           nombreCliente: datos.nombreCliente,
           templateField: TEMPLATE_FIELD_CONFIRMACION,
           subject:       config.subjectBooking || `Confirmación de tu cita · ${config.brandName || ''}`,
-          variables:     emailVariables,
+          variables:     variablesEmail,
           event:         'confirmacion',
           logData,
           canalesExcluidosSet
