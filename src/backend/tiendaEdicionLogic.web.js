@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.3.2
+// Versión: 1.4.3
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -227,6 +227,80 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.4.3 (13 Sep 2026): el PORCENTAJE que se enseña deja de deducirse
+//         de los precios cuando Wix lo tiene guardado.
+//         Caso real: precio 19,85 con un 10%. Wix redondea el precio de
+//         venta a 17,87, y sobre ese precio la rebaja es del 9,97%, que
+//         al truncar sale -9%. El salón pone 10, el panel de Wix dice 10
+//         y el cliente leía -9%. Le pasa a todo precio que no divida
+//         limpio, o sea a medio catálogo.
+//         Ahora: si el descuento está grabado como PERCENT, ese es el
+//         número que se enseña. Solo se calcula cuando está grabado en
+//         euros, que es cuando no hay porcentaje que leer.
+//         El listado devuelve `descuentoPct` ya resuelto, para que la
+//         ficha, la tarjeta y los correos digan todos lo mismo.
+//
+// v1.4.2 (13 Sep 2026): la promoción se puede expresar en PORCENTAJE
+//         o en IMPORTE, como en el panel de Wix. Confirmado en el log de
+//         producción del 13-sep: Wix devuelve discount {type,value} y
+//         recalcula priceData.discountedPrice él solo.
+//         · activarPromocionProducto(productId, {tipo, valor}) — tipo es
+//           'PERCENT' o 'AMOUNT'. Sigue aceptando un número suelto como
+//           precio final de venta, por compatibilidad con page code v3.6.
+//         · El listado devuelve ahora `discount` tal y como está guardado,
+//           para que la ficha muestre el tipo REAL y no lo deduzca. Una
+//           oferta puesta desde el panel de Wix se lee correctamente.
+//
+// v1.4.1 (13 Sep 2026): activarPromocionProducto y
+//         desactivarPromocionProducto pasan a Permissions.SiteMember
+//         (Jal, 13-sep-2026: todo KAMISUITE entra como site member).
+//         Cambian precios de venta: no deben quedar abiertas a Anyone.
+//         El resto de webMethods de este archivo siguen en Anyone, como
+//         estaban; cambiarlos es una decisión aparte, no de esta entrega.
+//
+// v1.4.0 (13 Sep 2026): PRECIO PROMOCIONAL (oferta con precio tachado).
+//         NEW activarPromocionProducto(productId, precioPromocional)
+//         NEW desactivarPromocionProducto(productId)
+//
+//         CÓMO FUNCIONA EN CATALOG V1 (este sitio NO es V3):
+//         El campo escribible es `discount`, un objeto {type, value}.
+//         Doc: "Products" Collection Fields (wix-stores.v2) — el campo
+//         Discount es el único de precio con Read-only: No, y su type
+//         admite "AMOUNT" (importe), "PERCENT" (porcentaje) y "NONE"
+//         (se pasa para QUITAR el descuento).
+//         · `price` NO SE TOCA NUNCA: es el precio original y es el que
+//           Wix pinta tachado en la tienda.
+//         · `discountedPrice` y `formattedDiscountedPrice` son de SOLO
+//           LECTURA: los calcula Wix a partir de price y discount.
+//         · Por eso desactivar NO necesita guardar el precio original en
+//           ninguna parte: basta con type:'NONE'.
+//         Confirmado además por la guía de migración V1→V3 de Wix:
+//         V1 price → V3 compareAtPrice, V1 discountedPrice → V3
+//         actualPrice.
+//
+//         VÍA DE ESCRITURA: storesProducts.updateProduct (wix-stores.v2)
+//         con elevate(), exactamente el mismo patrón que ya usa este
+//         archivo en escribirInfoAdicional desde v1.2.7.
+//         NO se usa updateProductVariants: en V1 el descuento vive en el
+//         PRODUCTO, no en la variante, y los productos del salón son
+//         simples (escribir en variantes devuelve "Product variants must
+//         be managed", ver v1.2.4).
+//
+//         · El listado devuelve ahora discountedPrice,
+//           formattedDiscountedPrice y enPromocion. Los dos primeros ya
+//           venían en la query a Stores/Products: no cuesta ninguna
+//           lectura extra, solo no se mapeaban.
+//         · Ambas funciones invalidan la caché del catálogo de
+//           sugerenciasProductosLogic (v1.1.0+). Sin eso, los correos de
+//           confirmación y recordatorio seguirían anunciando el precio
+//           viejo mientras la caché estuviera caliente.
+//         · La invalidación NUNCA bloquea: si falla, la promoción queda
+//           escrita igual y solo se registra un warning.
+//
+//         ORDEN DE DESPLIEGUE OBLIGATORIO: publicar antes
+//         sugerenciasProductosLogic v1.1.0. Este archivo lo importa; si
+//         no está, el editor de productos entero deja de funcionar.
+//
 // v1.3.2 (29 Ago 2026): duplicarProducto — la copia HEREDA la
 //         visibilidad del original (Jal, 29 Ago 2026: "si duplicas
 //         un producto tienes que duplicarlo con todas sus
@@ -294,9 +368,13 @@ import wixStoresBackend from 'wix-stores-backend';
 import { getProductVariants, incrementInventory, decrementInventory, updateInventoryVariantFieldsByProductId } from 'wix-stores-backend';
 import { products as storesProducts } from 'wix-stores.v2';
 import { mediaManager } from 'wix-media-backend';
+// v1.4.0: invalidación de la caché del bloque de productos de los
+// correos. Mismo patrón de import que ya usan comunicacionesLogic y
+// reminderLogic con este módulo.
+import { invalidarCacheCatalogo } from 'backend/sugerenciasProductosLogic.web.js';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.3.2';
+const VERSION = '1.4.3';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -573,6 +651,20 @@ export const listarProductosParaEdicion = webMethod(
           name: prod.name || '',
           price: prod.price,
           formattedPrice: prod.formattedPrice || '',
+          // v1.4.0: precio promocional. Los dos campos ya venían en la
+          // query a Stores/Products (doc "Products" Collection Fields);
+          // simplemente no se mapeaban. Cero lecturas extra.
+          discountedPrice: (prod.discountedPrice === undefined || prod.discountedPrice === null)
+            ? null
+            : Number(prod.discountedPrice),
+          formattedDiscountedPrice: prod.formattedDiscountedPrice || '',
+          // v1.4.2: el descuento tal y como Wix lo tiene guardado
+          // ({type:'PERCENT'|'AMOUNT'|'NONE', value}). La ficha lo usa
+          // para abrir con el tipo real, venga de donde venga la oferta.
+          discount: prod.discount || null,
+          enPromocion: enPromocionReal(prod.price, prod.discountedPrice),
+          // v1.4.3: porcentaje ya resuelto. Nadie lo recalcula aguas abajo.
+          descuentoPct: porcentajeDescuento(prod.price, prod.discountedPrice, prod.discount),
           mainMedia: prod.mainMedia || '',
           sku: prod.sku || '',
           inStock: prod.inStock !== false,
@@ -817,6 +909,199 @@ export const setearInfoAdicionalProducto = webMethod(
     } catch (e) {
       console.error(`${TAG} ❌ setearInfoAdicionalProducto FAIL:`, e.message);
       return { ok: false, error: e.message };
+    }
+  }
+);
+
+// =====================================================
+// 2c. PRECIO PROMOCIONAL (v1.4.0)
+// =====================================================
+// Wix solo considera que hay oferta cuando discountedPrice es un número
+// mayor que 0 y MENOR que price. Mismo criterio en el editor, en el TPV
+// y en el bloque de los correos: un único guardarraíl replicado.
+function enPromocionReal(precio, precioDescontado) {
+  const p = Number(precio);
+  const d = Number(precioDescontado);
+  return Number.isFinite(p) && Number.isFinite(d) && d > 0 && d < p;
+}
+
+// v1.4.3 — Porcentaje que se ENSEÑA al cliente.
+// Si Wix tiene guardado el descuento como PERCENT, se usa ese número tal
+// cual: es lo que escribió el salón y lo que muestra el panel de Wix.
+// Solo se deduce de los precios cuando el descuento está en euros, y ahí
+// se trunca (nunca prometer más rebaja de la que hay) con una tolerancia
+// para el error de coma flotante: 23,00 a 20,70 da 9,999999999999998 y
+// sin ella se pintaría -9% en vez de -10%.
+function porcentajeDescuento(precio, precioDescontado, discount) {
+  const tipo = (discount && discount.type) ? String(discount.type).toUpperCase() : '';
+  if (tipo === 'PERCENT') {
+    const v = Number(discount.value);
+    if (Number.isFinite(v) && v > 0 && v < 100) return Math.round(v * 100) / 100;
+  }
+  const p = Number(precio);
+  const d = Number(precioDescontado);
+  if (!Number.isFinite(p) || !Number.isFinite(d) || p <= 0 || d <= 0 || d >= p) return 0;
+  return Math.floor(((1 - (d / p)) * 100) + 1e-9);
+}
+
+// Redondeo a dos decimales sin arrastrar el error del binario.
+function dosDecimales(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+// Precio base (el original, el que Wix tacha) leído de la collection
+// Stores/Products, donde `price` es un Number plano (doc "Products"
+// Collection Fields). Se usa includeHiddenProducts para que también
+// funcione con productos ocultos, igual que el listado desde v1.1.1.
+async function leerPrecioBase(productId) {
+  const r = await wixData.query('Stores/Products')
+    .eq('_id', productId)
+    .limit(1)
+    .find({ suppressAuth: true, appOptions: { includeHiddenProducts: true } });
+  const prod = (r.items || [])[0];
+  if (!prod) return { ok: false, error: 'Producto no encontrado en Stores/Products' };
+  const base = Number(prod.price);
+  if (!Number.isFinite(base) || base <= 0) {
+    return { ok: false, error: `El producto no tiene un precio base válido (${prod.price})` };
+  }
+  return { ok: true, base, nombre: prod.name || '' };
+}
+
+// Tirar la caché del bloque de productos de los correos. NUNCA bloquea:
+// si falla, la promoción ya está escrita y solo se pierde frescura.
+async function invalidarCacheCorreos(motivo) {
+  try {
+    await invalidarCacheCatalogo();
+    console.log(`${TAG} ♻️ Caché de sugerencias invalidada (${motivo})`);
+    return true;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ No se pudo invalidar la caché de sugerencias (${motivo}): ${e.message}`);
+    return false;
+  }
+}
+
+/**
+ * ACTIVAR PROMOCIÓN
+ *
+ * El precio original nunca se toca: Wix lo conserva, lo pinta tachado y
+ * calcula él mismo el precio de venta a partir del descuento.
+ *
+ * @param {string} productId
+ * @param {object|number} opciones
+ *        · {tipo:'PERCENT', valor:15}  → 15% de rebaja.
+ *        · {tipo:'AMOUNT',  valor:3}   → 3 € de rebaja.
+ *        · un número suelto → se interpreta como precio final de venta y
+ *          se traduce a AMOUNT (compatibilidad con page code v3.6).
+ */
+export const activarPromocionProducto = webMethod(
+  Permissions.SiteMember,
+  async (productId, opciones) => {
+    try {
+      if (!productId) throw new Error('productId es requerido');
+
+      const lectura = await leerPrecioBase(productId);
+      if (!lectura.ok) throw new Error(lectura.error);
+      const base = dosDecimales(lectura.base);
+
+      let tipo;
+      let valor;
+
+      if (opciones !== null && typeof opciones === 'object') {
+        tipo = String(opciones.tipo || '').toUpperCase();
+        valor = dosDecimales(opciones.valor);
+      } else {
+        // Forma antigua: llega el precio final de venta.
+        const promo = dosDecimales(opciones);
+        if (!Number.isFinite(promo) || promo <= 0) {
+          throw new Error('El precio promocional debe ser un número mayor que 0');
+        }
+        if (promo >= base) {
+          throw new Error(`El precio promocional (${promo}) debe ser menor que el precio actual (${base})`);
+        }
+        tipo = 'AMOUNT';
+        valor = dosDecimales(base - promo);
+      }
+
+      if (tipo !== 'PERCENT' && tipo !== 'AMOUNT') {
+        throw new Error(`Tipo de descuento no válido: ${tipo}`);
+      }
+      if (!Number.isFinite(valor) || valor <= 0) {
+        throw new Error('El descuento debe ser mayor que 0');
+      }
+      if (tipo === 'PERCENT' && valor >= 100) {
+        throw new Error('El porcentaje de descuento debe ser menor que 100');
+      }
+      if (tipo === 'AMOUNT' && valor >= base) {
+        throw new Error(`La rebaja (${valor}) debe ser menor que el precio actual (${base})`);
+      }
+
+      console.log(`${TAG} 🏷 Promoción ${lectura.nombre || productId}: base ${base} · ${tipo} ${valor}`);
+
+      const elevatedUpdate = elevate(storesProducts.updateProduct);
+      const res = await elevatedUpdate(productId, {
+        discount: { type: tipo, value: valor }
+      });
+
+      // El precio de venta lo calcula Wix, no nosotros: se lee de su
+      // respuesta. Confirmado en el log de producción del 13-sep.
+      let precioPromocional = null;
+      try {
+        const prodRes = res?.product || res;
+        console.log(`${TAG} 🏷 respuesta discount: ${JSON.stringify(prodRes?.discount || null)} | priceData: ${JSON.stringify(prodRes?.priceData || null)}`);
+        const d = Number(prodRes?.priceData?.discountedPrice);
+        if (Number.isFinite(d)) precioPromocional = d;
+      } catch (_) {}
+
+      await invalidarCacheCorreos('activar promoción');
+
+      return {
+        ok: true,
+        productId,
+        precioAnterior: base,
+        tipo,
+        valor,
+        precioPromocional,
+        version: VERSION
+      };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ activarPromocionProducto FAIL:`, e.message);
+      return { ok: false, error: e.message, version: VERSION };
+    }
+  }
+);
+
+/**
+ * DESACTIVAR PROMOCIÓN
+ *
+ * type:'NONE' es el valor que la doc de Wix indica pasar para quitar el
+ * descuento. No hay que restaurar nada: `price` nunca se modificó.
+ */
+export const desactivarPromocionProducto = webMethod(
+  Permissions.SiteMember,
+  async (productId) => {
+    try {
+      if (!productId) throw new Error('productId es requerido');
+
+      console.log(`${TAG} 🏷 Quitando promoción de ${productId}`);
+
+      const elevatedUpdate = elevate(storesProducts.updateProduct);
+      const res = await elevatedUpdate(productId, {
+        discount: { type: 'NONE', value: 0 }
+      });
+
+      try {
+        const prodRes = res?.product || res;
+        console.log(`${TAG} 🏷 respuesta discount: ${JSON.stringify(prodRes?.discount || null)} | priceData: ${JSON.stringify(prodRes?.priceData || null)}`);
+      } catch (_) {}
+
+      await invalidarCacheCorreos('desactivar promoción');
+
+      return { ok: true, productId, version: VERSION };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ desactivarPromocionProducto FAIL:`, e.message);
+      return { ok: false, error: e.message, version: VERSION };
     }
   }
 );
