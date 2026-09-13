@@ -9,8 +9,14 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Tienda Productos Widget v1.4.1
+       KAMISUITE — Tienda Productos Widget v1.4.2
        Dark theme (same as Catálogo / Checkout)
+       v1.4.2 (13 Sep 2026): PRECIO PROMOCIONAL. Cuando el producto
+             está de oferta, la tarjeta enseña el precio anterior
+             tachado delante del de venta, con el porcentaje de
+             rebaja. El precio que se cobra ya viene rebajado del
+             backend (v1.5.15): aquí no se calcula nada, solo se
+             pinta el tachado.
        v1.3: + toggle tabs, método pago, historial
        v1.4: + VARIANTES (250ml / 1000ml) y DESCRIPCIÓN
              · Selector <select> de variante dentro de la tarjeta.
@@ -392,6 +398,16 @@
       margin-top: auto; padding-top: 4px;
     }
     .prod-price { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -.3px; }
+    /* v1.4.2: precio anterior tachado + porcentaje de rebaja */
+    .prod-price-old {
+      font-size: 12px; font-weight: 600; color: var(--muted);
+      text-decoration: line-through; margin-right: 6px;
+    }
+    .promo-chip {
+      font-size: 9px; font-weight: 700; letter-spacing: .5px;
+      padding: 2px 5px; border-radius: 3px; margin-left: 6px;
+      background: var(--accent-dim); color: var(--accent);
+    }
     .prod-price.is-range { font-size: 14px; }
     .prod-type {
       font-size: 9px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
@@ -986,6 +1002,27 @@
       priceDisplay = p.formattedPrice || (p.price !== null && p.price !== undefined ? Number(p.price).toFixed(2) + ' €' : '—');
     }
 
+    // v1.4.2: tachado del precio anterior. Con variante elegida manda la
+    // variante; si no, el producto. Con rango de variantes no se pinta:
+    // no hay un único precio anterior que enseñar.
+    let promoAnteriorHTML = '';
+    let promoChipHTML = '';
+    const promoOrigen = selVar ? selVar : (hasVar ? null : p);
+    if (promoOrigen && promoOrigen.enPromocion === true) {
+      const anterior = Number(promoOrigen.precioOriginal);
+      const actual = Number(promoOrigen.price);
+      if (isFinite(anterior) && isFinite(actual) && anterior > actual && actual > 0) {
+        const textoAnterior = (!selVar && p.formattedPrecioOriginal)
+          ? p.formattedPrecioOriginal
+          : anterior.toFixed(2) + ' €';
+        // Tolerancia por el error de coma flotante: 23,00 a 20,70 da
+        // 9,999999999999998 y sin ella se pintaría -9% en vez de -10%.
+        const pct = Math.floor(((1 - (actual / anterior)) * 100) + 1e-9);
+        promoAnteriorHTML = `<span class="prod-price-old">${esc(textoAnterior)}</span>`;
+        if (pct > 0) promoChipHTML = `<span class="promo-chip">-${pct}%</span>`;
+      }
+    }
+
     const stockHTML = inStock
       ? '<div style="font-size:10px;color:var(--green);font-weight:600;margin-top:2px;">En stock</div>'
       : '<div style="font-size:10px;color:var(--red);font-weight:600;margin-top:2px;">Sin stock</div>';
@@ -1046,7 +1083,7 @@
           ${p.sku ? `<div class="prod-sku">SKU: ${esc(p.sku)}</div>` : ''}
           ${descHTML}
           <div class="prod-price-row">
-            <span><span class="${priceCls}">${priceDisplay}</span></span>
+            <span>${promoAnteriorHTML}<span class="${priceCls}">${priceDisplay}</span>${promoChipHTML}</span>
             <span class="prod-type">${esc(p.productType)}</span>
           </div>
           ${stockHTML}
