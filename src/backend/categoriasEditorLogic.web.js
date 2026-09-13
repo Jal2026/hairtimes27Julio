@@ -1,11 +1,32 @@
 // =====================================================
-// KAMISUITE - Edición Categorías (Tour de Servicios) - Backend
+// KAMISUITE - Edición Categorías (Tour de Servicios) - Backend 
 // =====================================================
-// VERSION: 1.1.0
-// FECHA: 8 de julio de 2026
+// VERSION: 1.2.0
+// FECHA: 13 de septiembre de 2026
 // ARCHIVO: backend/categoriasEditorLogic.web.js
 //
 // CHANGELOG:
+//
+// v1.2.0 (13-sep-2026) — SUGERENCIAS DE PRODUCTO EN LOS CORREOS.
+//   Nuevo campo editable `productCollections` en HairSalonServices:
+//   ids de colecciones de la tienda separados por coma (misma
+//   convención que `groupCatalog`, en la misma fila). Decide qué
+//   productos se sugieren en el correo de confirmación y en el de
+//   recordatorio para las citas de esta categoría.
+//
+//   · adaptarCategoria devuelve productCollections.
+//   · crearCategoria / actualizarCategoria / duplicarCategoria lo
+//     escriben y lo copian, igual que groupCatalog.
+//   · NUEVA listarColeccionesTienda() → alimenta las casillas del
+//     editor con las colecciones REALES de la tienda. Nunca se teclea
+//     un id a mano.
+//
+//   Apagado silencioso: si el sitio no tiene tienda, la lectura de
+//   Stores/Collections falla y se devuelve lista vacía sin error. El
+//   editor no ofrece nada que marcar y no muestra ningún fallo.
+//
+//   Cero cambios en las salvaguardas SG1/SG2, en los slugs, en el
+//   toggle ni en la subida de imagen.
 //
 // v1.1.0 (8-jul-2026) — CRUD COMPLETO. El editor se vuelve autosuficiente:
 //   deja de requerir el dashboard de Wix para gobernar el Tour público.
@@ -75,8 +96,10 @@
 //
 // FUNCIONES EXPORTADAS:
 //   - listarCategorias()                     → categorías para las cards
+//   - listarColeccionesTienda()              → v1.2.0 · colecciones de tienda
 //   - crearCategoria(payload)                → v1.1.0 · alta nueva
 //   - actualizarCategoria(payload)           → edita textos + groupCatalog
+//                                              + productCollections (v1.2.0)
 //   - duplicarCategoria({catId, nuevoTitle}) → v1.1.0 · clona una existente
 //   - eliminarCategoria({catId})             → v1.1.0 · borra fila
 //   - toggleCategoriaActiva({catId, on})     → activo true/false
@@ -87,10 +110,11 @@ import { Permissions, webMethod } from 'wix-web-module';
 import { mediaManager } from 'wix-media-backend';
 import wixData from 'wix-data';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const TAG = `[CategoriasEditor][${VERSION}]`;
 
 const CMS_CATEGORIAS = 'HairSalonServices';
+const CMS_COLECCIONES_TIENDA = 'Stores/Collections';   // v1.2.0
 
 // =====================================================
 // HELPERS
@@ -173,6 +197,8 @@ function adaptarCategoria(it) {
     orden: toNum(it.orden),
     activo: it.activo === true,
     groupCatalog: it.groupCatalog || '',
+    // v1.2.0 — ids de colecciones de la tienda, separados por coma.
+    productCollections: it.productCollections || '',
     // Solo lectura — slugs de las páginas dinámicas (Wix los genera).
     linkServiciosTitle: it['link-servicios-title'] || '',
     linkServiciosAll: it['link-servicios-all'] || ''
@@ -205,6 +231,43 @@ export const listarCategorias = webMethod(
 );
 
 // =====================================================
+// 1.bis · LISTAR COLECCIONES DE LA TIENDA — v1.2.0
+//
+// Alimenta las casillas del editor. Devuelve las colecciones REALES de
+// Stores/Collections para que el arquitecto marque las que quiera y
+// nunca teclee un id a mano (los ids no se escriben: se marcan).
+//
+// Patrón de lectura copiado de tiendaProductos.listarProductos v1.5.14.
+//
+// APAGADO SILENCIOSO: un sitio sin tienda hace fallar esta query. Se
+// devuelve success:true con lista vacía y `tienda:false`. El editor no
+// pinta la sección y NO muestra ningún error: la ausencia de tienda no
+// es un fallo, es una configuración.
+// =====================================================
+export const listarColeccionesTienda = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    try {
+      const r = await wixData.query(CMS_COLECCIONES_TIENDA)
+        .ascending('name')
+        .limit(100)
+        .find({ suppressAuth: true });
+
+      const colecciones = (r.items || [])
+        .map(c => ({ id: c._id || '', name: c.name || '' }))
+        .filter(c => c.id);
+
+      console.log(`${TAG} 🛍 ${colecciones.length} colecciones de tienda`);
+      return { success: true, version: VERSION, tienda: true, colecciones };
+
+    } catch (error) {
+      console.warn(`${TAG} ⚠️ Sin tienda legible (${error.message}). Sección oculta.`);
+      return { success: true, version: VERSION, tienda: false, colecciones: [] };
+    }
+  }
+);
+
+// =====================================================
 // 2. CREAR CATEGORÍA — v1.1.0
 // Alta nueva con salvaguardas SG1 (anti-colisión) + SG2 (verificación
 // post-insert del slug generado por Wix, con rollback duro).
@@ -226,6 +289,7 @@ export const crearCategoria = webMethod(
         subtitle,
         description,
         groupCatalog,
+        productCollections,
         orden
       } = payload || {};
 
@@ -252,6 +316,7 @@ export const crearCategoria = webMethod(
         subtitle: String(subtitle || '').trim(),
         description: String(description || ''),
         groupCatalog: String(groupCatalog || '').trim(),
+        productCollections: String(productCollections || '').trim(),   // v1.2.0
         orden: toNum(orden),
         activo: false,   // default OFF hasta que el arquitecto la active
         visible: false   // sincronizado con activo
@@ -311,6 +376,7 @@ export const actualizarCategoria = webMethod(
         subtitle,
         description,
         groupCatalog,
+        productCollections,
         orden
       } = payload || {};
 
@@ -349,6 +415,8 @@ export const actualizarCategoria = webMethod(
       if (subtitle !== undefined) registro.subtitle = String(subtitle || '').trim();
       if (description !== undefined) registro.description = String(description || '');
       if (groupCatalog !== undefined) registro.groupCatalog = String(groupCatalog || '').trim();
+      // v1.2.0 — colecciones de tienda de esta categoría.
+      if (productCollections !== undefined) registro.productCollections = String(productCollections || '').trim();
       if (orden !== undefined) {
         const n = Number(orden);
         registro.orden = isNaN(n) ? toNum(registro.orden) : n;
@@ -375,7 +443,8 @@ export const actualizarCategoria = webMethod(
 // 4. DUPLICAR CATEGORÍA — v1.1.0
 // Clona una categoría existente creando una fila nueva con:
 //   · title = nuevoTitle (obligatorio, distinto del origen)
-//   · subtitle, description, groupCatalog, image, orden = copia del origen
+//   · subtitle, description, groupCatalog, productCollections, image,
+//     orden = copia del origen
 //   · activo:false, visible:false (default OFF, como crearCategoria)
 //
 // Aplica las mismas salvaguardas SG1 + SG2.
@@ -416,6 +485,7 @@ export const duplicarCategoria = webMethod(
         subtitle: origen.subtitle || '',
         description: origen.description || '',
         groupCatalog: origen.groupCatalog || '',
+        productCollections: origen.productCollections || '',   // v1.2.0
         image: origen.image || null,   // misma imagen (reutiliza asset)
         orden: toNum(origen.orden),
         activo: false,
