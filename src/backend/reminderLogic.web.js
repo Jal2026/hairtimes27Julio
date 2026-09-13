@@ -1,5 +1,5 @@
 // =====================================================
-// [ReminderJob v1.10.0] - reminderLogic.web.js
+// [ReminderJob v1.11.0] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
 // FUENTE V2: KamisuiteReservations (fuente de verdad de reservas)
 // Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
@@ -29,10 +29,27 @@
 //    · comunicacionesLogic.notificarRecordatorio (v1.4.0) → WhatsApp
 //      (whatsappLogic v1.6.1, plantilla booking_reminder_es).
 //    · brevoLogic.enviarEmailPlantilla (plantilla reminderLayout).
+//    · sugerenciasProductosLogic.construirBloqueProductos (v1.0.0) →
+//      bloque de sugerencias de producto del recordatorio.
 //    · wix-crm-backend triggeredEmails (plantilla VGPVvYO).
 //  FLUJO DE PUNTA A PUNTA: verificado. Ya NO hay tramo muerto.
 //
 // CHANGELOG:
+//   v1.11.0 - Sugerencias de producto en el recordatorio (camino Brevo).
+//            · leerCitasV2 arrastra `group` de KamisuiteReservations
+//              (categoría del servicio principal, la escribe
+//              recepcionProLogic desde v1.0.38) hasta el grupo del
+//              cliente. Primera cita del grupo con categoría no vacía.
+//            · _enviarRecordatorioBrevo añade la variable
+//              `bloqueProductos`. La plantilla reminderLayout decide
+//              dónde aparece con el marcador ${bloqueProductos}. Sin
+//              marcador en la plantilla, no se pinta nada.
+//            · Camino Wix triggered SIN TOCAR: sus plantillas son
+//              diseños del editor y no admiten bloque HTML.
+//            · Apagado silencioso: sin tienda, sin correspondencia o
+//              ante cualquier fallo la variable llega vacía y el
+//              recordatorio sale como antes, sin huecos. El bloque
+//              nunca puede retrasar ni tumbar el envío.
 //   v1.0.x - Motor base, DRY_RUN, fixes de query y extracción.
 //   v1.1.x - Resolución CRM email→contactId + nombre→contactId.
 //   v1.2.x - Agrupación cascada. (v1.2.1 revertido: appendOrCreate)
@@ -230,8 +247,10 @@ import { triggeredEmails, contacts } from 'wix-crm-backend';
 import { notificarRecordatorio, registrarComunicacion } from 'backend/comunicacionesLogic.web.js';
 // v1.6.0: driver de email por plantilla (Brevo)
 import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
+// v1.11.0: bloque de sugerencias de producto para el correo
+import { construirBloqueProductos } from 'backend/sugerenciasProductosLogic.web.js';
 
-const TAG = '[ReminderJob v1.10.0]';
+const TAG = '[ReminderJob v1.11.0]';
 
 // v1.7.0: colección fuente de verdad de reservas en V2
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -528,6 +547,10 @@ async function leerCitasV2(inicio, fin, fechaYMD) {
         horaInicio: formatearHora(start),
         horaFinal: formatearHora(end),
         servicios: servicios,
+        // v1.11.0 — categoría del servicio principal de la reserva.
+        // La escribe recepcionProLogic desde v1.0.38. Se arrastra tal
+        // cual: aquí no se interpreta ni se normaliza.
+        group: r.group || '',
         importeTotal: r.precioTotal ? `${r.precioTotal} €` : '',
         estadoPago: r.status === 'PAGADO' ? 'Pagado' : 'Pago en salón',
         _startMs: start.getTime(),
@@ -733,6 +756,10 @@ function agruparPorCliente(citas) {
       horaInicio: primeraHora,
       horaFinal: ultimaHora,
       servicios: serviciosCombinados,
+      // v1.11.0 — categoría de la cita para las sugerencias de producto.
+      // Un cliente puede tener varias filas el mismo día (cascada de
+      // fases): vale la primera con categoría informada.
+      group: (citasCliente.find(c => c.group) || {}).group || '',
       importeTotal: importe,
       estadoPago: citasCliente[0].estadoPago,
       source: citasCliente[0].source,
@@ -759,6 +786,20 @@ async function _enviarRecordatorioBrevo(grupo) {
     return { ok: false, error: `email @salon/vacío, no se envía por Brevo (${grupo.Nombre} ${grupo.Apellido})` };
   }
   const nombreCliente = `${grupo.Nombre || ''} ${grupo.Apellido || ''}`.trim();
+
+  // v1.11.0 — Sugerencias de producto. NUNCA bloquea el recordatorio:
+  // el módulo tiene su propio techo de tiempo y devuelve '' ante
+  // cualquier problema. Sin bloque, el marcador de la plantilla
+  // desaparece solo y el correo queda como estaba.
+  let bloqueProductos = '';
+  try {
+    if (grupo.group) {
+      bloqueProductos = await construirBloqueProductos({ group: grupo.group }) || '';
+    }
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ Bloque de productos descartado: ${e.message}`);
+  }
+
   const variables = {
     Fecha:        grupo.Fecha,
     Nombre:       grupo.Nombre,
@@ -769,7 +810,8 @@ async function _enviarRecordatorioBrevo(grupo) {
     horaFinal:    grupo.horaFinal,
     importeTotal: grupo.importeTotal,
     origen:       grupo.source === 'externo' ? 'Servicios Externos' : 'Reserva Online',
-    estadoPago:   grupo.estadoPago
+    estadoPago:   grupo.estadoPago,
+    bloqueProductos                       // v1.11.0
   };
   try {
     const r = await enviarEmailPlantilla({
