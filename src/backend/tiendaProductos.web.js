@@ -2,7 +2,7 @@
 // KAMISUITE - Tienda Productos (Backend)
 // =====================================================
 // Archivo: tiendaProductos.web.js
-// Versión: 1.5.14
+// Versión: 1.5.16
 // =====================================================
 // v1.1: wixData Stores/Products + generalInfo pickup
 // v1.2: + contactos + buyerInfo + addPayments (order visible)
@@ -81,6 +81,30 @@
 //       NO se tocan registrarVenta, generarFacturaProducto,
 //       obtenerHistorialVentas, cargarContactosTienda ni el bloque
 //       CMS-first de PaymentReservations.
+// v1.5.16 (13 Sep 2026): + descuentoPct en el listado. El porcentaje que
+//         se enseña se toma del descuento guardado cuando Wix lo tiene en
+//         PERCENT, en vez de deducirlo de los precios: con precio 19,85 y
+//         un 10%, Wix cobra 17,87 y la rebaja calculada da 9,97, que se
+//         enseñaba como -9%. En V1 el descuento vive en el PRODUCTO, así
+//         que ese mismo porcentaje vale para todas sus variantes.
+//
+// v1.5.15 (13 Sep 2026): PRECIO PROMOCIONAL EN EL TPV.
+//         Hasta ahora la caja cobraba SIEMPRE `price`, el precio
+//         original, aunque el producto estuviera de oferta en la tienda:
+//         el correo anunciaba 20,70 y el salón cobraba 23,00.
+//         · `price` pasa a ser el PRECIO DE VENTA REAL (el rebajado si
+//           hay oferta). Así cobra bien todo lo que ya lee este listado
+//           —el TPV y el producto en cita de Recepción PRO— sin tocar
+//           una sola línea más.
+//         · `formattedPrice` acompaña al precio de venta real.
+//         · NUEVOS: precioOriginal, formattedPrecioOriginal y
+//           enPromocion, solo para pintar el tachado.
+//         · Las variantes usan discountedPrice cuando lo traen. En V1 el
+//           descuento vive en el PRODUCTO, pero Wix lo propaga a cada
+//           variante: confirmado en el log del 13-sep, la variante
+//           devolvía price 23 y discountedPrice 20,70.
+//         Criterio de oferta real, idéntico al del editor y al de los
+//         correos: discountedPrice > 0 y MENOR que price.
 // v1.5.14: VÍNCULO REAL VENTA ↔ CITA — campo `reservaId`.
 //       La venta hecha desde el modal de una cita se registraba en
 //       PaymentReservations SIN ninguna referencia a esa cita: el
@@ -152,7 +176,7 @@ import { invoices } from 'wix-billing-backend';
 import { getProductVariants } from 'wix-stores-backend';
 
 const TAG = '[TiendaProductos]';
-const VERSION = "1.5.14";
+const VERSION = "1.5.16";
 
 // AppId de Wix Stores para catalogReference en eCommerce
 const STORES_APP_ID = '215238eb-22a5-4c36-9e7b-e7c08025e04e';
@@ -211,6 +235,29 @@ async function leerVariantesCrudas(productId) {
 
 // Normaliza una variante cruda de Wix al contrato que consume el
 // widget recepcionProCMS: {variantId, label, choices, price, sku, inStock}
+// v1.5.15: una oferta solo cuenta si el precio rebajado es un número
+// mayor que 0 y MENOR que el precio. Mismo guardarraíl que el editor.
+function hayOfertaReal(precio, precioRebajado) {
+  const p = Number(precio);
+  const d = Number(precioRebajado);
+  return Number.isFinite(p) && Number.isFinite(d) && d > 0 && d < p;
+}
+
+// v1.5.16 — Porcentaje que se ENSEÑA. Si Wix lo tiene guardado como
+// PERCENT, ese es el número. Si está en euros, se deduce truncando, con
+// tolerancia para el error de coma flotante.
+function porcentajeDescuento(precio, precioDescontado, discount) {
+  const tipo = (discount && discount.type) ? String(discount.type).toUpperCase() : '';
+  if (tipo === 'PERCENT') {
+    const v = Number(discount.value);
+    if (Number.isFinite(v) && v > 0 && v < 100) return Math.round(v * 100) / 100;
+  }
+  const p = Number(precio);
+  const d = Number(precioDescontado);
+  if (!Number.isFinite(p) || !Number.isFinite(d) || p <= 0 || d <= 0 || d >= p) return 0;
+  return Math.floor(((1 - (d / p)) * 100) + 1e-9);
+}
+
 function normalizarVariante(v, precioProducto) {
   const variantId = v?._id || v?.id || '';
   const choices = v?.choices || v?.variant?.choices || {};
@@ -226,7 +273,7 @@ function normalizarVariante(v, precioProducto) {
   // Precio: en Wix V1 la variante expone priceData.price. Se leen los
   // paths conocidos en cascada y, como último recurso, el precio del
   // producto padre (nunca undefined hacia el widget).
-  const price = Number(
+  const priceBase = Number(
     v?.variant?.priceData?.price
     ?? v?.variant?.price
     ?? v?.priceData?.price
@@ -234,6 +281,16 @@ function normalizarVariante(v, precioProducto) {
     ?? precioProducto
     ?? 0
   ) || 0;
+
+  // v1.5.15: si la variante trae precio rebajado, ES el precio de venta.
+  const rebajado = Number(
+    v?.variant?.priceData?.discountedPrice
+    ?? v?.variant?.discountedPrice
+    ?? v?.priceData?.discountedPrice
+    ?? v?.discountedPrice
+  );
+  const enOferta = hayOfertaReal(priceBase, rebajado);
+  const price = enOferta ? rebajado : priceBase;
 
   const sku = v?.variant?.sku ?? v?.sku ?? '';
 
@@ -249,7 +306,17 @@ function normalizarVariante(v, precioProducto) {
     inStock = invStatus.quantity > 0;
   }
 
-  return { variantId, label, choices, price: Math.round(price * 100) / 100, sku: String(sku || ''), inStock };
+  return {
+    variantId,
+    label,
+    choices,
+    price: Math.round(price * 100) / 100,
+    // v1.5.15: solo para pintar el tachado. El precio que se cobra es `price`.
+    precioOriginal: Math.round(priceBase * 100) / 100,
+    enPromocion: enOferta,
+    sku: String(sku || ''),
+    inStock
+  };
 }
 
 // Devuelve {variants:[], manageVariants:bool} para un producto.
@@ -329,6 +396,7 @@ export const listarProductos = webMethod(
       }
 
       const lista = items.map(prod => {
+        const enOfertaProd = hayOfertaReal(prod.price, prod.discountedPrice);
         let prodCollections = [];
         if (Array.isArray(prod.collections)) {
           prodCollections = prod.collections.map(c => ({
@@ -340,8 +408,19 @@ export const listarProductos = webMethod(
         return {
           id: prod._id,
           name: prod.name || '',
-          price: prod.price,
-          formattedPrice: prod.formattedPrice || '',
+          // v1.5.15: `price` es el precio de venta REAL. Si el producto
+          // está de oferta, es el rebajado — es lo que se cobra en caja.
+          price: enOfertaProd ? prod.discountedPrice : prod.price,
+          formattedPrice: (enOfertaProd && prod.formattedDiscountedPrice)
+            ? prod.formattedDiscountedPrice
+            : (prod.formattedPrice || ''),
+          // Solo para pintar el tachado.
+          precioOriginal: prod.price,
+          formattedPrecioOriginal: prod.formattedPrice || '',
+          enPromocion: enOfertaProd,
+          // v1.5.16: porcentaje ya resuelto. Vale también para las
+          // variantes: en V1 el descuento es del producto.
+          descuentoPct: porcentajeDescuento(prod.price, prod.discountedPrice, prod.discount),
           mainMedia: prod.mainMedia || '',
           sku: prod.sku || '',
           inStock: prod.inStock !== false,
