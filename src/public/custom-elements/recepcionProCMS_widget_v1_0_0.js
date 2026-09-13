@@ -1,6 +1,34 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.113  ·  El porcentaje de la oferta se lee, no se deduce
+ *
+ *   El backend (tiendaProductos v1.5.16) manda `descuentoPct` ya
+ *   resuelto: cuando Wix tiene el descuento guardado en PERCENT, ese es
+ *   el número. Deducirlo de los precios engañaba en cuanto el precio no
+ *   dividía limpio — con 19,85 y un 10%, Wix cobra 17,87 y la rebaja
+ *   calculada da 9,97, que se pintaba como -9%.
+ *   En V1 el descuento es del PRODUCTO, así que sus variantes enseñan
+ *   ese mismo porcentaje.
+ *
+ * VERSION: 1.1.112  ·  Precio promocional del producto en la cita
+ *
+ *   El catálogo que llega del backend (tiendaProductos v1.5.15) trae ya
+ *   el PRECIO DE VENTA REAL en `price`: si el producto está de oferta,
+ *   ese precio es el rebajado. El widget no calcula nada, así que el
+ *   cobro y el carrito quedan correctos sin tocar su lógica.
+ *
+ *   Lo único que se añade aquí es que se VEA: cuando el producto o la
+ *   variante llegan con `enPromocion`, la línea muestra el precio
+ *   anterior tachado delante del de venta y el porcentaje de rebaja.
+ *   El porcentaje se calcula igual que en el editor y en los correos,
+ *   con tolerancia por el error de coma flotante (23,00 a 20,70 da
+ *   9,999999999999998 y sin ella se pintaría -9% en vez de -10%).
+ *
+ *   En la línea PADRE de un producto con variantes no se pinta tachado:
+ *   ahí se muestra un rango de precios y no hay un único precio anterior
+ *   que enseñar. Aparece al desplegar la variante.
+ *
  * VERSION: 1.1.111  ·  La venta de producto y de especiales tiene dueño
  *
  * v1.1.111 (30 ago 2026) — VENTA POR PROFESIONAL EN EL INFORME DEL DÍA.
@@ -2026,7 +2054,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.110]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.113]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2641,6 +2669,12 @@ button { font-family: inherit; cursor: pointer; }
 .pd-item.pd-disabled { opacity: .5; cursor: not-allowed; }
 .pd-item-name { flex: 1; color: var(--ks-ink); font-weight: 500; }
 .pd-item-price { color: #15803d; font-weight: 700; }
+/* v1.1.112 — precio anterior tachado + porcentaje de rebaja */
+.pd-price-old { color: var(--ks-ink2); font-weight: 600; font-size: 11px;
+  text-decoration: line-through; margin-right: 5px; }
+.pd-promo-chip { display: inline-block; font-size: 9px; font-weight: 700;
+  letter-spacing: .4px; padding: 1px 4px; border-radius: 3px; margin-left: 5px;
+  background: rgba(21,128,61,.12); color: #15803d; }
 /* v1.1.25 — Variantes (250ml/1000ml) */
 .pd-item-parent { background: rgba(0,0,0,0.02); font-weight: 600; }
 .pd-arrow { display: inline-block; width: 12px; color: var(--ks-ink2); font-size: 11px; }
@@ -8015,6 +8049,28 @@ button { font-family: inherit; cursor: pointer; }
       this._productoSearchQ = '';
       this._closeSubModal();
     }
+    // v1.1.112 — Precio anterior tachado + etiqueta de rebaja.
+    // Devuelve {antes, chip}; ambos vacíos si el item no está de oferta.
+    // `price` ya viene rebajado del backend: aquí no se recalcula nada.
+    // v1.1.113 — pctBackend es el `descuentoPct` del producto padre. Si no
+    // llega (listado antiguo), se deduce de los precios como respaldo,
+    // truncando y con tolerancia para el error de coma flotante.
+    _promoLinea(item, pctBackend) {
+      const vacio = { antes: '', chip: '' };
+      if (!item || item.enPromocion !== true) return vacio;
+      const anterior = Number(item.precioOriginal);
+      const actual = Number(item.price);
+      if (!isFinite(anterior) || !isFinite(actual) || actual <= 0 || anterior <= actual) return vacio;
+      let pct = Number(pctBackend);
+      if (!isFinite(pct) || pct <= 0) {
+        pct = Math.floor(((1 - (actual / anterior)) * 100) + 1e-9);
+      }
+      return {
+        antes: `<span class="pd-price-old">${anterior}€</span>`,
+        chip: pct > 0 ? `<span class="pd-promo-chip">-${String(pct).replace('.', ',')}%</span>` : ''
+      };
+    }
+
     _renderProductoPanel() {
       const root = this.shadowRoot;
       const body = root.querySelector('#pdBody');
@@ -8067,7 +8123,7 @@ button { font-family: inherit; cursor: pointer; }
                     data-variant-id="${esc(v.variantId)}"
                     data-variant-label="${esc(v.label)}">
                   <span class="pd-variant-label">↳ ${esc(v.label)}${enTag}${vStockTag}</span>
-                  <span class="pd-variant-price">${Number(v.price) || 0}€</span>
+                  <span class="pd-variant-price">${this._promoLinea(v, p.descuentoPct).antes}${Number(v.price) || 0}€${this._promoLinea(v, p.descuentoPct).chip}</span>
                 </div>`;
               }
             }
@@ -8079,7 +8135,7 @@ button { font-family: inherit; cursor: pointer; }
             const stockTag = sinStock ? '<span style="color:#b91c1c;font-size:9px;font-weight:700;letter-spacing:.5px;margin-left:5px;">SIN STOCK</span>' : '';
             listaHTML += `<div class="pd-item ${disabled ? 'pd-disabled' : ''}" data-prod-id="${esc(p.id)}" data-prod-name="${esc(p.name)}" data-prod-price="${Number(p.price) || 0}">
               <span class="pd-item-name">${esc(p.name)}${enTag}${stockTag}</span>
-              <span class="pd-item-price">${Number(p.price) || 0}€</span>
+              <span class="pd-item-price">${this._promoLinea(p, p.descuentoPct).antes}${Number(p.price) || 0}€${this._promoLinea(p, p.descuentoPct).chip}</span>
             </div>`;
           }
         }
