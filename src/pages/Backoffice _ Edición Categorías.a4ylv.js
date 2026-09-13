@@ -4,12 +4,22 @@
 // PÁGINA: Edición Categorías (admin)
 // WIDGET: #htmlEdicionCategorias (HTML embed con editor_categorias.html)
 //
-// VERSIÓN: 1.1.0
-// FECHA: 8 de julio de 2026
+// VERSIÓN: 1.2.0
+// FECHA: 13 de septiembre de 2026
 //
 // Edita el CMS HairSalonServices (primer nivel de Tour de Servicios).
 //
 // CHANGELOG:
+//
+// v1.2.0 (13-sep-2026) — Colecciones de tienda por categoría.
+//   Al cargar, además de las categorías se piden las colecciones reales
+//   de la tienda y viajan al widget en el mismo mensaje `data`. El
+//   widget pinta con ellas las casillas de "Productos sugeridos".
+//   El campo `productCollections` viaja en el payload de guardado sin
+//   necesidad de tocar nada: el page code pasa el payload completo.
+//
+//   Si el sitio no tiene tienda, el backend devuelve lista vacía sin
+//   error y el widget oculta la sección. Apagado silencioso.
 //
 // v1.1.0 (8-jul-2026) — CRUD COMPLETO. Nuevos mensajes del widget:
 //   · createCategoria    → crea una categoría nueva (alta)
@@ -38,6 +48,7 @@
 
 import {
   listarCategorias,
+  listarColeccionesTienda,
   actualizarCategoria,
   toggleCategoriaActiva,
   uploadImagenCategoria,
@@ -46,7 +57,7 @@ import {
   eliminarCategoria
 } from 'backend/categoriasEditorLogic.web';
 
-const TAG = '[EdicionCategorias][1.1.0]';
+const TAG = '[EdicionCategorias][1.2.0]';
 
 $w.onReady(async function () {
   console.log(`${TAG} ✅ Página cargada`);
@@ -94,13 +105,25 @@ $w.onReady(async function () {
 async function cargarDatos(widget) {
   try {
     console.log(`${TAG} 📋 Cargando categorías...`);
-    const result = await listarCategorias();
+
+    // v1.2.0 — Las dos lecturas en paralelo. La de colecciones nunca
+    // falla hacia el usuario: el backend devuelve lista vacía si el
+    // sitio no tiene tienda.
+    const [result, colsRes] = await Promise.all([
+      listarCategorias(),
+      listarColeccionesTienda().catch(err => {
+        console.warn(`${TAG} ⚠️ Colecciones de tienda no disponibles: ${err.message}`);
+        return { success: true, tienda: false, colecciones: [] };
+      })
+    ]);
 
     if (result.success) {
-      console.log(`${TAG} ✅ ${result.categorias.length} categorías cargadas`);
+      const colecciones = (colsRes && colsRes.colecciones) || [];
+      const tienda = !!(colsRes && colsRes.tienda) && colecciones.length > 0;
+      console.log(`${TAG} ✅ ${result.categorias.length} categorías cargadas · ${colecciones.length} colecciones de tienda`);
       widget.postMessage({
         type: 'data',
-        payload: { categorias: result.categorias }
+        payload: { categorias: result.categorias, colecciones, tienda }
       });
     } else {
       console.error(`${TAG} ❌ Error:`, result.error);
