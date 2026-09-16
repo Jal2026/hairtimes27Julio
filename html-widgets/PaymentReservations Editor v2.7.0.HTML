@@ -9,7 +9,27 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Reservas y Pagos Editor v2.7.0
+       KAMISUITE — Reservas y Pagos Editor v2.8.0
+       v2.8.0 (16 sep 2026) — ÚLTIMA ADVERTENCIA ANTES DE ANULAR.
+         · El botón del bloque pasa a ⚠️ Confirmar anulación (antes 🚫).
+         · Confirmar anulación ya NO envía: abre la ventana ÚLTIMA
+           ADVERTENCIA sobre toda la pantalla (fondo oscurecido, borde
+           rojo grueso, ⚠️ grande). Solo se cierra con sus dos botones:
+           ← Volver (gris, regresa al bloque con lo escrito) y
+           ⚠️ Sí, anular cobro (rojo relleno, blanco en negrita), que es
+           el que envía. Pinchar fuera no la cierra.
+         · Contenido: cliente · importe · método; siempre que se crea una
+           reversión en negativo y que no se puede deshacer; si es cobro
+           de cita, que la cita vuelve a pendiente de cobro; si el cobro
+           tiene ticket o factura, su número y que hará falta factura
+           rectificativa (si no se pudo comprobar, lo dice); si es canje
+           de bono o tarjeta, que el uso no se devuelve al cliente.
+         · El documento se toma del bloque Documento fiscal de la propia
+           ficha (estado nuevo docDelCobro), no se hace consulta extra.
+         · Retirado el alert QUEDAN COSAS PENDIENTES posterior a la
+           anulación: esos avisos ya se han visto antes de confirmar.
+         · Contrato con page code SIN CAMBIOS. Servidor recomendado:
+           paymentReservationsLogic v1.4.1 (arreglo de hayCanje).
        v2.7.0 (16 sep 2026) — ANULAR COBRO: SECUENCIA SIN AMBIGÜEDAD.
        Problema en producción: para anular había que volver a pulsar el
        MISMO botón del pie (que cambiaba su leyenda a Confirmar
@@ -293,6 +313,17 @@
     #anulBox .anul-actions { display: flex; gap: 10px; margin-top: 12px; }
     .btn-anular-confirm { background: var(--orange); color: #fff; font-weight: 700; border: 1px solid var(--orange); flex: 1; animation: pulse 1.5s ease-in-out infinite; }
     .btn-anular-confirm:disabled { opacity: .5; cursor: not-allowed; animation: none; }
+    /* v2.8.0 — ventana ÚLTIMA ADVERTENCIA (por encima del modal, por debajo del toast) */
+    .warn-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.85); z-index: 1500; align-items: center; justify-content: center; padding: 16px; }
+    .warn-overlay.open { display: flex; }
+    .warn-box { background: var(--surface); border: 3px solid var(--red); border-radius: var(--radius); width: 100%; max-width: 460px; max-height: 90vh; overflow-y: auto; padding: 24px 22px 20px; text-align: center; box-shadow: 0 0 0 6px var(--red-dim), 0 12px 48px rgba(0,0,0,.6); }
+    .warn-icon { font-size: 48px; line-height: 1; margin-bottom: 10px; }
+    .warn-title { color: var(--red); font-size: 20px; font-weight: 700; letter-spacing: 1px; margin-bottom: 14px; }
+    .warn-lead { color: var(--text); font-size: 14px; font-weight: 600; line-height: 1.5; margin-bottom: 14px; }
+    .warn-line { color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin-bottom: 8px; text-align: left; }
+    .warn-line.grave { color: var(--text); background: var(--red-dim); border: 1px solid rgba(232,84,84,.45); border-radius: var(--radius-sm); padding: 8px 10px; }
+    .warn-actions { display: flex; gap: 10px; margin-top: 18px; }
+    .btn-warn-final { background: var(--red); color: #fff; font-weight: 700; border: 1px solid var(--red); flex: 1; }
     #anulOtroWrap { display: none; margin-top: 8px; }
     .badge-estado { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
     .badge-anulado { background: rgba(232,84,84,.18); color: var(--red); }
@@ -363,7 +394,7 @@
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · PaymentReservations</span>
-    <span class="header-version">v2.7.0</span>
+    <span class="header-version">v2.8.0</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -522,7 +553,7 @@
           <!-- v2.7.0 — Botones propios del bloque: el pie queda oculto mientras se anula. -->
           <div class="anul-actions">
             <button type="button" class="btn btn-cancel" id="btnAnulVolver">← Volver</button>
-            <button type="button" class="btn btn-anular-confirm" id="btnAnulConfirmar" disabled>🚫 Confirmar anulación</button>
+            <button type="button" class="btn btn-anular-confirm" id="btnAnulConfirmar" disabled>⚠️ Confirmar anulación</button>
           </div>
         </div>
 
@@ -541,6 +572,20 @@
         </button>
         <button class="btn btn-cancel" id="btnCancel">Cancelar</button>
         <button class="btn btn-save" id="btnSave">Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v2.8.0 — ÚLTIMA ADVERTENCIA antes de anular. Solo se cierra con sus botones. -->
+  <div class="warn-overlay" id="ultimaAdvertencia">
+    <div class="warn-box" role="alertdialog" aria-modal="true" aria-labelledby="uaTitulo">
+      <div class="warn-icon">⚠️</div>
+      <div class="warn-title" id="uaTitulo">ÚLTIMA ADVERTENCIA</div>
+      <div class="warn-lead" id="uaResumen"></div>
+      <div id="uaLista"></div>
+      <div class="warn-actions">
+        <button type="button" class="btn btn-cancel" id="btnUaVolver">← Volver</button>
+        <button type="button" class="btn btn-warn-final" id="btnUaAnular">⚠️ Sí, anular cobro</button>
       </div>
     </div>
   </div>
@@ -580,6 +625,11 @@
     btnAnulVolver: document.getElementById('btnAnulVolver'),       // v2.7.0
     btnAnulConfirmar: document.getElementById('btnAnulConfirmar'), // v2.7.0
     modalFooter: document.getElementById('modalFooter'),           // v2.7.0
+    ultimaAdvertencia: document.getElementById('ultimaAdvertencia'), // v2.8.0
+    uaResumen: document.getElementById('uaResumen'),                 // v2.8.0
+    uaLista: document.getElementById('uaLista'),                     // v2.8.0
+    btnUaVolver: document.getElementById('btnUaVolver'),             // v2.8.0
+    btnUaAnular: document.getElementById('btnUaAnular'),             // v2.8.0
     anulBox: document.getElementById('anulBox'),
     anulMotivo: document.getElementById('anulMotivo'),
     anulOtroWrap: document.getElementById('anulOtroWrap'),
@@ -1024,7 +1074,7 @@
   // Volver activo y Confirmar según el motivo. Se usa al cerrar el
   // bloque y tras un error del backend (el bloque sigue abierto).
   function resetAnularButton() {
-    el.btnAnulConfirmar.innerHTML = '🚫 Confirmar anulación';
+    el.btnAnulConfirmar.innerHTML = '⚠️ Confirmar anulación';
     el.btnAnulVolver.disabled = false;
     updateAnularConfirmState();
   }
@@ -1038,6 +1088,7 @@
     el.anulOtroWrap.style.display = 'none';
     el.anulUsuario.value = '';
     el.modalFooter.style.display = '';
+    cerrarUltimaAdvertencia(); // v2.8.0
     resetAnularButton();
   }
 
@@ -1067,6 +1118,46 @@
       return { ok: true, motivo: `Otro — ${libre}` };
     }
     return { ok: true, motivo: sel };
+  }
+
+  // v2.8.0 — ÚLTIMA ADVERTENCIA. Confirmar anulación ya no envía: abre
+  // esta ventana con las consecuencias. Solo se cierra con sus botones;
+  // el envío lo hace ⚠️ Sí, anular cobro (doAnular, sin cambios).
+  function abrirUltimaAdvertencia() {
+    const _id = el.editId.value;
+    if (!_id) return;
+    const m = resolverMotivo();
+    if (!m.ok) {
+      showToast('✕ ' + m.error, 'error');
+      return;
+    }
+    const item = allItems.find(x => x._id === _id) || {};
+    const importe = Number(item.importeTotal || 0);
+    const bId = String(item.bookingId || '');
+    el.uaResumen.textContent = `Vas a anular el cobro de ${item.nombreCliente || '(sin nombre)'} · ${importe.toFixed(2)} € · ${item.tipoPago || '—'}`;
+
+    const lineas = [];
+    lineas.push({ t: `Se crea una reversión de ${(-importe).toFixed(2)} € y la anulación no se puede deshacer.` });
+    if (bId.startsWith('KRI_')) {
+      lineas.push({ t: 'La cita vuelve a pendiente de cobro.' });
+    }
+    if (docDelCobro.estado === 'existe' && docDelCobro.doc) {
+      const esFactura = String(docDelCobro.doc.modo || '').toLowerCase().indexOf('factura') >= 0;
+      lineas.push({ grave: true, t: `Este cobro tiene emitido ${esFactura ? 'la factura' : 'el ticket'} ${docDelCobro.doc.invoiceNumber || '(sin número)'}. Anular el cobro no lo anula: habrá que hacer una factura rectificativa.` });
+    } else if (docDelCobro.estado === 'consultando' || docDelCobro.estado === 'error') {
+      lineas.push({ grave: true, t: 'No se ha podido comprobar si este cobro tiene ticket o factura.' });
+    }
+    if (String(item.tipoPago || '').toLowerCase() === 'canje') {
+      lineas.push({ grave: true, t: 'Es un canje de bono o tarjeta: el uso no se devuelve al cliente. Hay que restaurarlo a mano en Gestión de Bonos y Promociones.' });
+    }
+    el.uaLista.innerHTML = lineas.map(l => `<div class="warn-line${l.grave ? ' grave' : ''}">${esc(l.t)}</div>`).join('');
+
+    el.ultimaAdvertencia.classList.add('open');
+    el.btnUaVolver.focus();
+  }
+
+  function cerrarUltimaAdvertencia() {
+    el.ultimaAdvertencia.classList.remove('open');
   }
 
   function doAnular() {
@@ -1147,6 +1238,11 @@
   let docIndexRecibido = false;
   // v2.4.1 — watchdog de la consulta inicial de documento.
   let docWatchdog = null;
+  // v2.8.0 — Documento fiscal del cobro abierto, para ÚLTIMA ADVERTENCIA.
+  //   noAplica: no se consulta (anulado, importe <= 0 o sin bookingId)
+  //   consultando: pregunta enviada sin respuesta · error: no se pudo
+  //   ninguno: no tiene documento · existe: doc = {modo, invoiceNumber}
+  let docDelCobro = { estado: 'noAplica', doc: null };
 
   // v2.6.0 — Abre el PDF de un cobro desde el listado.
   // La ventana se abre AQUÍ, dentro del gesto de clic, y se redirige
@@ -1168,6 +1264,7 @@
 
   function resetDocBox() {
     if (docWatchdog) { clearTimeout(docWatchdog); docWatchdog = null; }
+    docDelCobro = { estado: 'noAplica', doc: null }; // v2.8.0
     docBookingId = '';
     el.docBox.style.display = 'none';
     el.docExistente.style.display = 'none';
@@ -1208,6 +1305,7 @@
       return;
     }
     docBookingId = bId;
+    docDelCobro = { estado: 'consultando', doc: null }; // v2.8.0
     el.docBox.style.display = 'block';
     docSay('Consultando…', 'info');
     setDocBusy(true);
@@ -1221,6 +1319,7 @@
     if (docWatchdog) clearTimeout(docWatchdog);
     docWatchdog = setTimeout(() => {
       docWatchdog = null;
+      if (docDelCobro.estado === 'consultando') docDelCobro = { estado: 'error', doc: null }; // v2.8.0
       setDocBusy(false);
       docSay('No se pudo comprobar si ya existe documento (el page code puede estar desactualizado: requiere v2.3.0). Puedes emitir igualmente.', 'err');
     }, 8000);
@@ -1228,6 +1327,7 @@
 
   // Pinta un documento ya emitido: número, importe y enlace al PDF.
   function pintarDocumento(doc) {
+    docDelCobro = { estado: 'existe', doc }; // v2.8.0 — consulta, ticket o factura recién emitidos
     el.docActions.style.display = 'none';
     el.docCifWrap.style.display = 'none';
     el.docExistente.style.display = 'block';
@@ -1348,7 +1448,9 @@
   el.btnAnular.addEventListener('click', handleAnularClick);
   el.anulMotivo.addEventListener('change', updateAnulOtroVisibility);
   // v2.7.0 — botones propios del bloque de anulación
-  el.btnAnulConfirmar.addEventListener('click', doAnular);
+  el.btnAnulConfirmar.addEventListener('click', abrirUltimaAdvertencia); // v2.8.0 — ya no envía directamente
+  el.btnUaVolver.addEventListener('click', () => { cerrarUltimaAdvertencia(); el.btnAnulConfirmar.focus(); });
+  el.btnUaAnular.addEventListener('click', () => { cerrarUltimaAdvertencia(); doAnular(); });
   el.btnAnulVolver.addEventListener('click', volverDeAnulacion);
   el.anulMotivo.addEventListener('change', updateAnularConfirmState);
   el.anulOtro.addEventListener('input', updateAnularConfirmState);
@@ -1416,22 +1518,9 @@
         : '';
       showToast(`✓ Cobro anulado · reversión ${imp}`, 'success');
       closeModal();
-
-      // Avisos que el operador DEBE gestionar a mano. Van en alert()
-      // y no en toast porque un toast se va solo y esto no se puede
-      // perder: hay consecuencias fiscales o de saldo del cliente.
-      const av = p.avisos || {};
-      const pendientes = [];
-      if (av.factura) {
-        pendientes.push(`• Esta cita tiene emitido el documento ${av.factura}.\n  Anular el cobro NO anula la factura. Para corregirla hay que\n  emitir una FACTURA RECTIFICATIVA.`);
-      }
-      if (av.hayCanje) {
-        pendientes.push('• El cobro incluía un canje de bono o tarjeta.\n  El uso consumido NO se ha devuelto al cliente: hay que\n  restaurarlo a mano desde Gestión de Bonos y Promociones.');
-      }
-      if (pendientes.length) {
-        alert('⚠️ ANULACIÓN REGISTRADA — QUEDAN COSAS PENDIENTES\n\n' + pendientes.join('\n\n'));
-      }
-
+      // v2.8.0 — Retirado el alert QUEDAN COSAS PENDIENTES: documento
+      // emitido y canje ya se avisan en ÚLTIMA ADVERTENCIA, antes de
+      // confirmar. p.avisos sigue llegando del backend y no se usa aquí.
       refreshList();
     }
     if (msg.type === 'anularError') {
@@ -1490,8 +1579,10 @@
       } else if (p.error) {
         // No se pudo consultar: dejamos los botones activos. Si el
         // documento ya existiera, la idempotencia del backend lo frena.
+        docDelCobro = { estado: 'error', doc: null }; // v2.8.0
         docSay('No se pudo comprobar si ya hay documento: ' + p.error, 'err');
       } else {
+        docDelCobro = { estado: 'ninguno', doc: null }; // v2.8.0
         docSay('', 'info');
       }
     }
