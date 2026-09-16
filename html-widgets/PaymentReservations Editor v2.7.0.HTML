@@ -9,7 +9,36 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Reservas y Pagos Editor v2.6.0
+       KAMISUITE — Reservas y Pagos Editor v2.7.0
+       v2.7.0 (16 sep 2026) — ANULAR COBRO: SECUENCIA SIN AMBIGÜEDAD.
+       Problema en producción: para anular había que volver a pulsar el
+       MISMO botón del pie (que cambiaba su leyenda a Confirmar
+       anulación) antes de 12 s. Pasado ese tiempo el botón se desarmaba
+       solo, y el siguiente clic volvía a armarlo sin enviar nada.
+       Además Guardar cambios seguía visible y parecía el paso final:
+       se pulsaba, salía el verde de Registro actualizado y el cobro
+       seguía sin anular.
+       Secuencia nueva:
+         · Anular cobro (pie) abre el bloque de anulación, bloquea los
+           campos de la ficha y OCULTA EL PIE ENTERO (Anular, Borrar
+           reserva completa, Cancelar y Guardar cambios).
+         · El bloque tiene sus dos botones propios: Volver (gris, como
+           Cancelar), que cierra el bloque y devuelve la ficha editable,
+           y Confirmar anulación (naranja, texto blanco en negrita).
+         · Confirmar anulación está atenuado y no responde hasta que el
+           motivo es válido (con Otro, también el texto). Cuando se
+           puede confirmar parpadea sin límite de tiempo.
+         · Un clic en Confirmar anulación envía. Mientras espera respuesta
+           muestra Anulando... y Volver queda inactivo. Si hay error, el
+           bloque sigue abierto con lo escrito y el botón vuelve a estar
+           activo.
+         · Eliminado el temporizador de 12 s (anularConfirmTimer).
+       Quién anula sigue siendo opcional, como en v2.3.0.
+       Contrato con page code y backend SIN CAMBIOS: mismo mensaje
+       'anular' con {_id, motivo, usuario} y mismas respuestas
+       'anulado' / 'anularError'. No requiere tocar page code v2.4.0 ni
+       paymentReservationsLogic v1.4.0.
+       La clase CSS .btn-anular.confirming queda sin uso.
        v2.6.0 (14 ago 2026) — MARCA DE DOCUMENTO EN EL LISTADO.
        Primera columna nueva, DOC: pastilla T (ticket) o F (factura) en
        los cobros que ya tienen documento vigente. Clic en la pastilla
@@ -260,6 +289,10 @@
     #anulBox { display: none; border: 1px solid rgba(232,84,84,.35); background: rgba(232,84,84,.06); border-radius: 8px; padding: 12px; margin-top: 12px; }
     #anulBox .anul-title { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--red); margin-bottom: 10px; font-weight: 600; }
     #anulBox .anul-hint { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+    /* v2.7.0 — botones propios del bloque de anulación */
+    #anulBox .anul-actions { display: flex; gap: 10px; margin-top: 12px; }
+    .btn-anular-confirm { background: var(--orange); color: #fff; font-weight: 700; border: 1px solid var(--orange); flex: 1; animation: pulse 1.5s ease-in-out infinite; }
+    .btn-anular-confirm:disabled { opacity: .5; cursor: not-allowed; animation: none; }
     #anulOtroWrap { display: none; margin-top: 8px; }
     .badge-estado { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
     .badge-anulado { background: rgba(232,84,84,.18); color: var(--red); }
@@ -330,7 +363,7 @@
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · PaymentReservations</span>
-    <span class="header-version">v2.6.0</span>
+    <span class="header-version">v2.7.0</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -486,6 +519,11 @@
             El cobro NO se borra. Queda marcado como ANULADO y se crea una fila de reversión
             con el importe en negativo. La cita vuelve a PENDIENTE DE COBRO.
           </div>
+          <!-- v2.7.0 — Botones propios del bloque: el pie queda oculto mientras se anula. -->
+          <div class="anul-actions">
+            <button type="button" class="btn btn-cancel" id="btnAnulVolver">← Volver</button>
+            <button type="button" class="btn btn-anular-confirm" id="btnAnulConfirmar" disabled>🚫 Confirmar anulación</button>
+          </div>
         </div>
 
           <div class="readonly-title">Datos de referencia (solo lectura)</div>
@@ -494,7 +532,7 @@
           <div class="readonly-field"><span class="readonly-key">Booking ID</span><span class="readonly-val" id="roBookingId">—</span></div>
         </div>
       </div>
-      <div class="modal-footer">
+      <div class="modal-footer" id="modalFooter">
         <button class="btn btn-anular" id="btnAnular" title="Anular este cobro: no se borra, se marca como ANULADO y se genera una reversión con el importe negado.">
           🚫 Anular cobro
         </button>
@@ -517,8 +555,6 @@
   let sortField = 'fechaPago';
   let sortDir = 'desc';
 
-  // estado de confirmación de borrado (1 click warning, 2 click delete)
-  let anularConfirmTimer = null;
   // v2.3.0 — recuerda el nombre tecleado en "Quién anula" durante la sesión
   let ultimoUsuarioAnulacion = '';
 
@@ -541,6 +577,9 @@
     btnCancel: document.getElementById('btnCancel'),
     btnSave: document.getElementById('btnSave'),
     btnAnular: document.getElementById('btnAnular'),
+    btnAnulVolver: document.getElementById('btnAnulVolver'),       // v2.7.0
+    btnAnulConfirmar: document.getElementById('btnAnulConfirmar'), // v2.7.0
+    modalFooter: document.getElementById('modalFooter'),           // v2.7.0
     anulBox: document.getElementById('anulBox'),
     anulMotivo: document.getElementById('anulMotivo'),
     anulOtroWrap: document.getElementById('anulOtroWrap'),
@@ -958,48 +997,56 @@
     }
   }
 
-  // v2.3.0 — ANULAR COBRO con confirmación en 2 clics.
-  // 1er clic  → despliega #anulBox (motivo + usuario) y arma el botón.
-  // 2º clic   → valida y envía. Sin motivo NO se envía nada.
-  // El timer de auto-reset es de 12s (no 4s como el borrado antiguo):
-  // ahora hay que rellenar un formulario, 4s no daba tiempo.
+  // v2.7.0 — ANULAR COBRO. Secuencia:
+  //   · Anular cobro (pie) → abre #anulBox, bloquea la ficha y oculta el
+  //     pie entero, para que Guardar cambios no parezca el paso final.
+  //   · Volver → cierra el bloque y devuelve la ficha editable.
+  //   · Confirmar anulación → un clic y envía. Atenuado hasta que el
+  //     motivo es válido. Sin temporizador: nada se desarma solo.
   function handleAnularClick() {
-    if (el.btnAnular.classList.contains('confirming')) {
-      doAnular();
-    } else {
-      el.anulBox.style.display = 'block';
-      el.btnAnular.classList.add('confirming');
-      el.btnAnular.innerHTML = '⚠ Confirmar anulación';
-      if (el.anulUsuario.value.trim() === '' && ultimoUsuarioAnulacion) {
-        el.anulUsuario.value = ultimoUsuarioAnulacion;
-      }
-      el.anulMotivo.focus();
-      if (anularConfirmTimer) clearTimeout(anularConfirmTimer);
-      anularConfirmTimer = setTimeout(() => { resetAnularButton(); }, 12000);
+    el.anulBox.style.display = 'block';
+    setModalReadOnly(true);
+    el.modalFooter.style.display = 'none';
+    if (el.anulUsuario.value.trim() === '' && ultimoUsuarioAnulacion) {
+      el.anulUsuario.value = ultimoUsuarioAnulacion;
     }
+    updateAnularConfirmState();
+    el.anulMotivo.focus();
   }
 
-  // Reset del botón. NO oculta #anulBox si el operador ya escribió algo:
-  // perder lo tecleado por un timeout es lo que hace que la gente
-  // deje de usar la herramienta.
+  // Confirmar anulación solo responde con un motivo válido (mismo
+  // criterio que resolverMotivo, que es lo que viaja al backend).
+  function updateAnularConfirmState() {
+    el.btnAnulConfirmar.disabled = !resolverMotivo().ok;
+  }
+
+  // Estado de reposo de los botones del bloque: leyenda original,
+  // Volver activo y Confirmar según el motivo. Se usa al cerrar el
+  // bloque y tras un error del backend (el bloque sigue abierto).
   function resetAnularButton() {
-    if (anularConfirmTimer) {
-      clearTimeout(anularConfirmTimer);
-      anularConfirmTimer = null;
-    }
-    el.btnAnular.classList.remove('confirming');
-    el.btnAnular.innerHTML = '🚫 Anular cobro';
-    el.btnAnular.disabled = false;
+    el.btnAnulConfirmar.innerHTML = '🚫 Confirmar anulación';
+    el.btnAnulVolver.disabled = false;
+    updateAnularConfirmState();
   }
 
-  // Cierre completo: oculta el bloque y limpia. Solo al abrir/cerrar modal.
+  // Cierre completo: oculta el bloque, limpia y devuelve el pie.
+  // Solo al abrir/cerrar modal y al pulsar Volver.
   function resetAnulBox() {
-    resetAnularButton();
     el.anulBox.style.display = 'none';
     el.anulMotivo.value = '';
     el.anulOtro.value = '';
     el.anulOtroWrap.style.display = 'none';
     el.anulUsuario.value = '';
+    el.modalFooter.style.display = '';
+    resetAnularButton();
+  }
+
+  // Volver: sale del modo anulación sin tocar nada del cobro.
+  // Solo es alcanzable desde filas ACTIVO (en ANULADO/REVERSION el
+  // botón Anular cobro no se muestra), así que la ficha vuelve editable.
+  function volverDeAnulacion() {
+    resetAnulBox();
+    setModalReadOnly(false);
   }
 
   function updateAnulOtroVisibility() {
@@ -1028,17 +1075,16 @@
     const m = resolverMotivo();
     if (!m.ok) {
       showToast('✕ ' + m.error, 'error');
-      // Rearmar el timer: el operador sigue dentro del formulario.
-      if (anularConfirmTimer) clearTimeout(anularConfirmTimer);
-      anularConfirmTimer = setTimeout(() => { resetAnularButton(); }, 12000);
       return;
     }
     const usuario = el.anulUsuario.value.trim();
     ultimoUsuarioAnulacion = usuario;
 
-    el.btnAnular.disabled = true;
+    // v2.7.0 — el envío se refleja en el botón del bloque (el pie está oculto)
+    el.btnAnulConfirmar.disabled = true;
+    el.btnAnulVolver.disabled = true;
     el.btnSave.disabled = true;
-    el.btnAnular.innerHTML = 'Anulando...';
+    el.btnAnulConfirmar.innerHTML = 'Anulando...';
     const row = el.content.querySelector(`tr[data-id="${_id}"]`);
     if (row) row.classList.add('row-deleting');
     parent.postMessage({ type: 'anular', payload: { _id, motivo: m.motivo, usuario } }, '*');
@@ -1301,6 +1347,11 @@
   el.btnSave.addEventListener('click', saveChanges);
   el.btnAnular.addEventListener('click', handleAnularClick);
   el.anulMotivo.addEventListener('change', updateAnulOtroVisibility);
+  // v2.7.0 — botones propios del bloque de anulación
+  el.btnAnulConfirmar.addEventListener('click', doAnular);
+  el.btnAnulVolver.addEventListener('click', volverDeAnulacion);
+  el.anulMotivo.addEventListener('change', updateAnularConfirmState);
+  el.anulOtro.addEventListener('input', updateAnularConfirmState);
   // v2.4.0 — documentos fiscales
   el.btnTicket.addEventListener('click', pedirTicket);
   el.btnFactura.addEventListener('click', pedirFactura);
