@@ -1,8 +1,19 @@
 // ═══════════════════════════════════════════════════════════════
-// paymentReservationsLogic.web.js  v1.4.0
+// paymentReservationsLogic.web.js  v1.4.1
 // KAMISUITE — CRUD PaymentReservations + verificación de contactIds
 // ═══════════════════════════════════════════════════════════════
 // CHANGELOG:
+//   v1.4.1 (16-sep-2026) — FIX aviso de canje al anular un cobro de cita.
+//     anularPaymentReservation calculaba avisos.hayCanje con
+//     _avisosDeReserva DESPUÉS de marcar el cobro como ANULADO, y
+//     _avisosDeReserva solo busca el canje entre los cobros ACTIVOS:
+//     el cobro recién anulado ya no cuenta, así que en los cobros de
+//     cita (KRI_) hayCanje salía SIEMPRE false aunque fuera un canje.
+//     En ventas sin cita ya funcionaba (se miraba el tipoPago del item).
+//     Fix: hayCanje también es true si el propio cobro anulado tiene
+//     tipoPago 'Canje'. No cambia el orden de escritura ni el contrato.
+//     _avisosDeReserva NO se toca (su criterio de activos es correcto
+//     para el HARD DELETE y para nCobros/totalCobros).
 //   v1.4.0 (14-ago-2026) — ANULACIÓN DE COBROS (sustituye al borrado
 //     físico desde el Editor). NEW anularPaymentReservation: el cobro
 //     original NUNCA se borra; se marca estadoCobro='ANULADO' con
@@ -145,7 +156,7 @@ import { sessions } from 'wix-bookings-backend'; // v1.3.3 — liberar huecos de
 
 const COLLECTION = 'PaymentReservations';
 const COLECCION_RESERVAS = 'KamisuiteReservations'; // v1.3.1 — reversión de status al borrar cobro KRI_
-const TAG = '[PaymentReservations][v1.4.0]';
+const TAG = '[PaymentReservations][v1.4.1]';
 
 // ── v1.4.0 — Estados de cobro ───────────────────────────────────
 // OJO: las filas anteriores a v1.4.0 tienen estadoCobro VACÍO.
@@ -551,7 +562,10 @@ export const anularPaymentReservation = webMethod(
       try {
         if (reservaId) {
           const a = await _avisosDeReserva(reservaId);
-          avisos = { factura: a.factura, hayCanje: a.hayCanje };
+          // v1.4.1 — el cobro que se anula ya está marcado ANULADO y
+          // _avisosDeReserva solo mira activos: se añade su propio tipoPago.
+          const esCanjeEste = String(item.tipoPago || '').toLowerCase() === 'canje';
+          avisos = { factura: a.factura, hayCanje: a.hayCanje || esCanjeEste };
         } else if (String(item.tipoPago || '').toLowerCase() === 'canje') {
           avisos.hayCanje = true;
         }
