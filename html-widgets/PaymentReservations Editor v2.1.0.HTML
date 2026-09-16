@@ -3,13 +3,112 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KAMISUITE — PaymentReservations</title>
+  <title>KAMISUITE — Reservas y Pagos</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — PaymentReservations Editor v2.1.0
+       KAMISUITE — Reservas y Pagos Editor v2.6.0
+       v2.6.0 (14 ago 2026) — MARCA DE DOCUMENTO EN EL LISTADO.
+       Primera columna nueva, DOC: pastilla T (ticket) o F (factura) en
+       los cobros que ya tienen documento vigente. Clic en la pastilla
+       abre el PDF SIN entrar en la ficha del cobro.
+       El indice se pide UNA vez por carga de lista (no una por fila) y
+       se cruza por bookingId. El PDF se resuelve al pulsar, porque el
+       enlace que genera Wix caduca a la hora.
+       Ventana abierta ANTES de la llamada asincrona y redirigida al
+       llegar la URL: si se abriera despues, el navegador lo trataria
+       como popup fuera de gesto de usuario y lo bloquearia.
+       Requiere facturacionSalonLogic v1.0.7 + page code v2.4.0.
+       v2.5.2 (14 ago 2026) — FIX CRÍTICO: el widget salía SIN ESTILOS
+       (fondo blanco, texto negro). Causa: este changelog es un
+       comentario CSS dentro del <style>, y en v2.5.1 escribí
+       "generarTicket" + asterisco + barra, secuencia que CIERRA el
+       comentario. El parser se comió el resto del texto y con él el
+       bloque :root entero: sin variables, todos los color/background
+       quedaban inválidos.
+       Regla para futuras ediciones de esta cabecera: NUNCA escribir un
+       asterisco seguido de barra en el changelog, ni siquiera dentro de
+       nombres de función tipo generarTicket-asterisco. Verificar con
+       que el primer cssRule de la hoja siga siendo :root.
+       v2.5.1 (14 ago 2026) — FIX: "No se pudo emitir el ticket" con el
+       ticket REALMENTE EMITIDO. Causa: los dos webMethods devuelven
+       formas DISTINTAS y v2.5.0 asumía una sola.
+         · generarTicket y generarFactura (_emitirDocumento) devuelven
+           los campos PLANOS EN RAÍZ: {ok, duplicado, modo,
+           invoiceNumber, pdfUrl, totalAmount, ..., rectifica}.
+           NO existe la clave 'documento'.
+         · obtenerDocumento* devuelve {ok, existe, documento:{...}} y
+           además copia los campos en raíz por compatibilidad.
+       v2.5.0 comprobaba `r.ok && r.documento` en la emisión: siempre
+       falso, caía al else, y como no hay `r.error` pintaba el mensaje
+       genérico. El documento se había emitido y consumido número de
+       InvoiceCounters.
+       FIX: normalizarDoc() acepta las dos formas (patrón del widget de
+       Recepción PRO v1.1.57, que lee p.invoiceNumber en la emisión y
+       p.documento.* en la consulta). Añadido textoError(), porque el
+       page code de PRO envuelve el error como {message} y el backend
+       lo manda como string.
+       Añadido soporte de `rectifica` (upgrade ticket→factura), que en
+       v2.5.0 se perdía silenciosamente.
+       v2.5.0 (14 ago 2026) — FIX ESTÉTICO del bloque de documento
+       fiscal. Causa real de que los botones parecieran texto plano:
+       el CSS de v2.4.x usaba var(--line) y var(--fg), que NO EXISTEN
+       en esta hoja (son --border y --text). Una var inválida anula la
+       declaración entera: sin borde y sin color, el botón se veía como
+       una etiqueta. Corregidas las 6 ocurrencias.
+       · Marco outline en #docBox, tintado con el dorado de marca.
+       · Ticket y Factura como botones reales, flex:1, misma anchura,
+         alineados con el resto del modal.
+       · Emojis 🧾 y 📄 eliminados: Bai Jamjuree no los tiene y salían
+         como cuadros vacíos. Se distinguen por color, no por icono.
+       v2.4.1 (14 ago 2026) — FIX: los botones Ticket/Factura se
+       quedaban deshabilitados para siempre si el page code no
+       respondía a 'obtenerDocPago' (típico si el page code sigue en
+       v2.2.0, sin ese handler). El bloque se pintaba pero muerto, y
+       parecía que la función no existía. Ahora hay watchdog de 8s:
+       se reactivan los botones y se avisa de que el page code puede
+       estar desactualizado. Un widget no debe quedar inservible
+       porque su page code vaya por detrás.
+       v2.4.0 (14 ago 2026) — EMITIR TICKET / FACTURA desde el Editor.
+       · Bloque #docBox en el modal. Al abrir un cobro se consulta si ya
+         tiene documento: si lo tiene, badge con el número y enlace al
+         PDF; si no, botones [Ticket] y [Factura completa].
+       · Sirve para cobros de cita (KRI_) y para ventas sin cita
+         (TIENDA, ESP_). El routing lo decide el page code, aquí solo
+         se manda el bookingId de la fila.
+       · Si el backend responde que falta el CIF, se despliega el
+         formulario CIF + razón social y se reintenta. Los datos se
+         persisten en el CRM del cliente (lo hace el backend).
+       · Botones ocultos en filas ANULADO y REVERSION, y en cobros de
+         importe <= 0. No se factura lo que no se ha cobrado.
+       · El PDF lo genera y sube el backend; aquí solo se abre la URL.
+       Requiere facturacionSalonLogic v1.0.6 + page code v2.3.0.
+       v2.3.0 (14 ago 2026) — ANULAR COBRO sustituye a BORRAR.
+       · El botón 🗑️ Borrar desaparece del modal. En su lugar
+         🚫 Anular cobro, que NO borra la fila: marca el cobro como
+         ANULADO y el backend inserta una fila de REVERSION con el
+         importe negado. Trazabilidad completa (quién, cuándo, por qué).
+       · Bloque #anulBox: desplegable de motivo (lista cerrada) +
+         texto libre obligatorio si el motivo es "Otro" + campo de
+         usuario. Se despliega al primer clic; el segundo confirma.
+       · Filas ANULADO y REVERSION se pintan atenuadas con badge de
+         estado. Al abrirlas el modal entra en SOLO LECTURA: no se
+         pueden editar ni volver a anular (editar el importe de una
+         reversión descuadraría el neto del cierre).
+       · Columna "Estado" nueva en la tabla.
+       · Tras anular se refresca la lista completa: ha aparecido una
+         fila nueva en el CMS que el widget no tiene en memoria.
+       · Corregido el desfase de versión: la etiqueta del header
+         pintaba v2.1.0 con la cabecera del archivo en v2.2.0.
+       · HARD DELETE (🧨 Borrar reserva completa) INTACTO: sigue
+         siendo la salida de emergencia y sigue borrando físicamente.
+       Requiere backend v1.4.0 + page code v2.2.0.
+       v2.2.0 (1 ago 2026) — Botón HARD DELETE: borra la reserva completa
+       (cobro + reserva + huecos de calendario) para citas mal planteadas
+       ya cobradas. Solo visible en cobros KRI_ (citas internas). Aviso
+       previo con confirm() de canje/factura/puntos. Mixto v2.1.0 intacto.
        v2.1.0 (1-ago-2026): SOPORTE COMPLETO PARA EDITAR
                COBROS MIXTOS. El select tipoPago=Mixto ahora
                despliega un bloque editable con 3 inputs
@@ -149,6 +248,59 @@
     .btn-delete:hover { background: var(--red-dim); border-color: var(--red); }
     .btn-delete:disabled { opacity: .5; cursor: not-allowed; }
     .btn-delete.confirming { background: var(--red); color: var(--bg); border-color: var(--red); animation: pulse 1.5s ease-in-out infinite; }
+    .btn-harddelete { background: var(--red); color: var(--bg); border: 1px solid var(--red); padding: 10px 14px; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+    .btn-harddelete:hover { filter: brightness(1.12); }
+    .btn-harddelete:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* v2.3.0 — ANULAR COBRO */
+    .btn-anular { background: transparent; color: var(--red); border: 1px solid rgba(232,84,84,.4); padding: 10px 14px; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-anular:hover { background: var(--red-dim); border-color: var(--red); }
+    .btn-anular:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-anular.confirming { background: var(--red); color: var(--bg); border-color: var(--red); animation: pulse 1.5s ease-in-out infinite; }
+    #anulBox { display: none; border: 1px solid rgba(232,84,84,.35); background: rgba(232,84,84,.06); border-radius: 8px; padding: 12px; margin-top: 12px; }
+    #anulBox .anul-title { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--red); margin-bottom: 10px; font-weight: 600; }
+    #anulBox .anul-hint { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+    #anulOtroWrap { display: none; margin-top: 8px; }
+    .badge-estado { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; letter-spacing: .3px; }
+    .badge-anulado { background: rgba(232,84,84,.18); color: var(--red); }
+    .badge-reversion { background: rgba(232,84,84,.10); color: var(--red); }
+    .badge-activo { background: transparent; color: var(--muted); }
+    tbody tr.row-anulada td { opacity: .5; }
+    tbody tr.row-anulada .col-importe { text-decoration: line-through; }
+    tbody tr.row-reversion .col-importe { color: var(--red); font-weight: 600; }
+    #anulInfo { display: none; border: 1px solid rgba(232,84,84,.35); background: rgba(232,84,84,.06); border-radius: 8px; padding: 12px; margin-bottom: 14px; }
+    #anulInfo .anul-title { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--red); margin-bottom: 8px; font-weight: 600; }
+    #anulInfo .anul-row { font-size: 12px; color: var(--text); margin-bottom: 4px; }
+    #anulInfo .anul-row span { color: var(--muted); display: inline-block; min-width: 72px; }
+
+    /* v2.5.0 — Emisión de documentos (marco outline + botones reales) */
+    #docBox { border: 1px solid rgba(201,164,74,.30); background: var(--surface2); border-radius: var(--radius); padding: 14px; margin-bottom: 16px; }
+    #docBox .doc-title { font-size: 10px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 12px; }
+    #docBox .doc-actions { display: flex; gap: 10px; align-items: stretch; }
+    .btn-doc { flex: 1; background: var(--surface3); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 11px 14px; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .15s; text-align: center; }
+    .btn-doc:hover:not(:disabled) { border-color: var(--border-hover); background: var(--surface); }
+    .btn-doc:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-doc-primary { background: var(--accent-dim); color: var(--accent); border-color: rgba(201,164,74,.45); }
+    .btn-doc-primary:hover:not(:disabled) { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    #docExistente { display: none; border: 1px solid rgba(54,192,106,.30); background: var(--green-dim); border-radius: var(--radius-sm); padding: 12px; }
+    #docExistente .doc-num { font-size: 15px; font-weight: 700; color: var(--green); letter-spacing: .5px; }
+    #docExistente .doc-meta { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+    #docExistente a.doc-link { color: var(--accent); text-decoration: none; font-size: 12px; font-weight: 600; display: inline-block; margin-top: 10px; padding: 7px 12px; border: 1px solid rgba(201,164,74,.40); border-radius: var(--radius-sm); transition: all .15s; }
+    #docExistente a.doc-link:hover { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    #docCifWrap { display: none; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+    #docCifWrap .doc-hint { font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.55; }
+    #docCifWrap .btn-doc { width: 100%; flex: none; }
+    #docMsg { font-size: 11px; margin-top: 10px; line-height: 1.5; display: none; }
+    #docMsg.err { color: var(--red); }
+    #docMsg.info { color: var(--muted); }
+
+    /* v2.6.0 — Columna DOC del listado */
+    .badge-doc { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; transition: all .15s; border: 1px solid transparent; }
+    .badge-doc-t { background: var(--blue-dim); color: var(--blue); border-color: rgba(74,158,201,.35); }
+    .badge-doc-f { background: var(--accent-dim); color: var(--accent); border-color: rgba(201,164,74,.40); }
+    .badge-doc:hover { filter: brightness(1.35); }
+    .badge-doc.loading { opacity: .5; cursor: wait; }
+    .doc-none { color: rgba(255,255,255,.18); font-size: 12px; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .75; } }
 
     /* v2.1.0 — Bloque editable de desglose Mixto (encaja con el modal existente) */
@@ -178,7 +330,7 @@
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · PaymentReservations</span>
-    <span class="header-version">v2.1.0</span>
+    <span class="header-version">v2.6.0</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -222,6 +374,43 @@
       </div>
       <div class="modal-body">
         <input type="hidden" id="editId">
+        <!-- v2.3.0 — Ficha de anulación (solo lectura). Visible en filas ANULADO / REVERSION. -->
+        <div id="anulInfo">
+          <div class="anul-title" id="anulInfoTitle">Cobro anulado</div>
+          <div class="anul-row"><span>Motivo:</span> <strong id="anulInfoMotivo">—</strong></div>
+          <div class="anul-row"><span>Usuario:</span> <strong id="anulInfoUsuario">—</strong></div>
+          <div class="anul-row"><span>Fecha:</span> <strong id="anulInfoFecha">—</strong></div>
+          <div class="anul-hint" id="anulInfoHint"></div>
+        </div>
+        <!-- v2.4.0 — Emisión / consulta de documento de venta -->
+        <div id="docBox">
+          <div class="doc-title">Documento fiscal</div>
+          <div id="docExistente">
+            <div class="doc-num" id="docNum">—</div>
+            <div class="doc-meta" id="docMeta"></div>
+            <a class="doc-link" id="docLink" href="#" target="_blank" rel="noopener">Abrir PDF</a>
+          </div>
+          <div class="doc-actions" id="docActions">
+            <button class="btn-doc" id="btnTicket" title="Emitir factura simplificada (ticket). No requiere CIF del cliente.">Ticket</button>
+            <button class="btn-doc btn-doc-primary" id="btnFactura" title="Emitir factura completa. Requiere CIF/NIF del cliente.">Factura completa</button>
+          </div>
+          <div id="docCifWrap">
+            <div class="doc-hint">
+              Este cliente no tiene CIF/NIF en su ficha. Introdúcelo para emitir la factura:
+              se guardará en su ficha del CRM y la próxima vez no hará falta.
+            </div>
+            <div class="form-group">
+              <label class="form-label">CIF / NIF</label>
+              <input type="text" class="form-input" id="docVatId" placeholder="B12345678 / 12345678Z" maxlength="20">
+            </div>
+            <div class="form-group" style="margin-bottom:10px;">
+              <label class="form-label">Razón social (opcional)</label>
+              <input type="text" class="form-input" id="docLegalName" placeholder="Nombre fiscal de la empresa" maxlength="120">
+            </div>
+            <button class="btn-doc btn-doc-primary" id="btnFacturaConfirm">Emitir factura</button>
+          </div>
+          <div id="docMsg"></div>
+        </div>
         <div class="form-group">
           <label class="form-label">Nombre cliente <span class="edit-icon">✎</span></label>
           <input type="text" class="form-input" id="editNombre" placeholder="Nombre del cliente">
@@ -271,6 +460,34 @@
           <input type="datetime-local" class="form-input" id="editFechaPago">
         </div>
         <div class="readonly-section">
+        <!-- v2.3.0 — Bloque de anulación. Se despliega al 1er clic en "Anular cobro". -->
+        <div id="anulBox">
+          <div class="anul-title">🚫 Anular este cobro</div>
+          <div class="form-group">
+            <label class="form-label">Motivo de la anulación</label>
+            <select class="form-input" id="anulMotivo">
+              <option value="">— Selecciona un motivo —</option>
+              <option value="Cobro por error — la cita no estaba cobrada">Cobro por error — la cita no estaba cobrada</option>
+              <option value="Método de pago equivocado">Método de pago equivocado</option>
+              <option value="Importe equivocado">Importe equivocado</option>
+              <option value="Cobro duplicado">Cobro duplicado</option>
+              <option value="El cliente finalmente no pagó">El cliente finalmente no pagó</option>
+              <option value="__OTRO__">Otro (especificar)</option>
+            </select>
+          </div>
+          <div id="anulOtroWrap">
+            <input type="text" class="form-input" id="anulOtro" placeholder="Describe el motivo" maxlength="120">
+          </div>
+          <div class="form-group" style="margin-top:12px;margin-bottom:0;">
+            <label class="form-label">Quién anula</label>
+            <input type="text" class="form-input" id="anulUsuario" placeholder="Tu nombre" maxlength="60">
+          </div>
+          <div class="anul-hint">
+            El cobro NO se borra. Queda marcado como ANULADO y se crea una fila de reversión
+            con el importe en negativo. La cita vuelve a PENDIENTE DE COBRO.
+          </div>
+        </div>
+
           <div class="readonly-title">Datos de referencia (solo lectura)</div>
           <div class="readonly-field"><span class="readonly-key">Staff</span><span class="readonly-val" id="roStaff">—</span></div>
           <div class="readonly-field"><span class="readonly-key">Fecha reserva</span><span class="readonly-val" id="roFechaReserva">—</span></div>
@@ -278,8 +495,11 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-delete" id="btnDelete" title="Eliminar este registro del CMS">
-          🗑️ Borrar
+        <button class="btn btn-anular" id="btnAnular" title="Anular este cobro: no se borra, se marca como ANULADO y se genera una reversión con el importe negado.">
+          🚫 Anular cobro
+        </button>
+        <button class="btn btn-harddelete" id="btnHardDelete" title="BORRADO TOTAL: elimina la reserva y su cobro y la quita del calendario. Excepción para citas mal planteadas ya cobradas." style="display:none;">
+          🧨 Borrar reserva completa
         </button>
         <button class="btn btn-cancel" id="btnCancel">Cancelar</button>
         <button class="btn btn-save" id="btnSave">Guardar cambios</button>
@@ -298,7 +518,9 @@
   let sortDir = 'desc';
 
   // estado de confirmación de borrado (1 click warning, 2 click delete)
-  let deleteConfirmTimer = null;
+  let anularConfirmTimer = null;
+  // v2.3.0 — recuerda el nombre tecleado en "Quién anula" durante la sesión
+  let ultimoUsuarioAnulacion = '';
 
   const el = {
     toolbar: document.getElementById('toolbar'),
@@ -318,7 +540,32 @@
     btnClose: document.getElementById('btnModalClose'),
     btnCancel: document.getElementById('btnCancel'),
     btnSave: document.getElementById('btnSave'),
-    btnDelete: document.getElementById('btnDelete'),
+    btnAnular: document.getElementById('btnAnular'),
+    anulBox: document.getElementById('anulBox'),
+    anulMotivo: document.getElementById('anulMotivo'),
+    anulOtroWrap: document.getElementById('anulOtroWrap'),
+    anulOtro: document.getElementById('anulOtro'),
+    anulUsuario: document.getElementById('anulUsuario'),
+    anulInfo: document.getElementById('anulInfo'),
+    anulInfoTitle: document.getElementById('anulInfoTitle'),
+    anulInfoMotivo: document.getElementById('anulInfoMotivo'),
+    anulInfoUsuario: document.getElementById('anulInfoUsuario'),
+    anulInfoFecha: document.getElementById('anulInfoFecha'),
+    anulInfoHint: document.getElementById('anulInfoHint'),
+    docBox: document.getElementById('docBox'),
+    docExistente: document.getElementById('docExistente'),
+    docNum: document.getElementById('docNum'),
+    docMeta: document.getElementById('docMeta'),
+    docLink: document.getElementById('docLink'),
+    docActions: document.getElementById('docActions'),
+    btnTicket: document.getElementById('btnTicket'),
+    btnFactura: document.getElementById('btnFactura'),
+    docCifWrap: document.getElementById('docCifWrap'),
+    docVatId: document.getElementById('docVatId'),
+    docLegalName: document.getElementById('docLegalName'),
+    btnFacturaConfirm: document.getElementById('btnFacturaConfirm'),
+    docMsg: document.getElementById('docMsg'),
+    btnHardDelete: document.getElementById('btnHardDelete'),
     editId: document.getElementById('editId'),
     editNombre: document.getElementById('editNombre'),
     editImporte: document.getElementById('editImporte'),
@@ -341,6 +588,8 @@
     allItems = (data.items || []).map(item => {
       if (item.fechaPago && !(item.fechaPago instanceof Date)) item.fechaPago = new Date(item.fechaPago);
       if (item.fechaReserva && !(item.fechaReserva instanceof Date)) item.fechaReserva = new Date(item.fechaReserva);
+      // v2.3.0 — fecha de anulación (ficha de solo lectura del modal)
+      if (item.fechaAnulacion && !(item.fechaAnulacion instanceof Date)) item.fechaAnulacion = new Date(item.fechaAnulacion);
       return item;
     });
     const staffSet = new Set();
@@ -350,6 +599,8 @@
     staffList.forEach(s => { el.filterStaff.innerHTML += `<option value="${esc(s)}">${esc(formatStaffName(s))}</option>`; });
     el.toolbar.style.display = 'flex';
     el.summaryBar.style.display = 'flex';
+    // v2.6.0 — una sola petición por carga de lista
+    parent.postMessage({ type: 'indiceDocumentos' }, '*');
     if (!data.isRefresh) currentPage = 1;
     applyFilters();
   }
@@ -407,10 +658,14 @@
       { key: 'descripcion', label: 'Descripción', width: '' },
       { key: 'importeTotal', label: 'Importe', width: '90px' },
       { key: 'tipoPago', label: 'Pago', width: '80px' },
-      { key: 'staff', label: 'Staff', width: '90px' }
+      { key: 'staff', label: 'Staff', width: '90px' },
+      { key: 'estadoCobro', label: 'Estado', width: '95px' } // v2.3.0
     ];
     let html = '<div class="table-wrap"><table>';
     html += '<thead><tr>';
+    // v2.6.0 — DOC va primera y NO es ordenable: no es un dato del cobro
+    // sino un cruce contra Invoices, y ordenar por él confundiría.
+    html += '<th style="width:46px">DOC</th>';
     cols.forEach(col => {
       const isSorted = sortField === col.key;
       const arrow = isSorted ? (sortDir === 'asc' ? '▲' : '▼') : '▼';
@@ -427,17 +682,49 @@
       const tipoPago = item.tipoPago || '—';
       const badgeCls = getBadgePagoClass(tipoPago);
       const staffDisplay = esc(formatStaffName(item.staff));
-      html += `<tr data-id="${item._id}">
+      // v2.3.0 — estado del cobro: atenúa anuladas, resalta reversiones
+      const est = estadoDe(item);
+      const rowCls = est === 'ANULADO' ? ' class="row-anulada"'
+        : est === 'REVERSION' ? ' class="row-reversion"' : '';
+      const estCell = est === 'ANULADO'
+        ? '<span class="badge-estado badge-anulado">ANULADO</span>'
+        : est === 'REVERSION'
+          ? '<span class="badge-estado badge-reversion">↩️ REVERSIÓN</span>'
+          : '<span class="badge-estado badge-activo">—</span>';
+      // v2.6.0 — pastilla de documento. Mientras el índice no ha llegado
+      // se deja la celda vacía: marcar "sin documento" antes de tiempo
+      // sería mentir al operador.
+      const bId = String(item.bookingId || '');
+      const dInfo = docIndex[bId];
+      let docCell = '<span class="doc-none">·</span>';
+      if (docIndexRecibido && dInfo) {
+        const esFac = String(dInfo.modo || '').toLowerCase().indexOf('factura') >= 0;
+        docCell = `<span class="badge-doc ${esFac ? 'badge-doc-f' : 'badge-doc-t'}"`
+          + ` data-doc="${esc(bId)}"`
+          + ` title="${esFac ? 'Factura' : 'Ticket'} ${esc(dInfo.invoiceNumber)} — abrir PDF">`
+          + `${esFac ? 'F' : 'T'}</span>`;
+      }
+      html += `<tr data-id="${item._id}"${rowCls}>
+        <td>${docCell}</td>
         <td>${fechaPagoStr}</td>
         <td class="col-nombre">${nombre}</td>
         <td class="col-descripcion" title="${desc}">${desc}</td>
         <td class="col-importe">${importe}</td>
         <td><span class="badge-pago ${badgeCls}">${esc(tipoPago)}</span></td>
         <td>${staffDisplay}</td>
+        <td>${estCell}</td>
       </tr>`;
     });
     html += '</tbody></table></div>';
     el.content.innerHTML = html;
+    // v2.6.0 — clic en la pastilla: abre el PDF y NO abre la ficha.
+    // stopPropagation es imprescindible: el <tr> tiene su propio listener.
+    el.content.querySelectorAll('.badge-doc').forEach(b => {
+      b.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        abrirDocDesdeLista(b);
+      });
+    });
     el.content.querySelectorAll('tbody tr').forEach(tr => { tr.addEventListener('click', () => openModal(tr.dataset.id)); });
     el.content.querySelectorAll('thead th[data-sort]').forEach(th => {
       th.addEventListener('click', () => {
@@ -485,8 +772,8 @@
   function openModal(id) {
     const item = allItems.find(x => x._id === id);
     if (!item) return;
-    // resetear estado del botón borrar
-    resetDeleteButton();
+    // v2.3.0 — resetear el bloque de anulación
+    resetAnulBox();
 
     el.editId.value = item._id;
     el.editNombre.value = item.nombreCliente || '';
@@ -498,6 +785,18 @@
     el.roStaff.textContent = formatStaffName(item.staff) || '—';
     el.roFechaReserva.textContent = item.fechaReserva ? formatFechaLarga(item.fechaReserva) : '—';
     el.roBookingId.textContent = item.bookingId || '—';
+
+    // HARD DELETE solo para cobros de citas internas (bookingId 'KRI_').
+    const _bId = String(item.bookingId || '');
+    if (_bId.startsWith('KRI_')) {
+      el.btnHardDelete.style.display = '';
+      el.btnHardDelete.dataset.reservaId = _bId.slice(4);
+    } else {
+      el.btnHardDelete.style.display = 'none';
+      el.btnHardDelete.dataset.reservaId = '';
+    }
+    el.btnHardDelete.disabled = false;
+    el.btnHardDelete.innerHTML = '🧨 Borrar reserva completa';
 
     // v2.1.0 — Prerrellenar bloque Mixto si el cobro es Mixto y trae desglose.
     // Formato canónico (idéntico al que emite _openMixto de Recepción PRO):
@@ -520,13 +819,53 @@
 
     el.btnSave.disabled = false;
     el.btnSave.textContent = 'Guardar cambios';
-    el.btnDelete.disabled = false;
+    el.btnAnular.disabled = false;
+
+    // ── v2.3.0 — SOLO LECTURA para filas ANULADO y REVERSION ──
+    // Editar el importe de una reversión descuadraría el neto del
+    // cierre, y reeditar un cobro ya anulado reabriría un registro
+    // que debe quedar congelado como constancia de lo ocurrido.
+    const _est = estadoDe(item);
+    if (_est === 'ACTIVO') {
+      el.anulInfo.style.display = 'none';
+      el.btnAnular.style.display = '';
+      setModalReadOnly(false);
+    } else {
+      el.anulInfo.style.display = 'block';
+      el.btnAnular.style.display = 'none';
+      el.anulInfoTitle.textContent = (_est === 'ANULADO')
+        ? '🚫 Cobro anulado'
+        : '↩️ Fila de reversión';
+      el.anulInfoMotivo.textContent = item.motivoAnulacion || '—';
+      el.anulInfoUsuario.textContent = item.usuarioAnulacion || '—';
+      el.anulInfoFecha.textContent = item.fechaAnulacion
+        ? formatFecha(item.fechaAnulacion instanceof Date ? item.fechaAnulacion : new Date(item.fechaAnulacion))
+        : '—';
+      el.anulInfoHint.textContent = (_est === 'ANULADO')
+        ? 'Este cobro conserva su importe original como constancia. La reversión que lo compensa es otra fila de la lista, con el importe en negativo.'
+        : 'Fila generada automáticamente al anular un cobro. Compensa el importe original en el cierre del día en que se anuló.';
+      setModalReadOnly(true);
+    }
+
+    initDocBox(item); // v2.4.0
+
     el.modal.classList.add('open');
+  }
+
+  // v2.3.0 — Congela/descongela los campos editables del modal.
+  // El HARD DELETE sigue disponible en ambos modos: una cita mal
+  // planteada sigue siendo borrable aunque su cobro esté anulado.
+  function setModalReadOnly(ro) {
+    [el.editNombre, el.editImporte, el.editDescripcion, el.editFechaPago,
+     el.mxT, el.mxE, el.mxB].forEach(inp => { if (inp) inp.readOnly = ro; });
+    el.editTipoPago.disabled = ro;
+    el.btnSave.style.display = ro ? 'none' : '';
   }
 
   function closeModal() {
     el.modal.classList.remove('open');
-    resetDeleteButton();
+    resetAnulBox();
+    resetDocBox(); // v2.4.0
   }
 
   function saveChanges() {
@@ -554,7 +893,7 @@
 
     el.btnSave.disabled = true;
     el.btnSave.textContent = 'Guardando...';
-    el.btnDelete.disabled = true;
+    el.btnAnular.disabled = true;
     const _id = el.editId.value;
     const campos = {
       nombreCliente: el.editNombre.value.trim(),
@@ -619,41 +958,100 @@
     }
   }
 
-  // borrar registro con confirmación de 2 clicks
-  function handleDeleteClick() {
-    if (el.btnDelete.classList.contains('confirming')) {
-      // Segundo click → ejecutar borrado
-      doDelete();
+  // v2.3.0 — ANULAR COBRO con confirmación en 2 clics.
+  // 1er clic  → despliega #anulBox (motivo + usuario) y arma el botón.
+  // 2º clic   → valida y envía. Sin motivo NO se envía nada.
+  // El timer de auto-reset es de 12s (no 4s como el borrado antiguo):
+  // ahora hay que rellenar un formulario, 4s no daba tiempo.
+  function handleAnularClick() {
+    if (el.btnAnular.classList.contains('confirming')) {
+      doAnular();
     } else {
-      // Primer click → modo confirmación
-      el.btnDelete.classList.add('confirming');
-      el.btnDelete.innerHTML = '⚠ ¿Confirmar borrado?';
-      // Auto-reset tras 4s sin confirmar
-      if (deleteConfirmTimer) clearTimeout(deleteConfirmTimer);
-      deleteConfirmTimer = setTimeout(() => { resetDeleteButton(); }, 4000);
+      el.anulBox.style.display = 'block';
+      el.btnAnular.classList.add('confirming');
+      el.btnAnular.innerHTML = '⚠ Confirmar anulación';
+      if (el.anulUsuario.value.trim() === '' && ultimoUsuarioAnulacion) {
+        el.anulUsuario.value = ultimoUsuarioAnulacion;
+      }
+      el.anulMotivo.focus();
+      if (anularConfirmTimer) clearTimeout(anularConfirmTimer);
+      anularConfirmTimer = setTimeout(() => { resetAnularButton(); }, 12000);
     }
   }
 
-  function resetDeleteButton() {
-    if (deleteConfirmTimer) {
-      clearTimeout(deleteConfirmTimer);
-      deleteConfirmTimer = null;
+  // Reset del botón. NO oculta #anulBox si el operador ya escribió algo:
+  // perder lo tecleado por un timeout es lo que hace que la gente
+  // deje de usar la herramienta.
+  function resetAnularButton() {
+    if (anularConfirmTimer) {
+      clearTimeout(anularConfirmTimer);
+      anularConfirmTimer = null;
     }
-    el.btnDelete.classList.remove('confirming');
-    el.btnDelete.innerHTML = '🗑️ Borrar';
-    el.btnDelete.disabled = false;
+    el.btnAnular.classList.remove('confirming');
+    el.btnAnular.innerHTML = '🚫 Anular cobro';
+    el.btnAnular.disabled = false;
   }
 
-  function doDelete() {
+  // Cierre completo: oculta el bloque y limpia. Solo al abrir/cerrar modal.
+  function resetAnulBox() {
+    resetAnularButton();
+    el.anulBox.style.display = 'none';
+    el.anulMotivo.value = '';
+    el.anulOtro.value = '';
+    el.anulOtroWrap.style.display = 'none';
+    el.anulUsuario.value = '';
+  }
+
+  function updateAnulOtroVisibility() {
+    const esOtro = el.anulMotivo.value === '__OTRO__';
+    el.anulOtroWrap.style.display = esOtro ? 'block' : 'none';
+    if (esOtro) el.anulOtro.focus();
+  }
+
+  // Resuelve el motivo final que viaja al backend.
+  // Con "Otro" el texto libre es obligatorio: un motivo vacío no
+  // documenta nada y el registro de anulación deja de tener valor.
+  function resolverMotivo() {
+    const sel = el.anulMotivo.value;
+    if (!sel) return { ok: false, error: 'Selecciona un motivo de anulación.' };
+    if (sel === '__OTRO__') {
+      const libre = el.anulOtro.value.trim();
+      if (!libre) return { ok: false, error: 'Describe el motivo en el campo de texto.' };
+      return { ok: true, motivo: `Otro — ${libre}` };
+    }
+    return { ok: true, motivo: sel };
+  }
+
+  function doAnular() {
     const _id = el.editId.value;
     if (!_id) return;
-    el.btnDelete.disabled = true;
+    const m = resolverMotivo();
+    if (!m.ok) {
+      showToast('✕ ' + m.error, 'error');
+      // Rearmar el timer: el operador sigue dentro del formulario.
+      if (anularConfirmTimer) clearTimeout(anularConfirmTimer);
+      anularConfirmTimer = setTimeout(() => { resetAnularButton(); }, 12000);
+      return;
+    }
+    const usuario = el.anulUsuario.value.trim();
+    ultimoUsuarioAnulacion = usuario;
+
+    el.btnAnular.disabled = true;
     el.btnSave.disabled = true;
-    el.btnDelete.innerHTML = 'Borrando...';
-    // Marcar la fila visualmente como en proceso de borrado
+    el.btnAnular.innerHTML = 'Anulando...';
     const row = el.content.querySelector(`tr[data-id="${_id}"]`);
     if (row) row.classList.add('row-deleting');
-    parent.postMessage({ type: 'delete', payload: { _id } }, '*');
+    parent.postMessage({ type: 'anular', payload: { _id, motivo: m.motivo, usuario } }, '*');
+  }
+
+  // HARD DELETE — borrado total de la reserva (cobro + reserva + calendario).
+  // Paso 1: pedir avisos al page code; se confirma con confirm() mostrándolos.
+  function handleHardDeleteClick() {
+    const reservaId = el.btnHardDelete.dataset.reservaId;
+    if (!reservaId) return;
+    el.btnHardDelete.disabled = true;
+    el.btnHardDelete.innerHTML = 'Comprobando…';
+    parent.postMessage({ type: 'avisosBorrado', payload: { reservaId } }, '*');
   }
 
   function refreshList() {
@@ -688,6 +1086,203 @@
     el.toast.className = 'toast show' + (type ? ' ' + type : '');
     setTimeout(() => el.toast.classList.remove('show'), 3500);
   }
+  // ═══════════════════════════════════════════════════════════
+  // v2.4.0 — DOCUMENTOS FISCALES (ticket / factura)
+  // ═══════════════════════════════════════════════════════════
+  // El bookingId de la fila abierta. El page code decide con él si va
+  // por la vía de cita (KRI_) o de venta sin cita. Aquí no se replica
+  // esa regla: si mañana aparece una familia nueva, se toca un sitio.
+  let docBookingId = '';
+  // v2.6.0 — Índice de documentos: { bookingId: {modo, invoiceNumber} }.
+  // Se pide una vez por carga de lista. Vacío = aún no ha llegado, no
+  // significa "sin documentos": por eso la columna no pinta nada hasta
+  // que llega, en vez de pintar todo como "sin documento".
+  let docIndex = {};
+  let docIndexRecibido = false;
+  // v2.4.1 — watchdog de la consulta inicial de documento.
+  let docWatchdog = null;
+
+  // v2.6.0 — Abre el PDF de un cobro desde el listado.
+  // La ventana se abre AQUÍ, dentro del gesto de clic, y se redirige
+  // cuando llega la URL. Si se llamara a window.open al recibir la
+  // respuesta, el navegador lo tomaría por un popup fuera de gesto de
+  // usuario y lo bloquearía. Si aun así viene bloqueada (w null), se
+  // cae a mostrar el enlace en el modal.
+  let docVentanas = {};
+
+  function abrirDocDesdeLista(badge) {
+    const bId = badge.dataset.doc;
+    if (!bId || badge.classList.contains('loading')) return;
+    badge.classList.add('loading');
+    let w = null;
+    try { w = window.open('', '_blank'); } catch (e) { w = null; }
+    docVentanas[bId] = { win: w, badge };
+    parent.postMessage({ type: 'abrirDocPago', payload: { bookingId: bId } }, '*');
+  }
+
+  function resetDocBox() {
+    if (docWatchdog) { clearTimeout(docWatchdog); docWatchdog = null; }
+    docBookingId = '';
+    el.docBox.style.display = 'none';
+    el.docExistente.style.display = 'none';
+    el.docActions.style.display = 'flex';
+    el.docCifWrap.style.display = 'none';
+    el.docVatId.value = '';
+    el.docLegalName.value = '';
+    el.docMsg.style.display = 'none';
+    el.docMsg.textContent = '';
+    el.docMsg.className = '';
+    setDocBusy(false);
+  }
+
+  function setDocBusy(busy) {
+    el.btnTicket.disabled = busy;
+    el.btnFactura.disabled = busy;
+    el.btnFacturaConfirm.disabled = busy;
+  }
+
+  function docSay(texto, tipo) {
+    el.docMsg.textContent = texto;
+    el.docMsg.className = tipo || 'info';
+    el.docMsg.style.display = texto ? 'block' : 'none';
+  }
+
+  // Prepara el bloque al abrir el modal.
+  // No se factura: una fila ANULADO/REVERSION, ni un importe <= 0
+  // (el backend lo rechazaría igual, pero es mejor no ofrecer el botón
+  // que dar un error después de pulsarlo).
+  function initDocBox(item) {
+    resetDocBox();
+    const est = estadoDe(item);
+    const importe = Number(item.importeTotal || 0);
+    const bId = String(item.bookingId || '');
+
+    if (est !== 'ACTIVO' || importe <= 0 || !bId) {
+      el.docBox.style.display = 'none';
+      return;
+    }
+    docBookingId = bId;
+    el.docBox.style.display = 'block';
+    docSay('Consultando…', 'info');
+    setDocBusy(true);
+    parent.postMessage({ type: 'obtenerDocPago', payload: { bookingId: bId } }, '*');
+
+    // v2.4.1 — Si nadie contesta en 8s, se reactivan los botones. Sin
+    // esto, un page code sin el handler 'obtenerDocPago' (v2.2.0 o
+    // anterior) deja el bloque pintado pero inutilizable, y parece que
+    // la función no existe. Emitir sigue siendo seguro: la idempotencia
+    // del backend impide duplicar un documento ya emitido.
+    if (docWatchdog) clearTimeout(docWatchdog);
+    docWatchdog = setTimeout(() => {
+      docWatchdog = null;
+      setDocBusy(false);
+      docSay('No se pudo comprobar si ya existe documento (el page code puede estar desactualizado: requiere v2.3.0). Puedes emitir igualmente.', 'err');
+    }, 8000);
+  }
+
+  // Pinta un documento ya emitido: número, importe y enlace al PDF.
+  function pintarDocumento(doc) {
+    el.docActions.style.display = 'none';
+    el.docCifWrap.style.display = 'none';
+    el.docExistente.style.display = 'block';
+    const esFactura = String(doc.modo || '').toLowerCase().indexOf('factura') >= 0;
+    // v2.5.0 — sin emoji: Bai Jamjuree no tiene 📄/🧾 y salían como cuadros.
+    // El tipo se indica con palabra, y el color verde del bloque ya marca
+    // que el documento existe.
+    el.docNum.textContent = `${esFactura ? 'Factura' : 'Ticket'} ${doc.invoiceNumber || '(sin número)'}`;
+    const partes = [];
+    if (doc.issueDate) partes.push(formatFecha(new Date(doc.issueDate)));
+    if (doc.totalAmount != null) partes.push(`${Number(doc.totalAmount).toFixed(2)} €`);
+    if (doc.vatRate != null) partes.push(`IVA ${doc.vatRate}%`);
+    el.docMeta.textContent = partes.join(' · ');
+    if (doc.pdfUrl) {
+      el.docLink.href = doc.pdfUrl;
+      el.docLink.style.display = 'inline-block';
+    } else {
+      el.docLink.style.display = 'none';
+    }
+  }
+
+  function pedirTicket() {
+    if (!docBookingId) return;
+    setDocBusy(true);
+    docSay('Emitiendo ticket…', 'info');
+    parent.postMessage({ type: 'generarTicketPago', payload: { bookingId: docBookingId } }, '*');
+  }
+
+  // 1er intento sin CIF: el backend lo busca en el CRM del cliente.
+  // Si no lo encuentra, responde con error y desplegamos el formulario.
+  function pedirFactura() {
+    if (!docBookingId) return;
+    setDocBusy(true);
+    docSay('Emitiendo factura…', 'info');
+    parent.postMessage({ type: 'generarFacturaPago', payload: { bookingId: docBookingId } }, '*');
+  }
+
+  function pedirFacturaConCif() {
+    if (!docBookingId) return;
+    const vatId = el.docVatId.value.trim();
+    if (!vatId) {
+      docSay('Introduce el CIF/NIF del cliente.', 'err');
+      return;
+    }
+    setDocBusy(true);
+    docSay('Emitiendo factura…', 'info');
+    parent.postMessage({
+      type: 'generarFacturaPago',
+      payload: { bookingId: docBookingId, vatId, legalName: el.docLegalName.value.trim() }
+    }, '*');
+  }
+
+  // v2.5.1 — Normaliza la respuesta de documento a una sola forma.
+  // Los dos webMethods del backend NO devuelven lo mismo:
+  //   · obtenerDocumento*  → { ok, existe, documento:{...} }  (anidado)
+  //   · generarTicket/Factura* → { ok, invoiceNumber, pdfUrl, ... } (raíz)
+  // Es exactamente lo que hace el widget de Recepción PRO v1.1.57:
+  // en 'documentoCita' lee p.documento.*, y en 'ticketGenerado' /
+  // 'facturaGenerada' lee p.invoiceNumber directamente.
+  // Devuelve null si no hay número de documento aprovechable.
+  function normalizarDoc(r, modoPorDefecto) {
+    if (!r) return null;
+    const src = r.documento ? r.documento : r;
+    if (!src.invoiceNumber) return null;
+    return {
+      modo: src.modo || modoPorDefecto || '',
+      invoiceNumber: src.invoiceNumber,
+      pdfUrl: src.pdfUrl || '',
+      issueDate: src.issueDate || null,
+      totalAmount: src.totalAmount,
+      vatRate: src.vatRate
+    };
+  }
+
+  // v2.5.1 — El error llega como string desde el backend, pero el page
+  // code de Recepción PRO lo envuelve como {message} en su catch.
+  // Se toleran ambas formas (mismo criterio que p.error?.message || p.error).
+  function textoError(e) {
+    if (!e) return '';
+    if (typeof e === 'string') return e;
+    return e.message || '';
+  }
+
+  // ¿El error del backend es "falta el CIF"? Se detecta por el texto
+  // porque facturacionSalonLogic v1.0.6 no devuelve código de error.
+  // Si algún día lo devuelve, cambiar esto por el código.
+  function esErrorFaltaCif(txt) {
+    const t = textoError(txt).toLowerCase();
+    return t.indexOf('cif') >= 0 || t.indexOf('nif') >= 0;
+  }
+
+  // v2.3.0 — Estado del cobro. Las filas anteriores a v1.4.0 tienen
+  // estadoCobro VACÍO: vacío === ACTIVO. Mismo criterio que _esActivo
+  // del backend; si cambia allí, cambia aquí.
+  function estadoDe(item) {
+    const e = String((item && item.estadoCobro) || '').trim().toUpperCase();
+    if (e === 'ANULADO') return 'ANULADO';
+    if (e === 'REVERSION') return 'REVERSION';
+    return 'ACTIVO';
+  }
+
   function esc(str) { if (!str) return ''; const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
 
   el.search.addEventListener('input', () => { currentPage = 1; applyFilters(); });
@@ -704,7 +1299,13 @@
   el.btnClose.addEventListener('click', closeModal);
   el.btnCancel.addEventListener('click', closeModal);
   el.btnSave.addEventListener('click', saveChanges);
-  el.btnDelete.addEventListener('click', handleDeleteClick);
+  el.btnAnular.addEventListener('click', handleAnularClick);
+  el.anulMotivo.addEventListener('change', updateAnulOtroVisibility);
+  // v2.4.0 — documentos fiscales
+  el.btnTicket.addEventListener('click', pedirTicket);
+  el.btnFactura.addEventListener('click', pedirFactura);
+  el.btnFacturaConfirm.addEventListener('click', pedirFacturaConCif);
+  el.btnHardDelete.addEventListener('click', handleHardDeleteClick);
   // v2.1.0 — listeners del bloque Mixto
   el.editTipoPago.addEventListener('change', updateMixtoVisibility);
   el.editImporte.addEventListener('input', updateMixtoSum);
@@ -733,7 +1334,7 @@
     if (msg.type === 'saved') {
       el.btnSave.disabled = false;
       el.btnSave.textContent = 'Guardar cambios';
-      el.btnDelete.disabled = false;
+      el.btnAnular.disabled = false;
       showToast('✓ Registro actualizado', 'success');
       closeModal();
       if (msg.payload && msg.payload.item) {
@@ -750,33 +1351,194 @@
     if (msg.type === 'saveError') {
       el.btnSave.disabled = false;
       el.btnSave.textContent = 'Guardar cambios';
-      el.btnDelete.disabled = false;
+      el.btnAnular.disabled = false;
       showToast('✕ Error: ' + (msg.message || 'No se pudo guardar'), 'error');
     }
-    // borrado confirmado por backend
-    if (msg.type === 'deleted') {
-      const deletedId = msg.payload && msg.payload.deletedId;
-      showToast('✓ Registro eliminado', 'success');
+    // ── v2.3.0 — ANULACIÓN confirmada por backend ──
+    // Se refresca la lista COMPLETA en vez de parchear allItems: la
+    // anulación crea una fila nueva en el CMS (la reversión) que el
+    // widget no tiene en memoria, y su _id lo asigna Wix.
+    if (msg.type === 'anulado') {
+      const p = msg.payload || {};
+      const imp = (p.importeRevertido != null)
+        ? `${Number(p.importeRevertido).toFixed(2)} €`
+        : '';
+      showToast(`✓ Cobro anulado · reversión ${imp}`, 'success');
       closeModal();
-      if (deletedId) {
-        const idx = allItems.findIndex(x => x._id === deletedId);
-        if (idx >= 0) {
-          allItems.splice(idx, 1);
-        }
-        applyFilters();
+
+      // Avisos que el operador DEBE gestionar a mano. Van en alert()
+      // y no en toast porque un toast se va solo y esto no se puede
+      // perder: hay consecuencias fiscales o de saldo del cliente.
+      const av = p.avisos || {};
+      const pendientes = [];
+      if (av.factura) {
+        pendientes.push(`• Esta cita tiene emitido el documento ${av.factura}.\n  Anular el cobro NO anula la factura. Para corregirla hay que\n  emitir una FACTURA RECTIFICATIVA.`);
       }
+      if (av.hayCanje) {
+        pendientes.push('• El cobro incluía un canje de bono o tarjeta.\n  El uso consumido NO se ha devuelto al cliente: hay que\n  restaurarlo a mano desde Gestión de Bonos y Promociones.');
+      }
+      if (pendientes.length) {
+        alert('⚠️ ANULACIÓN REGISTRADA — QUEDAN COSAS PENDIENTES\n\n' + pendientes.join('\n\n'));
+      }
+
+      refreshList();
     }
-    if (msg.type === 'deleteError') {
+    if (msg.type === 'anularError') {
       // Quitar fade-out de la fila si existía
       const id = el.editId.value;
       if (id) {
         const row = el.content.querySelector(`tr[data-id="${id}"]`);
         if (row) row.classList.remove('row-deleting');
       }
-      el.btnDelete.disabled = false;
+      el.btnAnular.disabled = false;
       el.btnSave.disabled = false;
-      resetDeleteButton();
-      showToast('✕ Error eliminando: ' + (msg.message || 'No se pudo borrar'), 'error');
+      resetAnularButton();
+      showToast('✕ No se pudo anular: ' + (msg.message || 'Error desconocido'), 'error');
+    }
+    // ── v2.6.0 — Índice de documentos del listado ──
+    if (msg.type === 'indiceDocumentosResult') {
+      const items = (msg.payload && msg.payload.items) || [];
+      docIndex = {};
+      for (const it of items) {
+        if (it && it.key) docIndex[it.key] = { modo: it.modo, invoiceNumber: it.invoiceNumber };
+      }
+      docIndexRecibido = true;
+      // Repintar para que aparezcan las pastillas. renderTable respeta
+      // página, orden y filtros actuales.
+      renderTable();
+    }
+
+    // ── v2.6.0 — PDF resuelto para abrir desde el listado ──
+    if (msg.type === 'docPagoAbrir') {
+      const p = msg.payload || {};
+      const reg = docVentanas[p.bookingId];
+      if (reg && reg.badge) reg.badge.classList.remove('loading');
+      if (p.pdfUrl) {
+        if (reg && reg.win && !reg.win.closed) {
+          reg.win.location.href = p.pdfUrl;
+        } else {
+          // Popup bloqueado: no perdemos el documento.
+          window.open(p.pdfUrl, '_blank');
+        }
+      } else {
+        if (reg && reg.win && !reg.win.closed) reg.win.close();
+        showToast('✕ ' + (textoError(p.error) || 'No se pudo abrir el documento'), 'error');
+      }
+      delete docVentanas[p.bookingId];
+    }
+
+    // ── v2.4.0 — Documento existente al abrir el modal ──
+    if (msg.type === 'docPago') {
+      const p = msg.payload || {};
+      if (docWatchdog) { clearTimeout(docWatchdog); docWatchdog = null; }
+      setDocBusy(false);
+      const docExistente = p.existe ? normalizarDoc(p) : null;
+      if (docExistente) {
+        docSay('', 'info');
+        pintarDocumento(docExistente);
+      } else if (p.error) {
+        // No se pudo consultar: dejamos los botones activos. Si el
+        // documento ya existiera, la idempotencia del backend lo frena.
+        docSay('No se pudo comprobar si ya hay documento: ' + p.error, 'err');
+      } else {
+        docSay('', 'info');
+      }
+    }
+
+    // ── v2.4.0 — Ticket emitido ──
+    if (msg.type === 'ticketPagoGenerado') {
+      const r = msg.payload || {};
+      setDocBusy(false);
+      const doc = r.ok ? normalizarDoc(r, 'ticket') : null;
+      if (doc) {
+        docSay('', 'info');
+        pintarDocumento(doc);
+        if (r.duplicado) {
+          showToast(`Documento ${doc.invoiceNumber} ya existía · recuperado`, 'success');
+          docSay('Ya existía un documento para este cobro.', 'info');
+        } else {
+          showToast(`✓ Ticket ${doc.invoiceNumber} emitido`, 'success');
+          if (doc.pdfUrl) window.open(doc.pdfUrl, '_blank');
+        }
+      } else {
+        docSay('✕ ' + (textoError(r.error) || 'No se pudo emitir el ticket'), 'err');
+      }
+    }
+
+    // ── v2.4.0 — Factura emitida (o falta el CIF) ──
+    if (msg.type === 'facturaPagoGenerada') {
+      const r = msg.payload || {};
+      setDocBusy(false);
+      const doc = r.ok ? normalizarDoc(r, 'factura') : null;
+      if (doc) {
+        docSay('', 'info');
+        pintarDocumento(doc);
+        el.docCifWrap.style.display = 'none';
+        if (r.duplicado) {
+          showToast(`Documento ${doc.invoiceNumber} ya existía · recuperado`, 'success');
+          docSay('Ya existía un documento para este cobro.', 'info');
+        } else if (r.rectifica && r.rectifica.invoiceNumber) {
+          // Upgrade ticket→factura: el ticket queda rectificado.
+          showToast(`✓ Factura ${doc.invoiceNumber} · reemplaza al ticket ${r.rectifica.invoiceNumber}`, 'success');
+          docSay(`Esta factura sustituye al ticket ${r.rectifica.invoiceNumber}, que queda rectificado.`, 'info');
+          if (doc.pdfUrl) window.open(doc.pdfUrl, '_blank');
+        } else {
+          showToast(`✓ Factura ${doc.invoiceNumber} emitida`, 'success');
+          if (doc.pdfUrl) window.open(doc.pdfUrl, '_blank');
+        }
+      } else if (esErrorFaltaCif(r.error)) {
+        // Caso frecuente: el cliente pide factura días después y su
+        // ficha no tiene CIF. Se despliega el formulario y se reintenta.
+        el.docActions.style.display = 'none';
+        el.docCifWrap.style.display = 'block';
+        docSay('', 'info');
+        el.docVatId.focus();
+      } else {
+        docSay('✕ ' + (textoError(r.error) || 'No se pudo emitir la factura'), 'err');
+      }
+    }
+
+    // ── HARD DELETE: avisos previos + confirmación ──
+    if (msg.type === 'avisosResult') {
+      const reservaId = msg.payload && msg.payload.reservaId;
+      const av = (msg.payload && msg.payload.avisos) || {};
+      const rv = (msg.payload && msg.payload.reserva) || {};
+      el.btnHardDelete.disabled = false;
+      el.btnHardDelete.innerHTML = '🧨 Borrar reserva completa';
+      let txt = '⚠️ BORRADO TOTAL — no se puede deshacer.\n\n';
+      txt += 'Reserva: ' + (rv.title || '(sin título)') + '\n';
+      txt += 'Se elimina la RESERVA y su COBRO (' + (av.nCobros || 0) + ' cobro(s), ' + (av.totalCobros || 0) + '€) y desaparece del calendario.\n';
+      if (av.hayCanje) txt += '\n⚠️ Pagada con BONO/CANJE: el bono NO se devuelve solo. Restáuralo a mano.';
+      if (av.factura) txt += '\n⚠️ Tiene FACTURA ' + av.factura + ': gestiónala/rectifícala aparte.';
+      txt += '\n⚠️ Los puntos Loyalty (si los hubo) no se revocan.';
+      txt += '\n\n¿Confirmar borrado total?';
+      if (window.confirm(txt)) {
+        el.btnHardDelete.disabled = true;
+        el.btnHardDelete.innerHTML = 'Borrando…';
+        const row = el.content.querySelector(`tr[data-id="${el.editId.value}"]`);
+        if (row) row.classList.add('row-deleting');
+        parent.postMessage({ type: 'hardDelete', payload: { reservaId } }, '*');
+      }
+    }
+    // ── HARD DELETE: resultado ──
+    if (msg.type === 'hardDeleted') {
+      const p = msg.payload || {};
+      let t = '✓ Reserva y cobro eliminados';
+      if (p.avisos && p.avisos.factura) t += ' · ⚠️ factura ' + p.avisos.factura + ' pendiente';
+      showToast(t, 'success');
+      closeModal();
+      const reservaId = p.reservaId;
+      if (reservaId) {
+        allItems = allItems.filter(x => !(String(x.bookingId || '').startsWith('KRI_') && String(x.bookingId).slice(4) === reservaId));
+        applyFilters();
+      }
+    }
+    if (msg.type === 'hardDeleteError') {
+      const id = el.editId.value;
+      if (id) { const row = el.content.querySelector(`tr[data-id="${id}"]`); if (row) row.classList.remove('row-deleting'); }
+      el.btnHardDelete.disabled = false;
+      el.btnHardDelete.innerHTML = '🧨 Borrar reserva completa';
+      showToast('✕ Error borrando reserva: ' + (msg.message || 'No se pudo borrar'), 'error');
     }
     if (msg.type === 'error') el.content.innerHTML = `<div class="error-msg">❌ Error: ${esc(msg.message || 'Desconocido')}</div>`;
   });
