@@ -12,6 +12,21 @@
 //
 // CHANGELOG
 // ---------
+// v1.5.0 (17-Sep-2026)
+//   - post_whatsappWebhook: además de los mensajes entrantes (value.messages),
+//     ahora procesa los avisos de estado de entrega (value.statuses) que Meta
+//     manda por cada mensaje enviado: sent, delivered, read, failed.
+//   - NUEVA función interna _registrarEstadosEntrega(): escribe cada aviso en
+//     los logs del sitio. Los fallos salen como ERROR con el código, el título
+//     y el detalle que devuelve Meta; el resto como INFO.
+//   - POR QUÉ: hasta v1.4.0 esos avisos se descartaban sin registrar. Un
+//     mensaje aceptado por Meta y NO entregado no dejaba rastro en ningún
+//     sitio, así que no había forma de saber el motivo (16/17-Sep-2026).
+//   - NO se escribe en CMS: CommunicationLog no guarda el messageId de Meta,
+//     así que hoy no se puede casar el aviso con su fila. Queda pendiente.
+//   - Aditivo: Excel, PDF, AKIRA, la verificación GET y el procesamiento de
+//     mensajes entrantes quedan intactos.
+//
 // v1.4.0 (20-Ago-2026)
 //   - Añadido POST post_akiraNuevaSesion() — abre la sesión ANTES de la
 //     pregunta, para que el widget tenga sessionId con el que arrancar el
@@ -338,6 +353,19 @@ export async function post_whatsappWebhook(request) {
                     _procesarMensajeEntrante(incomingData)
                         .catch(err => console.error(TAG_WA, 'Error procesando mensaje:', err.message));
                 }
+
+                // ────────────────────────────────────────────
+                // v1.5.0 — Avisos de estado de entrega
+                // Meta manda aquí sent/delivered/read/failed de CADA mensaje
+                // que enviamos. Hasta v1.4.0 se descartaban sin registrar, así
+                // que un mensaje aceptado por Meta y NO entregado no dejaba
+                // rastro en ningún sitio. Solo se registra en los logs del
+                // sitio: no se escribe en CMS ni se toca CommunicationLog.
+                // ────────────────────────────────────────────
+                const statuses = value.statuses || [];
+                if (statuses.length > 0) {
+                    _registrarEstadosEntrega(statuses, phoneNumberId);
+                }
             }
         }
 
@@ -348,6 +376,55 @@ export async function post_whatsappWebhook(request) {
         console.error(TAG_WA, 'Error en POST webhook:', error.message);
         // Aún con error, respondemos 200 para que Meta no reintente
         return ok({ body: 'OK' });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v1.5.0 — Registro de los avisos de estado de entrega de Meta
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Registra en los logs del sitio los avisos de estado que manda Meta por cada
+ * mensaje enviado (sent, delivered, read, failed).
+ *
+ * No escribe en CMS y no devuelve nada: el webhook debe responder 200 rápido.
+ *
+ * @param {Array}  statuses      — array value.statuses del payload de Meta
+ * @param {string} phoneNumberId — número del salón que envió el mensaje
+ */
+function _registrarEstadosEntrega(statuses, phoneNumberId) {
+    for (const st of statuses) {
+        try {
+            const estado = st.status || 'desconocido';
+            const messageId = st.id || '';
+            const destinatario = st.recipient_id || '';
+            const errores = Array.isArray(st.errors) ? st.errors : [];
+
+            if (estado === 'failed' || errores.length > 0) {
+                const detalle = errores.map(e => {
+                    const partes = [];
+                    if (e.code !== undefined) partes.push(`code=${e.code}`);
+                    if (e.title) partes.push(`title=${e.title}`);
+                    if (e.message) partes.push(`message=${e.message}`);
+                    if (e.error_data && e.error_data.details) partes.push(`details=${e.error_data.details}`);
+                    return partes.join(' | ');
+                }).join(' || ');
+
+                console.error(
+                    TAG_WA,
+                    `NO ENTREGADO → ${destinatario} | estado=${estado} | phoneNumberId=${phoneNumberId} | ` +
+                    `messageId=${messageId} | ${detalle || 'sin detalle de Meta'}`
+                );
+            } else {
+                console.log(
+                    TAG_WA,
+                    `Estado ${estado} → ${destinatario} | phoneNumberId=${phoneNumberId} | messageId=${messageId}`
+                );
+            }
+        } catch (err) {
+            console.error(TAG_WA, 'Error registrando estado de entrega:', err.message);
+        }
     }
 }
 
