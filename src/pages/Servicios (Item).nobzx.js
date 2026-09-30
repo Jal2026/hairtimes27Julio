@@ -1,8 +1,27 @@
 // =====================================================
 // KAMISUITE — Page Code: /reservar/{slug}
 // =====================================================
-// VERSION: 0.3.6
-// FECHA: 26 de agosto de 2026
+// VERSION: 0.4.0
+// FECHA: 30 de septiembre de 2026
+//
+// v0.4.0:
+//   + LA DURACION DE LA CITA LA MIDE EL SERVIDOR.
+//     El widget (bundle v2.1.0) manda ahora en `pedir-huecos` QUE ha elegido
+//     la clienta —`complementosSetupUid` y `varianteSel`, con el mismo
+//     formato exacto que ya viajaba en `reservar`— y no solo cuantos minutos
+//     cree que dura. Este page code los propaga a getHuecosDisponibles
+//     (widgetPublicoLogic v0.12.0), que mide la cita con el mismo motor que
+//     luego la construye.
+//     Motivo: el front no puede llegar a la duracion real. A un complemento
+//     con proceso propio el motor le anade su bloque de PROCESO encima de la
+//     duracion seca, y al elegir variante el front sustituye toda la
+//     duracion mientras el motor sustituye solo la aplicacion. Caso real
+//     28-sep-2026: tres lineas que suman 90 minutos en pantalla ocupando 170
+//     en la agenda, y una cita creada 17:30-20:20 con cierre a las 20:00.
+//     La respuesta devuelve ademas `durationMin`, la duracion REAL medida,
+//     para que el widget pinte esa y no su propia suma.
+//     `durationMin` se sigue enviando en la peticion por retrocompatibilidad;
+//     el backend lo usa solo si no recibe composicion.
 //
 // v0.3.6:
 //   + IMAGENES REDIMENSIONADAS EN ORIGEN (rendimiento en movil 4G).
@@ -318,7 +337,13 @@ function montarCustomElement() {
         // para que el backend calcule el punto de corte a partir del
         // mapeoFases del servicio.
         proExtraId: d.proExtraId || '',
-        principalSetupUid: d.principalSetupUid || ''
+        principalSetupUid: d.principalSetupUid || '',
+        // v0.4.0 — Composicion elegida. Cuando `complementosSetupUid` llega
+        // como array, el backend v0.12.0 mide la duracion real con el motor
+        // de packs y ofrece las horas con ella, ignorando `durationMin`. Si
+        // no llega (widget anterior a v2.1.0), se comporta como en v0.11.12.
+        complementosSetupUid: Array.isArray(d.complementosSetupUid) ? d.complementosSetupUid : [],
+        varianteSel: d.varianteSel || null
       });
       // Devolver al widget vía atributo dedicado.
       // Patrón: cada respuesta tiene un requestId que el widget genera
@@ -328,6 +353,9 @@ function montarCustomElement() {
         fecha: d.fecha,
         proId: d.proId,
         huecos: res?.huecos || [],
+        // v0.4.0 — Duracion REAL con la que el backend ha filtrado estas
+        // horas. El widget la pinta en lugar de su propia suma.
+        durationMin: res?.durationMin,
         ok: !!res?.ok,
         ts: Date.now()   // fuerza re-trigger del attributeChangedCallback
       }));
