@@ -1,7 +1,33 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.12.0
+// VERSION: 0.12.1
+//
+// v0.12.1 — LA GUARDIA DE CIERRE PASA A SER ESTRICTA.
+//
+//   v0.12.0 puso al servidor a medir la cita, pero la guardia conservaba el
+//   criterio permisivo con el que nació: ante cualquier duda dejaba pasar la
+//   reserva y se limitaba a escribir un aviso en el log. Eran cinco puertas
+//   abiertas, y bastaba una para que volviera a nacer una cita fuera de
+//   horario:
+//     · la medición de la duración falla → se caía al número del navegador;
+//     · faltan datos mínimos para comprobar (duración, hora o profesional);
+//     · el profesional no aparece en StaffConfig;
+//     · el profesional no tiene horario para ese día (campo vacío, mal
+//       formado, o en formato V1 antiguo);
+//     · cualquier error técnico dentro de la guardia.
+//   En los cinco casos ahora se RECHAZA la reserva. Lo mismo para el tramo
+//   de complementos cuando la cita va a dos profesionales.
+//
+//   CONTRAPARTIDA ACEPTADA (decisión de Jal, 30-sep-2026): si un día falla
+//   una consulta, una clienta que sí cabía recibe un mensaje pidiéndole que
+//   elija otra hora. Se prefiere eso a una cita que se pase del cierre.
+//   Cada rechazo deja su motivo en el log, así que un repunte de rechazos
+//   se detecta y se distingue del rechazo legítimo por horario.
+//
+//   Con esto, y con todos los profesionales cerrando a la hora del salón,
+//   ninguna reserva creada desde el widget público puede terminar más tarde
+//   que el cierre de su profesional más el margen configurado.
 //
 // v0.12.0 — LA DURACIÓN DE LA CITA LA MIDE EL SERVIDOR, NO EL NAVEGADOR.
 //
@@ -1013,7 +1039,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.12.0';
+const VERSION = '0.12.1';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -2782,12 +2808,20 @@ export const crearReservaPublica = webMethod(
         complementosSetupUid: Array.isArray(complementosSetupUid) ? complementosSetupUid : [],
         varianteSel
       });
-      if (durMedida != null) {
-        if (durMedida !== toNum(durationMin)) {
-          console.warn(`${TAG} ⚠️ Duración recibida ${toNum(durationMin)}min ≠ duración real ${durMedida}min. Se valida con la real.`);
-        }
-        durEfectiva = durMedida;
+      // v0.12.1 — Si no se puede medir, NO se crea. Antes se caía al número
+      // del navegador, que es exactamente el defecto que cerramos.
+      if (durMedida == null) {
+        console.warn(`${TAG} ⛔ No se pudo medir la duración real de la cita (${principalSetupUid}) → reserva rechazada`);
+        return {
+          ok: false,
+          version: VERSION,
+          error: { message: 'No hemos podido comprobar la duración de la cita. Inténtalo de nuevo en unos segundos.' }
+        };
       }
+      if (durMedida !== toNum(durationMin)) {
+        console.warn(`${TAG} ⚠️ Duración recibida ${toNum(durationMin)}min ≠ duración real ${durMedida}min. Se valida con la real.`);
+      }
+      durEfectiva = durMedida;
 
       const staffExtraLimpio = (typeof staffExtraId === 'string') ? staffExtraId.trim() : '';
       let staffIdExtraFinal = '';
@@ -2906,6 +2940,16 @@ export const crearReservaPublica = webMethod(
       try {
         const gDurTotal = durEfectiva;
         const gInicioMin = parseHHMM(horaHHmm);
+        // v0.12.1 — Sin estos tres datos no hay comprobación posible, y sin
+        // comprobación no se crea.
+        if (!(gDurTotal > 0) || gInicioMin == null || !staffIdFinal) {
+          console.warn(`${TAG} ⛔ Guardia horario: faltan datos para comprobar el cierre (dur=${gDurTotal}, hora=${horaHHmm}, staff=${staffIdFinal || 'sin resolver'}) → reserva rechazada`);
+          return {
+            ok: false,
+            version: VERSION,
+            error: { message: 'No hemos podido comprobar el horario de la cita. Elige otra hora o vuelve a intentarlo.' }
+          };
+        }
         if (gDurTotal > 0 && gInicioMin != null && staffIdFinal) {
           const rStaffFinal = await wixData.query(CMS_STAFF)
             .eq('active', true)
@@ -2943,10 +2987,22 @@ export const crearReservaPublica = webMethod(
                   };
                 }
               } else {
-                console.warn(`${TAG} ⚠️ Guardia horario: staff extra ${staffIdExtraFinal} sin horario para ese día → guardia del tramo B omitida`);
+                // v0.12.1 — Sin horario no se puede comprobar → se rechaza.
+                console.warn(`${TAG} ⛔ Guardia horario: staff extra ${staffIdExtraFinal} sin horario para ese día → reserva rechazada`);
+                return {
+                  ok: false,
+                  version: VERSION,
+                  error: { message: 'No hemos podido comprobar el horario del profesional. Elige otra hora o vuelve a intentarlo.' }
+                };
               }
             } else {
-              console.warn(`${TAG} ⚠️ Guardia horario: staff extra ${staffIdExtraFinal} no encontrado en StaffConfig → guardia del tramo B omitida`);
+              // v0.12.1 — Sin ficha no se puede comprobar → se rechaza.
+              console.warn(`${TAG} ⛔ Guardia horario: staff extra ${staffIdExtraFinal} no encontrado en StaffConfig → reserva rechazada`);
+              return {
+                ok: false,
+                version: VERSION,
+                error: { message: 'No hemos podido comprobar el horario del profesional. Elige otra hora o vuelve a intentarlo.' }
+              };
             }
           }
 
@@ -2965,19 +3021,38 @@ export const crearReservaPublica = webMethod(
                 };
               }
             } else {
-              // Sin horario configurado para ese dow: no bloqueamos (mismo
-              // criterio permisivo que resolverStaffLibre ante staff sin
-              // horario resoluble → deja pasar). Solo log.
-              console.warn(`${TAG} ⚠️ Guardia horario: staff ${staffIdFinal} sin horario para dow=${gdow} → guardia omitida`);
+              // v0.12.1 — Antes se dejaba pasar por criterio permisivo. Un
+              // horario ausente o en formato V1 antiguo desactivaba la única
+              // comprobación que impide que una cita se pase del cierre.
+              console.warn(`${TAG} ⛔ Guardia horario: staff ${staffIdFinal} sin horario para dow=${gdow} → reserva rechazada`);
+              return {
+                ok: false,
+                version: VERSION,
+                error: { message: 'No hemos podido comprobar el horario del profesional. Elige otra hora o vuelve a intentarlo.' }
+              };
             }
           } else {
-            console.warn(`${TAG} ⚠️ Guardia horario: staff ${staffIdFinal} no encontrado en StaffConfig → guardia omitida`);
+            // v0.12.1 — Sin ficha de profesional no hay nada contra lo que
+            // comprobar el cierre → se rechaza.
+            console.warn(`${TAG} ⛔ Guardia horario: staff ${staffIdFinal} no encontrado en StaffConfig → reserva rechazada`);
+            return {
+              ok: false,
+              version: VERSION,
+              error: { message: 'No hemos podido comprobar el horario del profesional. Elige otra hora o vuelve a intentarlo.' }
+            };
           }
         }
       } catch (gErr) {
-        // Cualquier fallo técnico de la guardia NO bloquea la reserva
-        // (mejor una reserva legítima que un rechazo por bug de query).
-        console.warn(`${TAG} ⚠️ Guardia horario no concluyente: ${gErr.message}`);
+        // v0.12.1 — Antes cualquier fallo técnico dejaba pasar la reserva.
+        // Una guardia que no concluye no ha comprobado nada, así que ahora
+        // rechaza. El motivo queda en el log para distinguir un repunte de
+        // fallos técnicos de los rechazos legítimos por horario.
+        console.warn(`${TAG} ⛔ Guardia horario no concluyente: ${gErr.message} → reserva rechazada`);
+        return {
+          ok: false,
+          version: VERSION,
+          error: { message: 'No hemos podido comprobar el horario de la cita. Elige otra hora o vuelve a intentarlo.' }
+        };
       }
 
       // Delegar en crearPackReserva del backend de Recepción Pro.
