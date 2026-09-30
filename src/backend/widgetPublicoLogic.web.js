@@ -1,7 +1,66 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.11.12
+// VERSION: 0.12.0
+//
+// v0.12.0 — LA DURACIÓN DE LA CITA LA MIDE EL SERVIDOR, NO EL NAVEGADOR.
+//
+//   EL DEFECTO. La duración que decide qué horas se ofrecen y si una reserva
+//   cabe antes del cierre venía calculada en el navegador del cliente: el
+//   bundle sumaba `baseDuration` + variante + complementos en `_calc()` y
+//   mandaba el resultado como `durationMin`. Este backend lo aceptaba tal
+//   cual en los tres sitios que deciden:
+//     · getHuecosDisponibles  → qué horas se ofrecen.
+//     · resolverStaffLibre    → a qué profesional se asigna 'Cualquiera'.
+//     · guardia de cierre     → si la reserva desborda el horario del staff.
+//   La duración REAL —la que sale de recorrer las fases de verdad— solo
+//   nacía dentro de crearPackReserva, con la cita YA escrita, y se usaba
+//   únicamente para redactar la hora final del email. Nadie las comparaba.
+//
+//   El front no puede llegar a la cifra real ni queriendo, porque hay partes
+//   de la cascada que no ve: a un complemento con `minProceso > 0` el motor
+//   le añade su bloque de PROCESO encima de la duración seca, y al elegir
+//   variante el front SUSTITUYE toda la duración por la de la variante
+//   mientras el motor sustituye solo la aplicación y sigue montando proceso
+//   y fases incluidas. Cuanto más compuesta es la cita, más se separan.
+//
+//   CASO REAL Hair-Times 28-sep-2026. Mechas Completas Personalizadas +
+//   Corte Mujer (Complemento) + Matiz para Mechas Complemento. Las tres
+//   líneas suman 90 minutos en el widget; la cascada real ocupa 170. El
+//   motor ofreció las 17:30 y la cita se creó 17:30–20:20 con el salón
+//   cerrando a las 20:00 y margen 0. Tercera vez que el mismo síntoma llega
+//   a producción: 8-jul-2026 y 1-sep-2026 fueron el mismo mecanismo con
+//   otro número. Las correcciones anteriores arreglaron EL NÚMERO; esta
+//   arregla EL MECANISMO.
+//
+//   EL CAMBIO. crearPackReserva v1.0.60 estrena modo `soloCalcular`:
+//   recorre el mismo camino que al crear y devuelve la duración real sin
+//   escribir nada. Este archivo la pide ANTES de ofrecer horas y ANTES de
+//   crear, y decide con ella. No hay segunda implementación que pueda
+//   desviarse: la cifra la da el mismo código que construye las fases.
+//
+//   1) getHuecosDisponibles acepta `complementosSetupUid` y `varianteSel`.
+//      Si llegan (page code v0.4.0 + bundle v2.1.0), mide y filtra con la
+//      cifra real. Devuelve la duración medida en `durationMin` para que el
+//      widget pinte la del servidor y no la suya.
+//
+//   2) crearReservaPublica mide SIEMPRE, venga el front que venga, y valida
+//      el cierre contra esa cifra. Esta es la red que no se puede saltar:
+//      aunque el widget siga siendo antiguo y ofrezca una hora imposible,
+//      la reserva se rechaza en vez de nacer fuera de horario.
+//
+//   3) El log de creación escribe la duración REAL con la que se construyó
+//      la cita, junto a la validada y la del payload. La instrumentación
+//      anterior imprimía el número del navegador, así que repetía la cifra
+//      validada y no podía cazar el desfase que se creó para cazar.
+//
+//   RETROCOMPATIBILIDAD. `durationMin` no desaparece: sigue siendo el valor
+//   válido para quien ya conoce la duración real y no manda composición. Es
+//   el caso del Área de Cliente (clienteAreaLogic), que llama al motor con
+//   la duración guardada en la propia reserva. Sin `complementosSetupUid`,
+//   getHuecosDisponibles se comporta igual que en v0.11.12. Si la medición
+//   falla por cualquier motivo técnico, se cae a `durationMin` y se avisa en
+//   el log: nunca se bloquea una reserva legítima por un fallo de query.
 //
 // v0.11.12 — 🔓 EMITE EL FLAG `permiteQuitar` DE LAS REGLAS.
 //   Pareja de recepcionProLogic v1.0.59 y bundle v2.0.24. Cada regla emitida
@@ -954,7 +1013,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.11.12';
+const VERSION = '0.12.0';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -1914,6 +1973,45 @@ export const getSalonConfig = webMethod(
 // `abreA` informa al widget de la hora de apertura para que sepa
 // dónde empezar a pintar el primer chip aunque haya huecos vacíos.
 
+// =====================================================
+// v0.12.0 · MEDIR LA DURACIÓN REAL DE UNA CITA
+// =====================================================
+// Pregunta a crearPackReserva v1.0.60 en modo `soloCalcular`. Devuelve los
+// minutos que ocuparía la cita si se creara con esa composición, medidos por
+// el mismo código que construye las fases. Nunca escribe nada.
+//
+// La duración NO depende de la hora de inicio (la cascada se encadena por
+// desplazamientos en milisegundos), así que cuando aún no hay hora elegida
+// se ancla en una fija; el resultado es el mismo a cualquier hora del día.
+//
+// Devuelve null ante cualquier fallo — el llamante cae entonces a la
+// duración del payload. Criterio permisivo deliberado, el mismo que ya usa
+// la guardia de horario: mejor una reserva legítima que un rechazo por un
+// bug de query.
+const HORA_ANCLA_MEDICION = '12:00';
+
+async function medirDuracionRealPack({ fecha, horaHHmm, principalSetupUid, complementosSetupUid, varianteSel }) {
+  try {
+    if (!principalSetupUid) return null;
+    const { crearPackReserva } = await import('backend/recepcionProLogic.web');
+    const r = await crearPackReserva({
+      fecha,
+      horaHHmm: horaHHmm || HORA_ANCLA_MEDICION,
+      principalSetupUid,
+      complementosSetupUid: Array.isArray(complementosSetupUid) ? complementosSetupUid : [],
+      varianteSel: varianteSel || null,
+      soloCalcular: true
+    });
+    const d = Number(r?.duracionTotal);
+    if (r?.ok && Number.isFinite(d) && d > 0) return Math.round(d);
+    console.warn(`${TAG} ⚠️ medirDuracionRealPack: sin cifra útil (${r?.error?.message || 'respuesta vacía'}) → se usará la duración del payload`);
+    return null;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ medirDuracionRealPack falló: ${e.message} → se usará la duración del payload`);
+    return null;
+  }
+}
+
 const SLOT_STEP = 15;   // minutos entre slots
 
 function parseHHMM(s) {
@@ -2111,13 +2209,33 @@ async function resolverStaffLibre({ fecha, horaHHmm, durationMin, idStaffPermiti
 
 export const getHuecosDisponibles = webMethod(
   Permissions.Anyone,
-  async ({ fecha, proId, durationMin, idStaffPermitidos, proExtraId, principalSetupUid } = {}) => {
+  async ({ fecha, proId, durationMin, idStaffPermitidos, proExtraId, principalSetupUid, complementosSetupUid, varianteSel } = {}) => {
     const t0 = Date.now();
     try {
-      const dur = toNum(durationMin) || 60;
+      // v0.12.0 — `dur` deja de ser el número del navegador cuando la llamada
+      // trae la COMPOSICIÓN de la cita. Si viene `complementosSetupUid` como
+      // array (page code v0.4.0+), se mide contra el motor que construye las
+      // fases. Si no viene (Área de Cliente, front antiguo), se conserva el
+      // valor recibido: comportamiento v0.11.12 exacto.
+      let dur = toNum(durationMin) || 60;
       if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(String(fecha))) {
         return { ok: false, version: VERSION, error: { message: 'fecha inválida' }, huecos: [] };
       }
+
+      // v0.12.0 — MEDICIÓN EN SERVIDOR. Se hace aquí, antes de leer horarios
+      // y ocupación, porque `dur` gobierna todo el filtro posterior.
+      if (Array.isArray(complementosSetupUid) && principalSetupUid) {
+        const durReal = await medirDuracionRealPack({
+          fecha, principalSetupUid, complementosSetupUid, varianteSel
+        });
+        if (durReal != null) {
+          if (durReal !== toNum(durationMin)) {
+            console.warn(`${TAG} ⚠️ Duración recibida ${toNum(durationMin)}min ≠ duración real ${durReal}min para ${principalSetupUid}. Se ofrece con la real.`);
+          }
+          dur = durReal;
+        }
+      }
+
       // dow del día solicitado (interpretado como local Madrid)
       const [y, mo, d] = fecha.split('-').map(Number);
       const dow = new Date(y, mo - 1, d).getDay(); // 0..6
@@ -2647,13 +2765,37 @@ export const crearReservaPublica = webMethod(
       // servicio principal: no lo ejecuta, ejecuta los complementos. Sí se
       // valida que exista y esté activo en StaffConfig (defensa contra
       // payload manipulado).
+      // ─────────────────────────────────────────────────────────────
+      // v0.12.0 — DURACIÓN EFECTIVA: LA QUE MIDE EL MOTOR, NO EL PAYLOAD
+      // ─────────────────────────────────────────────────────────────
+      // Se mide SIEMPRE, con la composición real y a la hora exacta pedida.
+      // Es la red que no depende del front: aunque el widget sea antiguo y
+      // haya ofrecido una hora imposible, la guardia de cierre de más abajo
+      // la rechaza con esta cifra en vez de dejar nacer la cita fuera de
+      // horario. Si la medición falla, se cae al payload y se avisa: nunca
+      // se rechaza una reserva legítima por un fallo técnico de la medición.
+      let durEfectiva = toNum(durationMin);
+      const durMedida = await medirDuracionRealPack({
+        fecha,
+        horaHHmm,
+        principalSetupUid,
+        complementosSetupUid: Array.isArray(complementosSetupUid) ? complementosSetupUid : [],
+        varianteSel
+      });
+      if (durMedida != null) {
+        if (durMedida !== toNum(durationMin)) {
+          console.warn(`${TAG} ⚠️ Duración recibida ${toNum(durationMin)}min ≠ duración real ${durMedida}min. Se valida con la real.`);
+        }
+        durEfectiva = durMedida;
+      }
+
       const staffExtraLimpio = (typeof staffExtraId === 'string') ? staffExtraId.trim() : '';
       let staffIdExtraFinal = '';
       let staffNameExtraFinal = '';
       let durPrincipalTramo = null;
 
       if (staffExtraLimpio && staffExtraLimpio !== 'any' && staffExtraLimpio !== staffId) {
-        durPrincipalTramo = await resolverDurPrincipalTramo(principalSetupUid, toNum(durationMin));
+        durPrincipalTramo = await resolverDurPrincipalTramo(principalSetupUid, durEfectiva);
 
         if (durPrincipalTramo == null) {
           console.warn(`${TAG} ⚠️ staffExtraId recibido pero el corte de tramos no es resoluble → toda la cita al profesional principal.`);
@@ -2684,7 +2826,7 @@ export const crearReservaPublica = webMethod(
             }
             staffIdExtraFinal = rowExtra.wixResourceId || rowExtra._id;
             staffNameExtraFinal = nombreStaffLimpio(rowExtra.displayName || rowExtra.canonicalName);
-            console.log(`${TAG} 👥 Dos tramos: principal ${durPrincipalTramo}min | complementos ${toNum(durationMin) - durPrincipalTramo}min con ${staffNameExtraFinal || staffIdExtraFinal}`);
+            console.log(`${TAG} 👥 Dos tramos: principal ${durPrincipalTramo}min | complementos ${durEfectiva - durPrincipalTramo}min con ${staffNameExtraFinal || staffIdExtraFinal}`);
           } catch (eExtra) {
             console.warn(`${TAG} ⚠️ No se pudo resolver el segundo profesional: ${eExtra.message} → toda la cita al principal.`);
             staffIdExtraFinal = '';
@@ -2698,7 +2840,7 @@ export const crearReservaPublica = webMethod(
       // duración total; en modo dos tramos, solo su tramo.
       const durTramoPrincipal = (staffIdExtraFinal && durPrincipalTramo != null)
         ? durPrincipalTramo
-        : toNum(durationMin);
+        : durEfectiva;
 
       if (staffId === 'any') {
         let idsPermitidosResolver = [];
@@ -2720,7 +2862,7 @@ export const crearReservaPublica = webMethod(
         }
         if (!(durResolver > 0)) durResolver = 60; // último recurso
 
-        console.log(`${TAG} 🔎 Resolviendo 'any' con duración total ${durResolver}min (${durationMin ? 'payload' : 'fallback base'})`);
+        console.log(`${TAG} 🔎 Resolviendo 'any' con duración total ${durResolver}min (${durMedida != null ? 'medida en servidor' : (durationMin ? 'payload' : 'fallback base')})`);
 
         // v0.8.0 — se pasa graceMin (SalonConfig.closingGraceMin) para
         // que el resolvedor considere el margen del salón al validar el
@@ -2762,7 +2904,7 @@ export const crearReservaPublica = webMethod(
       // ya cubrió el caso de 'any', y para staff concreto el motor de huecos
       // filtró antes. La guardia es una capa extra, no la única defensa.
       try {
-        const gDurTotal = toNum(durationMin);
+        const gDurTotal = durEfectiva;
         const gInicioMin = parseHHMM(horaHHmm);
         if (gDurTotal > 0 && gInicioMin != null && staffIdFinal) {
           const rStaffFinal = await wixData.query(CMS_STAFF)
@@ -2866,7 +3008,7 @@ export const crearReservaPublica = webMethod(
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
       if (resultado?.ok) {
-        console.log(`${TAG} ✅ crearReservaPublica: reservaId=${resultado.reservaId} | ${fecha} ${horaHHmm} +${toNum(durationMin)}min | staff=${staffNameFinal || staffIdFinal}${staffIdExtraFinal ? ` +extra=${staffNameExtraFinal || staffIdExtraFinal}` : ''} | ${resultado.precioTotal}€ | ${elapsed}s`);
+        console.log(`${TAG} ✅ crearReservaPublica: reservaId=${resultado.reservaId} | ${fecha} ${horaHHmm} +${toNum(resultado.duracionTotal) || durEfectiva}min real (validado con ${durEfectiva}min, payload ${toNum(durationMin)}min) | staff=${staffNameFinal || staffIdFinal}${staffIdExtraFinal ? ` +extra=${staffNameExtraFinal || staffIdExtraFinal}` : ''} | ${resultado.precioTotal}€ | ${elapsed}s`);
 
         // ─────────────────────────────────────────────────────────────
         // v0.9.0 — REPARTO ENTRE DOS PROFESIONALES (fases del tramo B)
