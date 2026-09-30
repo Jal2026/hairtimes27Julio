@@ -3,7 +3,29 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.0.25 (bundle)
+ * VERSION:   2.1.0 (bundle)
+ *
+ * v2.1.0 — LA DURACION DE LA CITA LA DICE EL SERVIDOR.
+ *   Hasta aqui el widget sumaba en el navegador la duracion total
+ *   (baseDuration + variante + complementos) y el backend decidia con esa
+ *   cifra que horas ofrecer y si la reserva cabia antes del cierre. El front
+ *   no puede llegar al numero real: a un complemento con proceso propio el
+ *   motor le anade su bloque de PROCESO encima de la duracion seca, y al
+ *   elegir variante el front sustituye toda la duracion mientras el motor
+ *   sustituye solo la aplicacion y sigue montando la cascada. Caso real
+ *   28-sep-2026: tres lineas sumando 90 minutos en pantalla ocupando 170 en
+ *   la agenda, cita creada 17:30-20:20 con cierre a las 20:00.
+ *   Ahora el widget manda QUE ha elegido la clienta, no CUANTO cree que
+ *   dura: `complementosSetupUid` y `varianteSel` viajan tambien en
+ *   `pedir-huecos`, con el mismo formato exacto que ya viajaba en `reservar`.
+ *   El backend (widgetPublicoLogic v0.12.0) mide con el motor que construye
+ *   las fases y devuelve la duracion real en la respuesta de huecos.
+ *   La construccion de esos dos datos se extrae a `_buildComplementosPayload()`
+ *   y `_buildVarianteSel()`, usadas por los dos eventos, para que no puedan
+ *   describir cosas distintas. Incluye la regla de obligatorios quitables de
+ *   v2.0.24 sin cambiarla.
+ *   `durationMin` se sigue enviando por retrocompatibilidad. Ya no manda.
+ *   Pareja del page code `Servicios (Item)` v0.4.0.
  *
  * v2.0.21 — Imagenes redimensionadas en origen (rendimiento en movil 4G).
  *   Pareja del page code `Servicios (Item)` v0.3.6, que ahora envia dos
@@ -1071,7 +1093,10 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.0.25
+   VERSION: 2.1.0
+   v2.1.0 — La duracion la mide el servidor. El widget manda la composicion
+            elegida (complementos + variante) en `pedir-huecos` y pinta la
+            duracion que devuelve el backend en lugar de la suya.
    v2.0.25 — 🩹 ARRANQUE DEL QUITABLE + FRASES DE CONSECUENCIA.
      (A) FIX: un servicio quitable por regla inversa arrancaba en "No" porque
      _initState ponía todos los bool a false. Ahora arranca en "Sí" (puesto por
@@ -1839,10 +1864,86 @@ window.KR_applySkin = function (el, name) {
     // Emite el evento custom 'pedir-huecos' hacia el page code de Wix.
     // El page code llamará a getHuecosDisponibles y devolverá la respuesta
     // vía setAttribute('data-huecos-response', JSON).
+    /* ---- v2.1.0 · composicion elegida (misma para huecos y para reserva) ----
+       Estos dos metodos son la UNICA descripcion de lo que la clienta ha
+       elegido. Los usan tanto `pedir-huecos` como `reservar`, para que el
+       servidor mida exactamente la misma cita que luego va a crear.
+       Extraidos tal cual del manejador de reserva, sin cambiar una coma:
+       incluida la regla de obligatorios quitables de v2.0.24. */
+    _buildComplementosPayload() {
+      const cfg = this._service;
+      if (!cfg || !this.state) return [];
+      const _obligQuitPayload = this._obligadosQuitables();
+      return (cfg.complements || []).reduce((acc, c) => {
+        const v = this.state.comp[c.id];
+        if (c.type === 'bool') {
+          // v2.0.24 — quitable por regla inversa: va en el envío por defecto,
+          // salvo que el cliente lo haya quitado (state === false). Así el
+          // motor lo cobra por la vía normal si el cliente lo deja puesto.
+          if (_obligQuitPayload.has(c.id)) { if (v !== false) acc.push(c.id); }
+          else if (v) acc.push(c.id);
+        } else if (c.type === 'exclusive') {
+          if (v && v !== 'none') {
+            const o = (c.options || []).find(o => o.id === v);
+            if (o) {
+              acc.push({
+                uid: o.id,                  // setupUid del servicio elegido
+                varianteId: o.id,
+                varianteLabel: o.label || '',
+                price: (o.price == null ? null : Number(o.price)),
+                duration: Number(o.duration) || 0
+              });
+            }
+          }
+        } else {
+          // choice
+          if (v && v !== 'none') {
+            const o = (c.options || []).find(o => o.id === v);
+            if (o) {
+              acc.push({
+                uid: c.id,
+                varianteId: o.id,
+                varianteLabel: o.label || '',
+                price: (o.price == null ? null : Number(o.price)),
+                duration: Number(o.duration) || 0
+              });
+            }
+          }
+        }
+        return acc;
+      }, []);
+    }
+
+    _buildVarianteSel() {
+      const cfg = this._service;
+      if (!cfg || !this.state) return null;
+      let varianteSel = null;
+      if (cfg.hasVariants && Array.isArray(cfg.variantes)) {
+        const idx = this.state.variantIdx;
+        if (Number.isInteger(idx) && idx >= 0 && idx < cfg.variantes.length) {
+          const v = cfg.variantes[idx];
+          if (v && typeof v === 'object') {
+            const vLabel = v.label || v.nombre || '';
+            const vPriceRaw = (v.precio != null ? v.precio : v.price);
+            const vDurRaw = (v.duracion != null ? v.duracion : v.duration);
+            const vPrice = (vPriceRaw != null) ? Number(vPriceRaw) : 0;
+            const vDur = (vDurRaw != null) ? Number(vDurRaw) : 0;
+            varianteSel = { idx, label: vLabel, price: vPrice, duration: vDur };
+          }
+        }
+      }
+      return varianteSel;
+    }
+
     _emitirPedirHuecos() {
       if (!this.state || !this._selectedService) return;
       const day = this._dayById(this.state.dayId);
       if (!day) return;
+      // v2.1.0 — La duracion medida por el servidor deja de valer en cuanto
+      // se pregunta por una configuracion nueva. Se borra ANTES de calcular,
+      // para que `durationMin` viaje con la estimacion local y para no pintar
+      // en pantalla la cifra de la consulta anterior.
+      this._durServidor = null;
       const calc = this._calc();
       const reqId = this._newReqId();
       this._pendingHuecosReqId = reqId;
@@ -1855,7 +1956,15 @@ window.KR_applySkin = function (el, name) {
           requestId: reqId,
           fecha: day.id,
           proId: this.state.proMain,
+          // v2.1.0 — Referencia, ya no decide. El backend v0.12.0 mide con la
+          // composicion de las dos lineas siguientes. Se mantiene por
+          // retrocompatibilidad con page codes anteriores a v0.4.0.
           durationMin: calc.duration,
+          // v2.1.0 — QUE ha elegido la clienta, con el mismo formato exacto
+          // que viaja en el evento `reservar`. Con esto el servidor mide la
+          // cita en vez de creerse la suma del navegador.
+          complementosSetupUid: this._buildComplementosPayload(),
+          varianteSel: this._buildVarianteSel(),
           // v2.0.17 — Segundo profesional para los complementos. Cuando va
           // informado, el backend (widgetPublicoLogic v0.9.0) parte la cita
           // en dos tramos y valida cada uno contra su profesional. Vacío →
@@ -1877,6 +1986,15 @@ window.KR_applySkin = function (el, name) {
       if (res && res.requestId && res.requestId !== this._pendingHuecosReqId) return;
 
       this.state.loadingHuecos = false;
+      // v2.1.0 — Duracion REAL medida por el backend para esta configuracion.
+      // Manda sobre la suma local en `_calc()`, asi que la pantalla dice lo
+      // mismo que el motor que ha filtrado las horas. Si el backend no la
+      // envia (page code anterior a v0.4.0), se queda en null y todo sigue
+      // funcionando con la estimacion local.
+      {
+        const dSrv = Number(res && res.durationMin);
+        this._durServidor = (res && res.ok && Number.isFinite(dSrv) && dSrv > 0) ? dSrv : null;
+      }
       // v2.0.4 — Estado "cerrado": el salón no abre ese día.
       // El backend lo señaliza con motivo:'cerrado' (huecos:[]).
       this.state.salonCerrado = res && res.ok && res.motivo === 'cerrado';
@@ -2203,7 +2321,15 @@ window.KR_applySkin = function (el, name) {
       const saved = promoRaw ? Math.round(promoBase * (promoRaw / 100) * 100) / 100 : 0;
       const promo = (saved > 0.005) ? promoRaw : 0;
       const total = Math.round((price - saved) * 100) / 100;
-      return { subtotal: price, total, saved, promo, duration: dur, tbd };
+      // v2.1.0 — Si el backend ya ha medido esta configuracion, su cifra es
+      // la que vale: sale del motor que construye las fases. `_durServidor`
+      // se pone a null en cuanto se pide una consulta nueva, asi que
+      // mientras se espera se muestra la estimacion local y nunca una cifra
+      // de una configuracion anterior. `durationLocal` conserva la suma del
+      // front por si alguna vista la necesita.
+      const durServidor = Number(this._durServidor);
+      const durFinal = (Number.isFinite(durServidor) && durServidor > 0) ? durServidor : dur;
+      return { subtotal: price, total, saved, promo, duration: durFinal, durationLocal: dur, tbd };
     }
 
     _slotsFor(day, duration) {
@@ -3340,45 +3466,7 @@ window.KR_applySkin = function (el, name) {
         //                choice; el motor recepcionProLogic v1.0.34 detecta
         //                el uid dentro de f.refs del item exclusivo y
         //                materializa el servicio en su posición.
-        const _obligQuitPayload = this._obligadosQuitables();
-        const complementosSetupUid = (cfg.complements || []).reduce((acc, c) => {
-          const v = this.state.comp[c.id];
-          if (c.type === 'bool') {
-            // v2.0.24 — quitable por regla inversa: va en el envío por defecto,
-            // salvo que el cliente lo haya quitado (state === false). Así el
-            // motor lo cobra por la vía normal si el cliente lo deja puesto.
-            if (_obligQuitPayload.has(c.id)) { if (v !== false) acc.push(c.id); }
-            else if (v) acc.push(c.id);
-          } else if (c.type === 'exclusive') {
-            if (v && v !== 'none') {
-              const o = (c.options || []).find(o => o.id === v);
-              if (o) {
-                acc.push({
-                  uid: o.id,                  // setupUid del servicio elegido
-                  varianteId: o.id,
-                  varianteLabel: o.label || '',
-                  price: (o.price == null ? null : Number(o.price)),
-                  duration: Number(o.duration) || 0
-                });
-              }
-            }
-          } else {
-            // choice
-            if (v && v !== 'none') {
-              const o = (c.options || []).find(o => o.id === v);
-              if (o) {
-                acc.push({
-                  uid: c.id,
-                  varianteId: o.id,
-                  varianteLabel: o.label || '',
-                  price: (o.price == null ? null : Number(o.price)),
-                  duration: Number(o.duration) || 0
-                });
-              }
-            }
-          }
-          return acc;
-        }, []);
+        const complementosSetupUid = this._buildComplementosPayload();
 
         // Guardar contact data para usarla al recibir la respuesta
         this._lastContactData = data;
@@ -3389,21 +3477,7 @@ window.KR_applySkin = function (el, name) {
         // v1.0.25 y la reserva se cree con el precio/duración de la
         // variante. Si variantIdx === -1 (base) o el servicio no tiene
         // variantes, varianteSel = null → motor usa base.
-        let varianteSel = null;
-        if (cfg.hasVariants && Array.isArray(cfg.variantes)) {
-          const idx = this.state.variantIdx;
-          if (Number.isInteger(idx) && idx >= 0 && idx < cfg.variantes.length) {
-            const v = cfg.variantes[idx];
-            if (v && typeof v === 'object') {
-              const vLabel = v.label || v.nombre || '';
-              const vPriceRaw = (v.precio != null ? v.precio : v.price);
-              const vDurRaw = (v.duracion != null ? v.duracion : v.duration);
-              const vPrice = (vPriceRaw != null) ? Number(vPriceRaw) : 0;
-              const vDur = (vDurRaw != null) ? Number(vDurRaw) : 0;
-              varianteSel = { idx, label: vLabel, price: vPrice, duration: vDur };
-            }
-          }
-        }
+        const varianteSel = this._buildVarianteSel();
 
         const payload = {
           fecha: day.id,
@@ -3434,6 +3508,8 @@ window.KR_applySkin = function (el, name) {
           // libre en TODO el bloque continuo que el motor de huecos ya
           // validó. Sin esta línea el backend cae a la duración base del
           // principal (riesgo de solape en cascadas con complementos).
+          // v2.1.0 — Sigue viajando, pero ya no decide: crearReservaPublica
+          // v0.12.0 vuelve a medir con esta misma composicion antes de crear.
           durationMin: this._calc().duration
         };
         this._emitirReservar(payload);
