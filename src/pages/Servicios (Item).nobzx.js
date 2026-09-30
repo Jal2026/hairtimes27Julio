@@ -1,8 +1,13 @@
 // =====================================================
 // KAMISUITE — Page Code: /reservar/{slug}
 // =====================================================
-// VERSION: 0.4.0
+// VERSION: 0.4.1
 // FECHA: 30 de septiembre de 2026
+//
+// v0.4.1:
+//   + Solo renumeracion. Contenido identico al 0.4.0 entregado el
+//     30-sep-2026, que colisionaba con otro 0.4.0 entregado el 9-sep-2026.
+//     Ambos partian de 0.3.6 pero con backends distintos detras.
 //
 // v0.4.0:
 //   + LA DURACION DE LA CITA LA MIDE EL SERVIDOR.
