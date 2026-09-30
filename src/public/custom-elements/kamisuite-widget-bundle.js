@@ -3,7 +3,11 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.1.0 (bundle)
+ * VERSION:   2.1.1 (bundle)
+ *
+ * v2.1.1 — Solo renumeracion. Contenido identico al 2.1.0 entregado el
+ *   30-sep-2026, que colisionaba con otro 2.1.0 entregado el 9-sep-2026
+ *   construido sobre el bundle 2.0.21. Este esta construido sobre 2.0.25.
  *
  * v2.1.0 — LA DURACION DE LA CITA LA DICE EL SERVIDOR.
  *   Hasta aqui el widget sumaba en el navegador la duracion total
@@ -1093,7 +1097,9 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.1.0
+   VERSION: 2.1.1
+   v2.1.1 — Renumeracion. Mismo contenido que el 2.1.0 del 30-sep, que
+            colisionaba con el 2.1.0 del 9-sep (hecho sobre 2.0.21).
    v2.1.0 — La duracion la mide el servidor. El widget manda la composicion
             elegida (complementos + variante) en `pedir-huecos` y pinta la
             duracion que devuelve el backend en lugar de la suya.
