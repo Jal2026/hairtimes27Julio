@@ -1,9 +1,45 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.59
-// FECHA: 11 de septiembre de 2026
+// VERSION: 1.0.60
+// FECHA: 30 de septiembre de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.60: 🧮 MODO SOLO-CÁLCULO EN crearPackReserva.
+//          Nuevo parámetro OPCIONAL `soloCalcular` (Boolean, default false).
+//          Con `true`, la función recorre exactamente el mismo camino que al
+//          crear —catálogo, variante, normalización de complementos,
+//          construcción de la cascada y totales— y devuelve la duración y el
+//          precio reales SIN escribir absolutamente nada: ni contacto CRM, ni
+//          sessions, ni fila en KamisuiteReservations, ni notificación.
+//
+//          POR QUÉ. La única cifra fiable de cuánto ocupa una cita nace aquí
+//          dentro, y hasta ahora nacía cuando la cita YA estaba escrita. El
+//          motor de reservas online decide qué horas ofrecer y si una reserva
+//          cabe antes del cierre con un número calculado en el NAVEGADOR del
+//          cliente y enviado en el payload. Cuando esos dos números no
+//          coinciden, la cita nace más larga de lo validado y se pasa del
+//          horario de cierre sin que nada lo detecte, porque todas las
+//          comprobaciones se hicieron contra el número de fuera.
+//          Caso real Hair-Times 28-sep-2026: Mechas Completas Personalizadas
+//          + Corte Mujer + Matiz para Mechas, ofrecida a las 17:30 y creada
+//          17:30–20:20 con el salón cerrando a las 20:00. Las tres líneas
+//          suman 90 minutos en el front; la cascada real ocupa 170.
+//          Con este modo, widgetPublicoLogic v0.12.0 pregunta la duración
+//          real ANTES de ofrecer horas y ANTES de crear. La cifra la da el
+//          mismo código que construye las fases, así que no puede desviarse:
+//          no hay una segunda implementación que mantener sincronizada.
+//
+//          QUÉ CAMBIA PARA QUIEN YA LLAMABA A ESTA FUNCIÓN: nada. Recepción
+//          PRO V2 y Recepción LITE MOBILE no envían `soloCalcular`, así que
+//          entra a false y el recorrido es idéntico línea por línea al de
+//          v1.0.59. Los tres puntos tocados están guardados por ese flag:
+//            · Segregación fiscal → validación de alta, no se ejecuta.
+//            · Resolución del ancla → scheduleId, no hace falta para medir.
+//            · Contacto CRM → NO se crea (va antes de montar las fases, por
+//              eso no basta con salir al final).
+//          La salida ocurre justo después de calcular `duracionTotal`, antes
+//          de la primera escritura.
 //
 // v1.0.59: 🔓 REGLA INVERSA CON DESBLOQUEO PERMITIDO (`permiteQuitar`).
 //          Amplía la mitad inversa (1.0.58) con un flag `permiteQuitar`.
@@ -1377,7 +1413,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.59';
+const VERSION = '1.0.60';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -2509,7 +2545,13 @@ export const crearPackReserva = webMethod(
         // retrocompatibilidad: todas las llamadas existentes (Recepción Pro)
         // siguen creando con origenRecepcion=true sin cambios. El widget
         // público llama con origenRecepcion=false vía crearReservaPublica.
-        origenRecepcion = true
+        origenRecepcion = true,
+        // v1.0.60 — MODO SOLO-CÁLCULO. Con true no se escribe nada: se
+        // devuelve { ok, soloCalculo:true, duracionTotal, precioTotal, fases }
+        // justo después de construir la cascada. Lo usa widgetPublicoLogic
+        // para medir la cita con el MISMO código que la construye, en vez de
+        // fiarse de la duración que llega del navegador.
+        soloCalcular = false
       } = payload || {};
 
       if (!fecha || !horaHHmm || !principalSetupUid) {
@@ -2527,7 +2569,9 @@ export const crearPackReserva = webMethod(
       // los complementos elegidos: basta UNA línea de la otra naturaleza para
       // que el pack acabe cobrándose en el ledger equivocado, porque
       // marcarPagadoReserva enruta por el TITULAR, no por línea.
-      {
+      // v1.0.60 — Solo al crear. En modo solo-cálculo no se valida el alta:
+      // aquí únicamente se miden minutos.
+      if (!soloCalcular) {
         const seg = await validarSegregacionFiscal(principalBase, staffId, 'crearPackReserva');
         if (!seg.ok) {
           console.warn(`${TAG} ⛔ Segregación fiscal (principal): ${seg.error}`);
@@ -2569,16 +2613,24 @@ export const crearPackReserva = webMethod(
       }
 
       // ─── 2. Resolver ancla → scheduleId (por familia, desde la fila) ───
+      // v1.0.60 — El ancla solo hace falta para crear sessions. En modo
+      // solo-cálculo se omite (una query menos y ningún fallo por ancla mal
+      // resuelta puede impedir medir la duración).
       const wixAnclaId = principal.wixAnclaId || '';
-      const scheduleId = await resolverScheduleIdAncla(wixAnclaId);
-      if (!scheduleId) {
-        return { ok: false, version: VERSION, error: { message: `No se pudo resolver scheduleId del ancla ${wixAnclaId}` } };
+      let scheduleId = '';
+      if (!soloCalcular) {
+        scheduleId = await resolverScheduleIdAncla(wixAnclaId);
+        if (!scheduleId) {
+          return { ok: false, version: VERSION, error: { message: `No se pudo resolver scheduleId del ancla ${wixAnclaId}` } };
+        }
       }
 
       // ─── 3. Garantizar contacto CRM (excepto si cliente provisional) ───
       // v1.0.6 — esProvisional: cliente eventual de paso, no se persiste en CRM.
       // contactId queda vacío → no recibe comunicaciones, no ensucia CRM.
-      const finalContactId = esProvisional
+      // v1.0.60 — En modo solo-cálculo NUNCA se toca el CRM. Este paso va
+      // antes de montar las fases, así que no bastaría con salir al final.
+      const finalContactId = (soloCalcular || esProvisional)
         ? null
         : await ensureContactInCRM(contactDetails, memberContactId);
 
@@ -2735,6 +2787,22 @@ export const crearPackReserva = webMethod(
       const duracionTotal = Math.round(
         (new Date(cursorISO).getTime() - new Date(startISO).getTime()) / 60000
       );
+
+      // ─── 7-bis. v1.0.60 — SALIDA EN MODO SOLO-CÁLCULO ───
+      // Última línea antes de la primera escritura. A partir de aquí se
+      // crean sessions, se inserta la reserva y se notifica.
+      if (soloCalcular) {
+        const elapsedCalc = ((Date.now() - t0) / 1000).toFixed(2);
+        console.log(`${TAG} 🧮 crearPackReserva SOLO-CÁLCULO: ${principal.label || principalSetupUid} | ${duracionTotal}min | ${precioTotal}€ | ${fasesPack.length} fases | ${elapsedCalc}s`);
+        return {
+          ok: true,
+          version: VERSION,
+          soloCalculo: true,
+          duracionTotal,
+          precioTotal,
+          fases: fasesPack
+        };
+      }
 
       // ─── 7. Crear sessions SOLO de las fases que ocupan ───
       // PROCESO no genera session (libera al stylist — concepto fundacional).
