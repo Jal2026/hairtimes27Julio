@@ -2,10 +2,31 @@
  * ============================================================
  *  pagecode_comunicaciones.js — KAMISUITE Comunicaciones
  * ============================================================
- *  v1.5.0  ·  30 Agosto 2026
+ *  v1.6.1  ·  12 Octubre 2026
  * ------------------------------------------------------------
  *  CHANGELOG
  *  ---------
+ *  v1.6.1 (12-Oct-2026) — Estado de canales y Servicio de Email
+ *    - Nuevo import: comunicacionesAppLogic.web (v1.0.0).
+ *    - Casos nuevos: getEstadoCanales (al arrancar, la app lee los
+ *      interruptores del salón), emailServicio, emailServicioPrueba y
+ *      emailServicioResumen (pestaña Servicio de Email).
+ *    - Los casos email* de los compositores devuelven `origen`
+ *      ('servicio' | 'marketing'): la app tiene un compositor de avisos
+ *      y otro de campañas.
+ *    - Resto intacto.
+ *  v1.6.0 (12-Oct-2026) — Campañas de email (clon de Centrimerca)
+ *    - Nuevo import: campaniasEmailLogic.web (v1.0.0) — cargar,
+ *      borrador, prueba, envío/programación, descarte y seguimiento.
+ *    - Nuevos casos email* (todos con prefijo, para no chocar con los
+ *      mensajes existentes 'ready' y 'error'). Respuesta: { type,
+ *      payload } — el payload es el resultado del backend tal cual.
+ *    - Imagen y galería de las campañas: reutilizan
+ *      uploadImagenMarketing / listarImagenesMedia de whatsappLogic
+ *      (ya importados aquí). El widget recibe de vuelta la clave del
+ *      campo de imagen que pidió la subida.
+ *    - Resto de handlers intactos. Mismo archivo para la página de
+ *      escritorio y la móvil (la móvil no envía mensajes email*).
  *  v1.5.0 (30-Ago-2026) — Monitor por rango de fechas + Informe
  *    - Nuevo import: getHistorialComunicaciones de la centralita
  *      comunicacionesLogic.web (v1.4.0). Es la consulta neutral de
@@ -68,7 +89,25 @@ import {
     getHistorialComunicaciones
 } from 'backend/comunicacionesLogic.web';
 
-const TAG = '[Comunicaciones v1.5.0]';
+// v1.6.0: campañas de email (Brevo, cuenta propia del salón)
+import {
+    cargarCampaniasEmail,
+    guardarBorradorEmail,
+    enviarPruebaEmail,
+    enviarCampaniaEmail,
+    descartarBorradorEmail,
+    listarCampaniasEmail
+} from 'backend/campaniasEmailLogic.web';
+
+// v1.6.1: estado de canales y pestaña Servicio de Email
+import {
+    getEstadoCanales,
+    getServicioEmail,
+    vistaPreviaResumen,
+    enviarPruebaServicioEmail
+} from 'backend/comunicacionesAppLogic.web';
+
+const TAG = '[Comunicaciones v1.6.1]';
 
 let cacheContactos = [];
 let cacheReady = false;
@@ -104,6 +143,20 @@ $w.onReady(function () {
             case 'getSegmentos': handleGetSegmentos(); break;
             case 'filtrarPorSegmento': handleFiltrarPorSegmento(msg); break;
             case 'filtrarPorLabel': handleFiltrarPorLabel(msg); break;
+            // v1.6.0: campañas de email
+            case 'emailInit': handleEmailInit(); break;
+            case 'emailGuardarBorrador': handleEmailGuardarBorrador(msg); break;
+            case 'emailEnviarPrueba': handleEmailEnviarPrueba(msg); break;
+            case 'emailEnviarCampania': handleEmailEnviarCampania(msg); break;
+            case 'emailGetCampanias': handleEmailGetCampanias(); break;
+            case 'emailDescartarBorrador': handleEmailDescartarBorrador(msg); break;
+            case 'emailSubirImagen': handleEmailSubirImagen(msg); break;
+            case 'emailGetGaleria': handleEmailGetGaleria(msg); break;
+            // v1.6.1: estado de canales y Servicio de Email
+            case 'getEstadoCanales': handleGetEstadoCanales(); break;
+            case 'emailServicio': handleEmailServicio(); break;
+            case 'emailServicioPrueba': handleEmailServicioPrueba(msg); break;
+            case 'emailServicioResumen': handleEmailServicioResumen(); break;
             default: console.warn(TAG, 'Tipo desconocido:', msg.type);
         }
     });
@@ -435,5 +488,150 @@ async function handleFiltrarPorLabel(msg) {
     } catch (e) {
         console.error(TAG, '❌ filtrarPorLabel:', e);
         sendResponse('labelFiltrado', { contactos: [], total: 0, labelName: msg.labelName, error: e.message });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v1.6.0: HANDLERS CAMPAÑAS DE EMAIL
+// Puente puro: llaman al web method y devuelven su resultado tal
+// cual en { payload }. Si algo lanza, responden el mismo tipo con
+// ok:false para que el widget nunca se quede esperando.
+// ═══════════════════════════════════════════════════════════════
+
+const EMAIL_FALLO = 'No se ha podido completar la operación. Vuelve a intentarlo en unos segundos.';
+
+function responderEmail(type, payload) {
+    sendResponse(type, { payload });
+}
+
+async function handleEmailInit() {
+    try {
+        const r = await cargarCampaniasEmail();
+        responderEmail('emailInit', r);
+    } catch (e) {
+        console.error(TAG, '❌ emailInit:', e);
+        responderEmail('emailInit', { ok: false, error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailGuardarBorrador(msg) {
+    try {
+        const r = await guardarBorradorEmail({ campania: msg.campania || {} });
+        responderEmail('emailBorradorGuardado', Object.assign({ origen: msg.origen || '' }, r));
+    } catch (e) {
+        console.error(TAG, '❌ emailGuardarBorrador:', e);
+        responderEmail('emailBorradorGuardado', { ok: false, origen: msg.origen || '', error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailEnviarPrueba(msg) {
+    try {
+        const r = await enviarPruebaEmail({ campania: msg.campania || {}, emails: msg.emails || [] });
+        responderEmail('emailPruebaEnviada', Object.assign({ origen: msg.origen || '' }, r));
+    } catch (e) {
+        console.error(TAG, '❌ emailEnviarPrueba:', e);
+        responderEmail('emailPruebaEnviada', { ok: false, origen: msg.origen || '', error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailEnviarCampania(msg) {
+    try {
+        const r = await enviarCampaniaEmail({ campania: msg.campania || {} });
+        responderEmail('emailCampaniaEnviada', Object.assign({ origen: msg.origen || '' }, r));
+    } catch (e) {
+        console.error(TAG, '❌ emailEnviarCampania:', e);
+        responderEmail('emailCampaniaEnviada', { ok: false, origen: msg.origen || '', error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailGetCampanias() {
+    try {
+        const r = await listarCampaniasEmail();
+        responderEmail('emailCampanias', r);
+    } catch (e) {
+        console.error(TAG, '❌ emailGetCampanias:', e);
+        responderEmail('emailCampanias', { ok: false, error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailDescartarBorrador(msg) {
+    try {
+        const r = await descartarBorradorEmail({ campaignId: msg.campaignId });
+        responderEmail('emailBorradorDescartado', Object.assign({ origen: msg.origen || '' }, r));
+    } catch (e) {
+        console.error(TAG, '❌ emailDescartarBorrador:', e);
+        responderEmail('emailBorradorDescartado', { ok: false, origen: msg.origen || '', error: EMAIL_FALLO });
+    }
+}
+
+// Reutiliza uploadImagenMarketing (whatsappLogic). La clave del campo
+// de imagen viaja de ida y vuelta para que el widget coloque la URL.
+async function handleEmailSubirImagen(msg) {
+    try {
+        const r = await uploadImagenMarketing({
+            base64Data: msg.base64Data,
+            fileName: msg.fileName || 'campania_email.jpg',
+            mimeType: msg.mimeType || 'image/jpeg'
+        });
+        responderEmail('emailImagenSubida', Object.assign({ origen: msg.origen || '', clave: msg.clave }, r));
+    } catch (e) {
+        console.error(TAG, '❌ emailSubirImagen:', e);
+        responderEmail('emailImagenSubida', { ok: false, origen: msg.origen || '', clave: msg.clave, error: EMAIL_FALLO });
+    }
+}
+
+// Reutiliza listarImagenesMedia (whatsappLogic), misma llamada que la
+// galería de Marketing.
+async function handleEmailGetGaleria(msg) {
+    try {
+        const r = await listarImagenesMedia({ folder: null, limit: 50 });
+        responderEmail('emailGaleria', Object.assign({ origen: (msg && msg.origen) || '' }, r));
+    } catch (e) {
+        console.error(TAG, '❌ emailGetGaleria:', e);
+        responderEmail('emailGaleria', { ok: false, origen: (msg && msg.origen) || '', imagenes: [], error: EMAIL_FALLO });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v1.6.1: ESTADO DE CANALES Y SERVICIO DE EMAIL
+// ═══════════════════════════════════════════════════════════════
+
+async function handleGetEstadoCanales() {
+    try {
+        const r = await getEstadoCanales();
+        responderEmail('estadoCanales', r);
+    } catch (e) {
+        console.error(TAG, '❌ getEstadoCanales:', e);
+        responderEmail('estadoCanales', { ok: false, error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailServicio() {
+    try {
+        const r = await getServicioEmail();
+        responderEmail('emailServicio', r);
+    } catch (e) {
+        console.error(TAG, '❌ emailServicio:', e);
+        responderEmail('emailServicio', { ok: false, error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailServicioPrueba(msg) {
+    try {
+        const r = await enviarPruebaServicioEmail({ clave: msg.clave, to: msg.to || '' });
+        responderEmail('emailServicioPrueba', r);
+    } catch (e) {
+        console.error(TAG, '❌ emailServicioPrueba:', e);
+        responderEmail('emailServicioPrueba', { ok: false, error: EMAIL_FALLO });
+    }
+}
+
+async function handleEmailServicioResumen() {
+    try {
+        const r = await vistaPreviaResumen();
+        responderEmail('emailServicioResumen', r);
+    } catch (e) {
+        console.error(TAG, '❌ emailServicioResumen:', e);
+        responderEmail('emailServicioResumen', { ok: false, error: EMAIL_FALLO });
     }
 }
