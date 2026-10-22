@@ -1,8 +1,12 @@
 /* ═══════════════════════════════════════════════════════════════
-   pagecode_smart_pricing.js  v1.0.1
+   pagecode_smart_pricing.js  v1.0.2
    KAMISUITE — Page code de la página de gestión de Smart Pricing
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.2 · 22 Oct 2026 · Interruptores DÍAS / HORAS
+     - 'spAnalizar' trae `interruptores` { dias, horas } y se pasa tal cual
+       a analizarYProponer (smartPricingLogic v1.0.4), que decide qué tipos
+       de oferta puede proponer AKIRA.
    v1.0.1 · 22 Oct 2026 · Meses quitados del análisis
      - 'spAnalizar' trae `mesesExcluidos` ['YYYY-MM', …] y se pasa tal cual
        a analizarYProponer (smartPricingLogic v1.0.1). El backend los
@@ -25,13 +29,13 @@
        'error'. Mismo remedio que AKIRA aplicó a su 504 (20-ago-2026).
 
    ELEMENTO EN LA PÁGINA: componente HTML con ID #htmlSmartPricing
-   BACKEND: smartPricingLogic.web.js v1.0.1
+   BACKEND: smartPricingLogic.web.js v1.0.4
    ═══════════════════════════════════════════════════════════════ */
 
 import { currentMember } from 'wix-members-frontend';
 import { getEstadoSmartPricing, analizarYProponer, elegirPropuesta } from 'backend/smartPricingLogic.web';
 
-const TAG = '[SmartPricingPage][v1.0.1]';
+const TAG = '[SmartPricingPage][v1.0.2]';
 const WIDGET_ID = '#htmlSmartPricing';
 const POLL_MS = 3000;
 const POLL_MAX = 40;   // 40 × 3 s = 2 minutos
@@ -112,7 +116,8 @@ $w.onReady(async function () {
         sendToWidget({ type: 'spAnalizando' });
         try {
           const mesesExcluidos = Array.isArray(msg.mesesExcluidos) ? msg.mesesExcluidos : [];
-          const r = await analizarYProponer({ semanas: msg.semanas, mesesExcluidos, solicitudId });
+          const interruptores = (msg.interruptores && typeof msg.interruptores === 'object') ? msg.interruptores : null;
+          const r = await analizarYProponer({ semanas: msg.semanas, mesesExcluidos, interruptores, solicitudId });
           const estado = await leerEstado();
           sendToWidget({
             type: 'spAnalisisListo',
