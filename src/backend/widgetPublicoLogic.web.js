@@ -1,7 +1,25 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.13.1
+// VERSION: 0.13.2
+//
+// v0.13.2 — SMART PRICING: LLAMADAS A smartPricingLogic SOLO CON AWAIT
+//   (22-oct-2026). El diagnóstico de la 0.13.1 dio la causa: en Hair-Times
+//   `regla={}` y `oferta={}`. Las funciones NORMALES de smartPricingLogic
+//   llegaban como promesa sin esperar, y las `async` con await llegaban
+//   bien (versión, franjas, servicio con smartPricing=true, precio 99).
+//   Por eso no salía ninguna oferta, aunque todo estaba bien configurado.
+//     · ofertasDeHuecos → una llamada `await sp.ofertasDeHoras(...)`
+//       (smartPricingLogic v1.0.6). Se quita el log 🔎 de la 0.13.1.
+//     · crearReservaPublica (revalidación al reservar) → `await
+//       sp.ofertasDeHoras({ …, horas:[hora], fresco:true })`. ANTES de este
+//       arreglo, una reserva con oferta se habría guardado SIN la oferta:
+//       `of.pct` salía undefined y la cita nacía sin ella.
+//     · Confirmación → `await sp.descuentoAutomaticoReserva(...)` y
+//       `await sp.textoAvisoDescuento(...)`.
+//     · Requiere smartPricingLogic v1.0.6 (ofertasDeHoras). Con una
+//       versión anterior, la llamada falla dentro del try/catch y la
+//       reserva sigue sin ofertas, como hasta ahora.
 //
 // v0.13.1 — DIAGNÓSTICO TEMPORAL DE SMART PRICING (22-oct-2026).
 //   Hair-Times: getOfertasDias registra «0 con oferta» con el martes 27
@@ -1087,7 +1105,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.13.1';
+const VERSION = '0.13.2';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -2103,29 +2121,15 @@ async function ofertasDeHuecos({ fecha, huecos, principalSetupUid }) {
   if (!principalSetupUid || !Array.isArray(huecos) || !huecos.length) return nada;
   try {
     const sp = await import('backend/smartPricingLogic.web');
-    const vig = await sp.leerReglasVigentes();
-    if (!vig.activo) {
-      // v0.13.1 — DIAGNÓSTICO TEMPORAL
-      console.log(`${TAG} 🔎 ofertasDeHuecos ${fecha}: vigente APAGADA · ${JSON.stringify(vig)}`);
-      return nada;
-    }
-    const item = await sp.leerItemCatalogo(principalSetupUid);
+    // v0.13.2 — Una sola llamada async, con await (ver cabecera).
+    const r = await sp.ofertasDeHoras({ fecha, horas: huecos, setupUid: principalSetupUid });
+    if (!r || !r.activo) return nada;
     const ofertas = {};
-    for (const h of huecos) {
-      const of = sp.calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: h, item });
-      if (of.pct > 0) ofertas[h] = of.pct;
+    for (const [h, o] of Object.entries(r.ofertas || {})) {
+      const pct = Number(o && o.pct);
+      if (pct > 0) ofertas[h] = pct;
     }
-    // v0.13.1 — DIAGNÓSTICO TEMPORAL: día con horas que acaba sin oferta.
-    if (!Object.keys(ofertas).length) {
-      const h0 = huecos[0];
-      const prueba = sp.calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: h0, item });
-      const regla = sp.pctOfertaEnHueco(vig.reglas, fecha, h0);
-      const svc = item
-        ? `${item.label} setupUid=${item.setupUid} smartPricing=${JSON.stringify(item.smartPricing)} price=${JSON.stringify(item.price)} promo=${JSON.stringify(item.descuentoActivo)}/${JSON.stringify(item.descuentoPromo)}`
-        : `NO ENCONTRADO (${principalSetupUid})`;
-      console.log(`${TAG} 🔎 ofertasDeHuecos ${fecha}: 0 ofertas en ${huecos.length} horas · versión ${vig.versionId} franjas=${JSON.stringify(vig.reglas && vig.reglas.franjas)} · servicio ${svc} · ${h0}: regla=${JSON.stringify(regla)} oferta=${JSON.stringify(prueba)}`);
-    }
-    return { activo: true, ventanaDias: vig.reglas.ventanaDias, ofertas };
+    return { activo: true, ventanaDias: Number(r.ventanaDias) || 0, ofertas };
   } catch (e) {
     console.warn(`${TAG} ⚠️ ofertasDeHuecos (no-blocking): ${e.message}`);
     return nada;
@@ -3257,14 +3261,14 @@ export const crearReservaPublica = webMethod(
         let leido = false;
         try {
           const sp = await import('backend/smartPricingLogic.web');
-          const vig = await sp.leerReglasVigentes({ fresco: true });
+          // v0.13.2 — Una llamada async, con await y en fresco.
+          const r = await sp.ofertasDeHoras({ fecha, horas: [horaHHmm], setupUid: principalSetupUid, fresco: true });
           leido = true;
-          if (vig.activo) {
-            const itemSvc = await sp.leerItemCatalogo(principalSetupUid, { fresco: true });
-            const of = sp.calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: horaHHmm, item: itemSvc });
-            pctServidor = of.pct;
-            ahorroServidor = of.ahorro;
-            versionServidor = vig.versionId;
+          if (r && r.activo) {
+            const o = (r.ofertas || {})[horaHHmm];
+            pctServidor = Number(o && o.pct) || 0;
+            ahorroServidor = Number(o && o.ahorro) || 0;
+            versionServidor = r.versionId || '';
           }
         } catch (spErr) {
           console.warn(`${TAG} ⚠️ Smart pricing no concluyente al reservar: ${spErr.message}`);
@@ -3496,13 +3500,13 @@ export const crearReservaPublica = webMethod(
             const promoIdx = await sp.cargarIndicePromos(
               fasesD.filter(f => f && f.tipo === 'servicio').map(f => f.setupUid)
             );
-            descAuto = sp.descuentoAutomaticoReserva({
+            descAuto = await sp.descuentoAutomaticoReserva({   // v0.13.2 — await
               fases: fasesD,
               ofertaPct: ofertaReserva ? ofertaReserva.pct : 0,
               ofertaAhorro: ofertaReserva ? ofertaReserva.ahorro : 0,
               promoIdx
             });
-            const aviso = descAuto.importe > 0 ? sp.textoAvisoDescuento(descAuto.tipo, descAuto.pct) : '';
+            const aviso = descAuto.importe > 0 ? await sp.textoAvisoDescuento(descAuto.tipo, descAuto.pct) : '';   // v0.13.2 — await
             if (aviso) serviciosStr = `${serviciosStr} · ${aviso}`;
           } catch (dErr) {
             console.warn(`${TAG} ⚠️ Descuento en la confirmación (no-blocking): ${dErr.message}`);
