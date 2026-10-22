@@ -9,10 +9,55 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.15.6
+       KAMISUITE — Edición Servicios Widget v1.15.9
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.15.9: 🔓 DESBLOQUEO CON AVISO EN LA REGLA INVERSA.
+         Segunda casilla, anidada bajo la del inverso y solo activa si esta está
+         marcada: "↳ Permitir que el cliente lo quite con un aviso claro". Guarda
+         `permiteQuitar:true`. Con ella, el servicio obligatorio deja de estar
+         bloqueado: sale puesto por defecto pero el cliente puede desmarcarlo
+         tras confirmar un aviso, con lo que el precio base vuelve a ser
+         alcanzable (anunciar "desde X €" con honestidad). Al desmarcar el
+         inverso, se limpia también permiteQuitar. renderFases carga el flag,
+         collectFases lo persiste (solo si inverso), renderReglas pinta la
+         casilla. Aplican recepcionProLogic v1.0.59, widgetPublicoLogic
+         v0.11.12 y bundle v2.0.24.
+       v1.15.8: 🔁 MITAD INVERSA EN LA REGLA DE INCLUSIÓN.
+         Cada regla tiene ahora una casilla: "Y si NO lo elige, ese servicio se
+         añade igualmente como obligatorio y de pago". Al marcarla, la regla
+         guarda `inverso:true`. Con ella, si el cliente no elige A, el servicio
+         B se pone solo, con su precio y sin poder quitarlo (caso "o peinado o
+         secado, pero secado siempre"). Sin marcar, la regla es solo la mitad
+         "incluye gratis" de 1.15.7. renderFases carga el flag, collectFases lo
+         persiste, renderReglas pinta la casilla. El motor (recepcionProLogic
+         v1.0.58 + widgetPublicoLogic v0.11.11 + bundle v2.0.23) ya la aplica.
+       v1.15.7: 🔗 REGLAS ENTRE SERVICIOS + LISTADO DE COMPLEMENTOS PLEGADO.
+         (A) Nueva sección "Reglas entre servicios", plegada por defecto,
+         dentro del bloque de la cascada. Cada regla es una frase en lenguaje
+         llano con dos desplegables — "Si el cliente elige [A], incluye gratis
+         [B]" — que solo ofrecen servicios YA presentes en la cascada, así que
+         no pueden apuntar a nada inexistente. El desplegable "incluye gratis"
+         (B) ofrece además solo servicios SIMPLES (sin variantes), para que el
+         "Incluido · 0 €" del widget quede siempre limpio; el saneo limpia una
+         B que dejara de ser simple. Las reglas se guardan como items
+         { tipo:'regla', subtipo:'incluye', si, entonces } dentro del mismo
+         mapeoFases, en su propio array (reglasItems), sin entrar en la fila de
+         chips: no son eventos, no se pintan, no se reordenan. renderFases las
+         carga (descartando las que referencien un servicio borrado),
+         collectFases las persiste al final del mapeo, y renderReglas dibuja la
+         sección y sanea las que pierdan un servicio de la cascada. El motor
+         (recepcionProLogic v1.0.57) y el widget (widgetPublicoLogic v0.11.10
+         + bundle v2.0.22) ya aplican estas reglas.
+         (B) El listado "Complementos compatibles" arranca PLEGADO mostrando
+         solo los marcados; "Ver todos (N más)" revela el resto y "Ver menos"
+         lo cierra. Conserva la selección al alternar (la recoge del DOM antes
+         de repintar). Reduce mucho el alto del modal en salones con catálogo
+         grande. Reutiliza las clases existentes del checklist; sin estilos
+         nuevos en los items.
+         Cero cambios en el resto del editor. Servicios sin reglas y catálogos
+         sin plegar se comportan igual que en 1.15.6.
        v1.15.6: 📍 EL AVISO SE DIBUJA DONDE EL USUARIO ACABA DE PULSAR.
          Dentro de un componente HTML de Wix, position:fixed se calcula
          contra el alto del COMPONENTE — miles de píxeles en este editor —
@@ -792,7 +837,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.15.6</span>
+    <span class="header-version"> v1.15.9</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -1020,6 +1065,19 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
                 <input type="number" class="form-input" id="fMinProceso" min="0" step="5" placeholder="45">
                 <p class="form-hint">Duración del chip <b>⏳ Proceso</b>. Mientras dura, el profesional queda libre.</p>
               </div>
+
+              <!-- REGLAS ENTRE SERVICIOS -->
+              <div id="reglasWrap" style="margin-top:14px;">
+                <button type="button" id="reglasToggle" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:rgba(120,210,120,.06);border:1px solid rgba(120,210,120,.30);border-radius:8px;color:#a7e3a7;font-size:13px;font-weight:700;cursor:pointer;">
+                  <span>🔗 Reglas entre servicios <span id="reglasCount" style="color:#7a8f7a;font-weight:600;"></span></span>
+                  <span id="reglasArrow" style="transition:transform .15s;">▾</span>
+                </button>
+                <div id="reglasBody" style="display:none;margin-top:10px;">
+                  <p class="form-hint" style="margin:0 0 10px 0;">Si el cliente elige un servicio de la cascada, otro se incluye gratis. Útil cuando dos servicios van ligados aunque estén en posiciones distintas. Solo se ofrecen servicios que ya estén en la cascada, y el que se incluye gratis debe ser simple (sin variantes).</p>
+                  <div id="reglasList"></div>
+                  <button type="button" id="btnAddRegla" style="margin-top:4px;padding:7px 13px;font-size:12px;background:rgba(120,210,120,.10);border:1px solid rgba(120,210,120,.4);color:#a7e3a7;border-radius:6px;cursor:pointer;font-weight:600;">+ Añadir regla</button>
+                </div>
+              </div>
             </div>
 
             <!-- COMPLEMENTOS -->
@@ -1029,6 +1087,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
               </div>
               <p class="form-hint" style="margin-bottom:8px;">Servicios que el cliente puede añadir a este. Marca los que apliquen.</p>
               <div class="comp-grid" id="complementosGrid"></div>
+              <div id="complementosToggleWrap" style="margin-top:8px;"></div>
             </div>
 
             <div class="form-group" style="margin-top:16px;">
@@ -1711,6 +1770,12 @@ function serviciosDeFase(excludeId) {
 
 let cascadaItems = [];
 let cascadaExcludeId = null;
+// Reglas de inclusión condicional entre servicios de la cascada. Viven en
+// su propio array (no son eventos, no son chips) y se persisten dentro del
+// mismo mapeoFases junto a las fases. Shape: {tipo:'regla',subtipo:'incluye',si,entonces}
+let reglasItems = [];
+// Estado de plegado del listado de complementos compatibles.
+let complementosExpanded = false;
 
 function renderChipsCascada() {
   const box = document.getElementById('chipsCascada');
@@ -1718,6 +1783,7 @@ function renderChipsCascada() {
   if (!cascadaItems.length) {
     box.innerHTML = `<span style="color:#7a7f8b;font-size:12px;font-style:italic;">Sin fases. Usa los botones de arriba para añadir.</span>`;
     toggleProcesoMinWrap();
+    renderReglas();
     return;
   }
   box.innerHTML = cascadaItems.map((it, i) => {
@@ -1833,6 +1899,7 @@ function renderChipsCascada() {
   }));
 
   toggleProcesoMinWrap();
+  renderReglas();
 }
 
 function addChipAplicacion() {
@@ -1893,6 +1960,7 @@ function renderFases(mapeoFases, excludeId) {
   cascadaExcludeId = excludeId;
   const arr = Array.isArray(mapeoFases) ? mapeoFases : [];
   cascadaItems = [];
+  reglasItems = [];
   const uidToName = {};
   allServicios.forEach(s => { if (s.setupUid) uidToName[s.setupUid] = s.name; });
   arr.forEach(f => {
@@ -1901,6 +1969,12 @@ function renderFases(mapeoFases, excludeId) {
       cascadaItems.push({ tipo: 'aplicacion' });
     } else if (f.tipo === 'proceso') {
       cascadaItems.push({ tipo: 'proceso' });
+    } else if (f.tipo === 'regla' && f.si && f.entonces) {
+      // Regla de inclusión. Solo se carga si ambos servicios siguen en el
+      // catálogo; si alguno se borró, la regla se descarta silenciosamente.
+      if (uidToName[f.si] && uidToName[f.entonces]) {
+        reglasItems.push({ tipo: 'regla', subtipo: 'incluye', si: f.si, entonces: f.entonces, inverso: f.inverso === true, permiteQuitar: f.permiteQuitar === true });
+      }
     } else if (f.tipo === 'exclusivo' && Array.isArray(f.refs)) {
       // v1.14.0 — CHIP ROJO cargado desde CMS. Filtramos refs a los que
       // realmente existen en el catálogo actual (por si alguno se borró).
@@ -1925,7 +1999,7 @@ function renderFases(mapeoFases, excludeId) {
 }
 
 function collectFases() {
-  return cascadaItems.map(it => {
+  const fases = cascadaItems.map(it => {
     // v1.13.0 — el flag `obligatorio` se persiste explícitamente. Default
     // false. Solo aplica a chips tipo:'servicio'; aplicacion/proceso no
     // lo llevan (no aplica obligatoriedad: la cascada los ejecuta siempre).
@@ -1937,6 +2011,117 @@ function collectFases() {
       refs: Array.isArray(it.refs) ? it.refs.slice() : []
     };
     return { tipo: it.tipo };
+  });
+  // Reglas de inclusión: se guardan como items del mismo mapeoFases, al
+  // final. No son eventos, así que su posición no importa; el motor y el
+  // widget las localizan por tipo:'regla' recorriendo todo el array.
+  const reglas = reglasItems
+    .filter(r => r && r.si && r.entonces && r.si !== r.entonces)
+    .map(r => ({ tipo: 'regla', subtipo: 'incluye', si: r.si, entonces: r.entonces, inverso: r.inverso === true, permiteQuitar: (r.inverso === true && r.permiteQuitar === true) }));
+  return fases.concat(reglas);
+}
+
+// Servicios (chips verdes) presentes ahora mismo en la cascada, únicos por
+// ref. Alimenta los desplegables de las reglas: solo se puede referenciar un
+// servicio que ya está en la cascada, así que una regla nunca apunta a nada.
+function serviciosEnCascada() {
+  const vistos = new Set();
+  const out = [];
+  cascadaItems.forEach(it => {
+    if (it && it.tipo === 'servicio' && it.ref && !vistos.has(it.ref)) {
+      vistos.add(it.ref);
+      const svc = allServicios.find(s => s.setupUid === it.ref);
+      const conVariantes = !!(svc && (svc.hasVariants || (Array.isArray(svc.variantes) && svc.variantes.length > 0)));
+      out.push({ ref: it.ref, label: it.label || it.ref, simple: !conVariantes });
+    }
+  });
+  return out;
+}
+
+// Dibuja la sección "Reglas entre servicios". Cada regla es una frase con dos
+// desplegables poblados solo con servicios de la cascada. No hay IDs ni campos
+// técnicos a la vista.
+function renderReglas() {
+  const list = document.getElementById('reglasList');
+  if (!list) return;
+  const countEl = document.getElementById('reglasCount');
+  const addBtn = document.getElementById('btnAddRegla');
+  const servicios = serviciosEnCascada();
+
+  // Saneo: si un servicio referenciado por una regla ya no está en la
+  // cascada (se borró su chip), se limpia ese lado del desplegable para que
+  // el usuario vuelva a elegir. Además, el servicio "incluye gratis" (B) debe
+  // ser SIMPLE (sin variantes): si dejó de serlo, también se limpia.
+  // collectFases descarta reglas incompletas.
+  const validSi = new Set(servicios.map(s => s.ref));
+  const validEntonces = new Set(servicios.filter(s => s.simple).map(s => s.ref));
+  reglasItems.forEach(r => {
+    if (r.si && !validSi.has(r.si)) r.si = '';
+    if (r.entonces && !validEntonces.has(r.entonces)) r.entonces = '';
+  });
+
+  if (countEl) {
+    const n = reglasItems.filter(r => r && r.si && r.entonces).length;
+    countEl.textContent = n ? '(' + n + ')' : '';
+  }
+
+  if (servicios.length < 2) {
+    list.innerHTML = '<p class="form-hint" style="margin:4px 0;">Añade al menos dos servicios a la cascada para poder crear una regla.</p>';
+    if (addBtn) addBtn.disabled = true;
+    return;
+  }
+  if (addBtn) addBtn.disabled = false;
+
+  if (!reglasItems.length) {
+    list.innerHTML = '<p class="form-hint" style="margin:4px 0;">Aún no hay reglas. Pulsa «+ Añadir regla».</p>';
+    return;
+  }
+
+  const optsSi = (selVal) =>
+    '<option value="">— servicio —</option>' +
+    servicios.map(s => '<option value="' + esc(s.ref) + '"' + (selVal === s.ref ? ' selected' : '') + '>' + esc(s.label) + '</option>').join('');
+  const optsEntonces = (selVal) =>
+    '<option value="">— servicio —</option>' +
+    servicios.filter(s => s.simple).map(s => '<option value="' + esc(s.ref) + '"' + (selVal === s.ref ? ' selected' : '') + '>' + esc(s.label) + '</option>').join('');
+
+  list.innerHTML = reglasItems.map((r, i) =>
+    '<div class="regla-row" data-idx="' + i + '" style="margin-bottom:8px;padding:8px 10px;background:#10131a;border:1px solid #2d3142;border-radius:8px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+        '<span style="color:#c8ccd6;font-size:13px;">Si el cliente elige</span>' +
+        '<select class="regla-si" style="flex:1;min-width:150px;padding:6px 8px;background:#1a1c25;border:1px solid #2d3142;border-radius:6px;color:#e6e8ee;font-size:13px;">' + optsSi(r.si) + '</select>' +
+        '<span style="color:#c8ccd6;font-size:13px;">, incluye gratis</span>' +
+        '<select class="regla-entonces" style="flex:1;min-width:150px;padding:6px 8px;background:#1a1c25;border:1px solid #2d3142;border-radius:6px;color:#e6e8ee;font-size:13px;">' + optsEntonces(r.entonces) + '</select>' +
+        '<button type="button" class="regla-del" title="Quitar regla" style="background:rgba(232,84,84,.10);border:1px solid rgba(232,84,84,.45);color:#ff6b6b;border-radius:6px;width:28px;height:28px;cursor:pointer;font-weight:700;flex-shrink:0;">✕</button>' +
+      '</div>' +
+      '<label style="display:flex;align-items:flex-start;gap:7px;margin-top:9px;color:#c8ccd6;font-size:12px;cursor:pointer;line-height:1.35;">' +
+        '<input type="checkbox" class="regla-inverso"' + (r.inverso ? ' checked' : '') + ' style="width:15px;height:15px;margin-top:1px;cursor:pointer;flex-shrink:0;">' +
+        '<span>Y si <b>no</b> lo elige, ese servicio se añade igualmente como <b>obligatorio y de pago</b> (con su precio, sin poder quitarlo). Así el cliente nunca se queda sin él.</span>' +
+      '</label>' +
+      '<label style="display:flex;align-items:flex-start;gap:7px;margin-top:7px;margin-left:22px;font-size:12px;line-height:1.35;' + (r.inverso ? 'color:#c8ccd6;cursor:pointer;' : 'color:#5a5f6b;cursor:default;') + '">' +
+        '<input type="checkbox" class="regla-quitar"' + (r.inverso && r.permiteQuitar ? ' checked' : '') + (r.inverso ? '' : ' disabled') + ' style="width:15px;height:15px;margin-top:1px;flex-shrink:0;' + (r.inverso ? 'cursor:pointer;' : '') + '">' +
+        '<span>↳ Permitir que el cliente lo quite con un aviso claro (deja de ser obligatorio: sale puesto por defecto pero puede desmarcarlo tras confirmar). Útil para poder anunciar el precio base.</span>' +
+      '</label>' +
+    '</div>'
+  ).join('');
+
+  list.querySelectorAll('.regla-row').forEach(row => {
+    const idx = parseInt(row.dataset.idx, 10);
+    const selSi = row.querySelector('.regla-si');
+    const selEn = row.querySelector('.regla-entonces');
+    const btnDel = row.querySelector('.regla-del');
+    const chkInv = row.querySelector('.regla-inverso');
+    const chkQui = row.querySelector('.regla-quitar');
+    if (selSi) selSi.addEventListener('change', e => { if (reglasItems[idx]) reglasItems[idx].si = e.target.value; renderReglas(); });
+    if (selEn) selEn.addEventListener('change', e => { if (reglasItems[idx]) reglasItems[idx].entonces = e.target.value; renderReglas(); });
+    if (chkInv) chkInv.addEventListener('change', e => {
+      if (!reglasItems[idx]) return;
+      reglasItems[idx].inverso = e.target.checked;
+      // Si se apaga el inverso, "permitir quitar" pierde sentido → se limpia.
+      if (!e.target.checked) reglasItems[idx].permiteQuitar = false;
+      renderReglas(); // re-render para habilitar/deshabilitar la segunda casilla
+    });
+    if (chkQui) chkQui.addEventListener('change', e => { if (reglasItems[idx]) reglasItems[idx].permiteQuitar = e.target.checked; });
+    if (btnDel) btnDel.addEventListener('click', () => { reglasItems.splice(idx, 1); renderReglas(); });
   });
 }
 
@@ -2057,39 +2242,67 @@ function bloqueadosPorCascada() {
   return mapa;
 }
 
-function renderComplementos(seleccionados, excludeId) {
-  const sel = Array.isArray(seleccionados) ? seleccionados : [];
-  const cands = complementosCandidatos(excludeId);
-  if (cands.length === 0) {
-    el.complementosGrid.innerHTML = '<div class="empty-line">No hay servicios marcados como complemento en el catálogo.</div>';
-    return;
-  }
-  const bloqueados = bloqueadosPorCascada();
-  el.complementosGrid.innerHTML = cands.map(c => {
-    const motivo = bloqueados[c.setupUid];
-    const enCascada = !!motivo;
-    // Los presentes en la cascada siempre selected (Recepción PRO ve el
-    // servicio como candidato en el popover) + locked-in-exclusivo (estilo
-    // gris + no clicables + nota del motivo).
-    const isSel = enCascada || sel.includes(c.setupUid);
-    const clsSel = isSel ? ' selected' : '';
-    const clsLock = enCascada ? ' locked-in-exclusivo' : '';
-    const hint = enCascada
-      ? `<span class="comp-locked-hint">${esc(motivo)}</span>`
-      : '';
-    return `
+// HTML de un item del checklist de complementos.
+function compItemHTML(c, bloqueados, sel) {
+  const motivo = bloqueados[c.setupUid];
+  const enCascada = !!motivo;
+  const isSel = enCascada || sel.includes(c.setupUid);
+  const clsSel = isSel ? ' selected' : '';
+  const clsLock = enCascada ? ' locked-in-exclusivo' : '';
+  const hint = enCascada ? `<span class="comp-locked-hint">${esc(motivo)}</span>` : '';
+  return `
       <label class="comp-item${clsSel}${clsLock}" data-uid="${esc(c.setupUid)}">
         <input type="checkbox" ${isSel ? 'checked' : ''} ${enCascada ? 'disabled' : ''}>
         <span class="comp-check">✓</span>
         <span class="comp-name">${esc(c.name)}${hint}</span>
       </label>`;
-  }).join('');
+}
+
+// Botón de plegado. El listado arranca cerrado mostrando solo los marcados;
+// «Ver todos» revela el resto. Al alternar se conserva la selección actual.
+function renderComplementosToggle(restoCount, excludeId) {
+  const wrap = document.getElementById('complementosToggleWrap');
+  if (!wrap) return;
+  if (restoCount <= 0 && !complementosExpanded) { wrap.innerHTML = ''; return; }
+  const label = complementosExpanded ? 'Ver menos ▴' : ('Ver todos (' + restoCount + ' más) ▾');
+  wrap.innerHTML = '<button type="button" id="btnCompVerTodos" style="padding:6px 12px;font-size:12px;background:rgba(255,255,255,.04);border:1px solid #2d3142;color:#c8ccd6;border-radius:6px;cursor:pointer;font-weight:600;">' + label + '</button>';
+  const btn = document.getElementById('btnCompVerTodos');
+  if (btn) btn.addEventListener('click', () => {
+    const current = collectComplementos();   // conserva lo marcado ahora mismo
+    complementosExpanded = !complementosExpanded;
+    renderComplementos(current, excludeId);
+  });
+}
+
+function renderComplementos(seleccionados, excludeId) {
+  const sel = Array.isArray(seleccionados) ? seleccionados : [];
+  const cands = complementosCandidatos(excludeId);
+  const toggleWrap = document.getElementById('complementosToggleWrap');
+  if (cands.length === 0) {
+    el.complementosGrid.innerHTML = '<div class="empty-line">No hay servicios marcados como complemento en el catálogo.</div>';
+    if (toggleWrap) toggleWrap.innerHTML = '';
+    return;
+  }
+  const bloqueados = bloqueadosPorCascada();
+  const isMarked = c => (!!bloqueados[c.setupUid]) || sel.includes(c.setupUid);
+  const marcados = cands.filter(isMarked);
+  const resto = cands.filter(c => !isMarked(c));
+  const visibles = complementosExpanded ? cands : marcados;
+
+  let html = visibles.map(c => compItemHTML(c, bloqueados, sel)).join('');
+  if (!complementosExpanded && marcados.length === 0) {
+    html = '<div class="empty-line" style="grid-column:1/-1;">Ninguno marcado. Pulsa «Ver todos» para elegir.</div>';
+  }
+  el.complementosGrid.innerHTML = html;
+
   el.complementosGrid.querySelectorAll('.comp-item').forEach(item => {
     // v1.14.2 — los bloqueados por cascada no reaccionan a clic.
     if (item.classList.contains('locked-in-exclusivo')) return;
     const cb = item.querySelector('input');
     cb.addEventListener('change', () => item.classList.toggle('selected', cb.checked));
   });
+
+  renderComplementosToggle(resto.length, excludeId);
 }
 
 function collectComplementos() {
@@ -2124,6 +2337,7 @@ function openEditModal(catalogId) {
   renderVariantes(s.variantes || []);
   renderFases(s.mapeoFases || [], s._catalogId || s.id);
   el.fMinProceso.value = (typeof s.minProcesoCatalog === 'number' && s.minProcesoCatalog > 0) ? s.minProcesoCatalog : '';
+  complementosExpanded = false;
   renderComplementos(s.complementos || [], s._catalogId || s.id);
   fImageBase64 = null;
   fImageFileName = null;
@@ -2169,6 +2383,7 @@ function openNuevoModal() {
   renderStaffGrid([]);
   renderVariantes([]);
   renderFases([], null);
+  complementosExpanded = false;
   renderComplementos([], null);
   el.fMinProceso.value = '';
   fImageBase64 = null;
@@ -2592,6 +2807,26 @@ document.getElementById('btnAddProceso').addEventListener('click', addChipProces
 document.getElementById('btnAddServicio').addEventListener('click', toggleServicioMenu);
 // v1.14.0 — CHIP ROJO: abrir submodal en modo alta.
 document.getElementById('btnAddExclusivo').addEventListener('click', () => openExclusivoModal(null));
+// Reglas entre servicios: plegado y alta.
+(function () {
+  const toggle = document.getElementById('reglasToggle');
+  const body = document.getElementById('reglasBody');
+  const arrow = document.getElementById('reglasArrow');
+  const addBtn = document.getElementById('btnAddRegla');
+  if (toggle && body) {
+    toggle.addEventListener('click', () => {
+      const abierto = body.style.display !== 'none';
+      body.style.display = abierto ? 'none' : 'block';
+      if (arrow) arrow.style.transform = abierto ? 'rotate(0deg)' : 'rotate(180deg)';
+    });
+  }
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      reglasItems.push({ tipo: 'regla', subtipo: 'incluye', si: '', entonces: '' });
+      renderReglas();
+    });
+  }
+})();
 document.getElementById('btnExcClose').addEventListener('click', closeExclusivoModal);
 document.getElementById('btnExcCancel').addEventListener('click', closeExclusivoModal);
 document.getElementById('btnExcSave').addEventListener('click', saveExclusivoModal);
