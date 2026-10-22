@@ -3,7 +3,26 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.1.6 (bundle)
+ * VERSION:   2.1.7 (bundle)
+ *
+ * v2.1.7 — COMPLEMENTO SI/NO OBLIGATORIO Y AVISO DEL CANDADO (22-oct-2026).
+ *   1) «Lavado previo» en Botox Capilar (Jal, Hair-Times). Un complemento
+ *      Si/No con `required` (fase obligatoria del mapeoFases, backend
+ *      widgetPublicoLogic) salia en «No» y con el boton No/Si. Hasta pulsar
+ *      «Si» el boton de reservar no se activaba (_complementosObligatorios
+ *      Ok exige `true`), y pulsarlo borraba la hora (_afterCompChange).
+ *        · _initState: un bool `required` arranca en `true`.
+ *        · _renderComplements: un bool `required` se pinta fijo en «Si»,
+ *          bloqueado, con «· obligatorio» en la etiqueta. Mismo pintado que
+ *          el obligado de pago de v2.0.23. Va despues de «incluido gratis»
+ *          y del obligado de pago, y antes del quitable con aviso: un
+ *          obligatorio no se puede quitar.
+ *        · Precio, duracion, envio y resumen no cambian: ya trataban el
+ *          bool en `true` como elegido, igual que cuando la clienta pulsaba
+ *          «Si».
+ *   2) El aviso «Elige una hora para completar tus datos» seguia visible
+ *      tras elegir hora: `.kr-locknote { display:flex }` anula el atributo
+ *      `hidden` que pone _updateLock. Nueva regla `.kr-locknote[hidden]`.
  *
  * v2.1.6 — SMART PRICING: TIRA ESTABLE Y PRECIO «DESDE» (22-oct-2026).
  *   1) «A veces sale y otras no» (Jal, Hair-Times, hoy a las 22:15). La
@@ -896,6 +915,7 @@ window.KR_STYLES = `
   padding: 12px 15px; border: 1px dashed var(--kr-line-2); border-radius: var(--kr-radius); background: var(--kr-surface-2);
 }
 .kr-locknote svg { width: 15px; height: 15px; flex: none; }
+.kr-locknote[hidden] { display: none; } /* v2.1.7 — display:flex anulaba hidden */
 .kr-sec.is-locked .kr-field,
 .kr-sec.is-locked .kr-actions { opacity: .45; transition: opacity var(--kr-dur) var(--kr-ease); }
 .kr-sec.is-locked .kr-field { pointer-events: none; }
@@ -1188,7 +1208,9 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.1.6
+   VERSION: 2.1.7
+   v2.1.7 — Complemento Si/No obligatorio fijo en «Si»; aviso del candado
+            oculto al elegir hora.
    v2.1.6 — Tira de ofertas estable con dias sin horas; precio «desde».
    v2.1.5 — Sin «−X%» fantasma en el chip del dia al cambiar de dia.
    v2.1.4 — Mini sello «−X%» en dias y horas con oferta.
@@ -1858,7 +1880,8 @@ window.KR_applySkin = function (el, name) {
         if (r && r.inverso && r.permiteQuitar && r.entonces) quitInit.add(r.entonces);
       });
       (cfg.complements || []).forEach(c => {
-        if (c.type === "bool") comp[c.id] = quitInit.has(c.id) ? true : false;
+        // v2.1.7 — un bool obligatorio (required) arranca en "Sí".
+        if (c.type === "bool") comp[c.id] = (quitInit.has(c.id) || c.required === true) ? true : false;
         else comp[c.id] = (c.default || c.options[0].id);
       });
       this.state = {
@@ -3117,6 +3140,21 @@ window.KR_applySkin = function (el, name) {
             // v2.0.23 — Obligado de pago (mitad inversa, A no elegido): se
             // muestra seleccionado y bloqueado, con su precio. La clienta no
             // lo puede quitar. Reutiliza las clases del propio CSS.
+            const lab = el("label", "kr-label", c.label
+              + (c.price ? ` <small>· +${EUR(c.price)} · obligatorio</small>` : ` <small>· obligatorio</small>`)
+              + (c.hint ? ` <small>· ${c.hint}</small>` : ""));
+            field.appendChild(lab);
+            const seg = el("div", "kr-seg");
+            const b = el("button", "kr-seg__opt is-sel", "Sí");
+            b.type = "button";
+            b.disabled = true;
+            seg.appendChild(b);
+            field.appendChild(seg);
+          } else if (c.required === true) {
+            // v2.1.7 — Bool obligatorio (fase obligatoria del mapeoFases):
+            // fijo en "Sí" y bloqueado, mismo pintado que el obligado de
+            // pago. Su estado ya arranca en true (_initState).
+            this.state.comp[c.id] = true;
             const lab = el("label", "kr-label", c.label
               + (c.price ? ` <small>· +${EUR(c.price)} · obligatorio</small>` : ` <small>· obligatorio</small>`)
               + (c.hint ? ` <small>· ${c.hint}</small>` : ""));
