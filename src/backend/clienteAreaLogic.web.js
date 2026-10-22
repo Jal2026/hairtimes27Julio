@@ -1,7 +1,32 @@
 // =====================================================
 // KAMISUITE — Backend: Área de Cliente
 // =====================================================
-// VERSION: 1.6.6
+// VERSION: 1.6.8
+//
+// v1.6.8 — SMART PRICING: la oferta de la cita al moverla (21-oct-2026).
+//   NUMERACIÓN: construido sobre la 1.6.6, que es la que hay en el repo de
+//   Hair-Times. La 1.6.7 (condiciones del bono, 21-ago-2026) se entregó y
+//   se subió a mano en Salón Kami y NO está en Hair-Times; este archivo no
+//   la contiene. Se salta el número para no reutilizarlo.
+//
+//   Regla decidida por Jal: si la clienta mueve una cita CON oferta a un
+//   hueco sin oferta, la pierde y se le avisa antes de confirmar; si el
+//   nuevo hueco también tiene oferta, la cita se queda con la del nuevo
+//   hueco. Si la mueve el salón desde Recepción, la oferta se mantiene
+//   (por eso esta lógica vive aquí y NO en reprogramarReserva, que es
+//   compartida con Recepción PRO).
+//   Las citas SIN oferta no cambian en nada al moverlas.
+//
+//   (A) getHuecosCambioReserva devuelve, cuando la cita lleva oferta,
+//       `ofertaActualPct` y `ofertas` { 'HH:MM': pct } del día pedido, para
+//       que el widget avise antes de confirmar. Versión vigente en fresco.
+//   (B) moverCitaCliente, tras mover la cita con reprogramarReserva,
+//       recalcula su oferta para el nuevo hueco y la reescribe (o la borra)
+//       con READ-MERGE-UPDATE. El ahorro nuevo se calcula sobre el mismo
+//       precio base que el original (ahorro × 100 / porcentaje), sin
+//       consultar el catálogo. No-blocking: si falla, la cita ya está
+//       movida y conserva la oferta anterior; queda ⚠️ en el log.
+//   smartPricingLogic se importa de forma dinámica dentro de try/catch.
 //
 // v1.6.6 — Fecha de verificación del appId de Wix Stores.
 //   - Documentada en el comentario de APP_ID_WIX_STORES la fecha
@@ -414,7 +439,7 @@ import { cancelarReserva, reprogramarReserva } from 'backend/recepcionProLogic.w
 import { getHuecosDisponibles } from 'backend/widgetPublicoLogic.web';
 import wixData from 'wix-data';
 
-const VERSION = '1.6.6';
+const VERSION = '1.6.8';
 const TAG = `[ClienteArea][${VERSION}]`;
 
 // App ID constante de Wix Stores. Requerido en catalogReference.appId
@@ -1821,6 +1846,68 @@ export const cancelarCitaCliente = webMethod(
  * SALIDA:   { ok, huecos: ['10:00', ...], fecha, reservaId,
  *             motivo: 'cerrado' | undefined, error? }
  */
+// v1.6.8 — SMART PRICING. Oferta actual de la cita y ofertas de las horas
+// libres del día pedido. Solo si la cita lleva oferta; si no, vacío.
+async function ofertaParaCambio(reg, fecha, huecos) {
+  const nada = { ofertaActualPct: 0, ofertas: {} };
+  try {
+    const sp = await import('backend/smartPricingLogic.web');
+    const campos = sp.camposOfertaReserva();
+    const pctActual = Number(reg?.[campos.pct]) || 0;
+    if (!(pctActual > 0)) return nada;
+    const vig = await sp.leerReglasVigentes({ fresco: true });
+    const ofertas = {};
+    if (vig.activo) {
+      for (const h of (Array.isArray(huecos) ? huecos : [])) {
+        const pct = sp.pctOfertaEnHueco(vig.reglas, fecha, h);
+        if (pct > 0) ofertas[h] = pct;
+      }
+    }
+    return { ofertaActualPct: pctActual, ofertas };
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ ofertaParaCambio (no-blocking): ${e.message}`);
+    return nada;
+  }
+}
+
+// v1.6.8 — SMART PRICING. Tras mover una cita CON oferta: se queda con la
+// oferta del nuevo hueco o la pierde. READ-MERGE-UPDATE (wixData.update
+// reemplaza el documento entero). El precio base se recupera de la propia
+// oferta (ahorro × 100 / porcentaje), así que no hace falta el catálogo.
+async function recalcularOfertaTrasMover(reservaId, regAntes, nuevaFecha, nuevaHora) {
+  try {
+    const sp = await import('backend/smartPricingLogic.web');
+    const campos = sp.camposOfertaReserva();
+    const pctAntes = Number(regAntes?.[campos.pct]) || 0;
+    const ahorroAntes = Number(regAntes?.[campos.ahorro]) || 0;
+    if (!(pctAntes > 0) || !(ahorroAntes > 0)) return;   // cita sin oferta: nada que hacer
+
+    const vig = await sp.leerReglasVigentes({ fresco: true });
+    const pctNuevo = vig.activo ? sp.pctOfertaEnHueco(vig.reglas, nuevaFecha, nuevaHora) : 0;
+    const base = Math.round((ahorroAntes * 100 / pctAntes) * 100) / 100;
+
+    const actual = await wixData.get(CMS_RESERVAS, reservaId, { suppressAuth: true });
+    if (!actual) return;
+    const fusion = { ...actual };
+    if (pctNuevo > 0) {
+      fusion[campos.pct] = pctNuevo;
+      fusion[campos.ahorro] = Math.min(
+        Math.round(base * pctNuevo) / 100,
+        Number(actual.precioTotal) || Infinity
+      );
+      fusion[campos.versionId] = vig.versionId || '';
+    } else {
+      fusion[campos.pct] = null;
+      fusion[campos.ahorro] = null;
+      fusion[campos.versionId] = '';
+    }
+    await wixData.update(CMS_RESERVAS, fusion, { suppressAuth: true });
+    console.log(`${TAG} 🏷️ Oferta tras mover ${reservaId}: −${pctAntes}% → ${pctNuevo > 0 ? '−' + pctNuevo + '%' : 'sin oferta'}`);
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ No se pudo recalcular la oferta de ${reservaId} tras moverla (conserva la anterior): ${e.message}`);
+  }
+}
+
 export const getHuecosCambioReserva = webMethod(
   Permissions.SiteMember,
   async ({ memberContactId, reservaId, fecha } = {}) => {
@@ -1879,6 +1966,9 @@ export const getHuecosCambioReserva = webMethod(
         idStaffPermitidos: [staffId]
       });
 
+      // v1.6.8 — SMART PRICING. Solo para citas que ya llevan oferta.
+      const sp = await ofertaParaCambio(reg, fecha, res?.huecos || []);
+
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
       console.log(
         `${TAG} ✅ getHuecosCambioReserva ${reservaId} fecha=${fecha} ` +
@@ -1894,7 +1984,9 @@ export const getHuecosCambioReserva = webMethod(
         motivo: res?.motivo,
         abreA: res?.abreA,
         cierraA: res?.cierraA,
-        error: res?.error
+        error: res?.error,
+        ofertaActualPct: sp.ofertaActualPct,
+        ofertas: sp.ofertas
       };
 
     } catch (e) {
@@ -2000,6 +2092,9 @@ export const moverCitaCliente = webMethod(
           error: { message: result?.error?.message || result?.error || 'No se pudo mover la cita' }
         };
       }
+
+      // v1.6.8 — SMART PRICING. La oferta sigue al hueco, no a la cita.
+      await recalcularOfertaTrasMover(reservaId, reg, nuevaFecha, nuevaHora);
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
       console.log(
