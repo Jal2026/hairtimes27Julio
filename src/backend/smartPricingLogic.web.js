@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE - Backend: Smart Pricing
 // =====================================================
-// VERSION: 1.0.2
+// VERSION: 1.0.4
 // FECHA: 22 de octubre de 2026
 // ARCHIVO: backend/smartPricingLogic.web.js
 //
@@ -77,6 +77,43 @@
 //  remedio que AKIRA aplicó al 504 de su primera pregunta (20-ago-2026).
 //
 // CHANGELOG:
+//   v1.0.4 (22-oct-2026) — Interruptores DÍAS y HORAS antes de analizar.
+//     Jal pidió interruptores previos al análisis para elegir qué tipo de
+//     oferta propone AKIRA. Sin respuesta sobre «día y horas», se aplica
+//     la opción recomendada:
+//       · solo DÍAS   → 'dia'
+//       · solo HORAS  → 'horas'
+//       · los dos     → 'dia', 'dia_horas' y 'horas'
+//       · ninguno     → no se analiza (aviso al dueño)
+//     · analizarYProponer acepta `interruptores` { dias, horas }. Si no
+//       llega (page code anterior), los dos cuentan como encendidos: mismo
+//       comportamiento que v1.0.3.
+//     · A la IA solo se le ofrecen los tipos permitidos (enum de la
+//       herramienta e instrucciones) y validarOpciones descarta cualquier
+//       franja de otro tipo.
+//     · Los interruptores usados se guardan en `propuestas.interruptores`
+//       (campo JSON existente: ningún campo CMS nuevo).
+//   v1.0.3 (22-oct-2026) — TRES TIPOS DE OFERTA: día, día y horas, horas.
+//     Jal: «Fui muy claro con los días y horas y no tienen por qué ir
+//     juntas. Esto solo da horas. Se puede empezar por incentivar martes
+//     sin horas concretas». Hasta v1.0.2 cada franja era siempre un día con
+//     un tramo de horas. Ahora cada franja lleva `tipo`:
+//       · 'dia'        { tipo, dow, pct }            martes entero
+//       · 'dia_horas'  { tipo, dow, desde, hasta, pct } miércoles 14–16
+//       · 'horas'      { tipo, desde, hasta, pct }    14–16 cualquier día
+//     Se pueden mezclar en una misma opción. Si dos franjas coinciden en
+//     una hora gana la mayor (nunca se suman), como antes.
+//     · normalizarFranja (nueva) es la ÚNICA que decide si una franja vale;
+//       la usan normalizarReglas y validarOpciones.
+//     · Franjas guardadas antes, sin `tipo` (dow + desde + hasta), se leen
+//       como 'dia_horas': nada de lo ya guardado cambia de significado.
+//     · pctOfertaEnHueco entiende los tres tipos. Es la única función que
+//       decide si un hueco lleva oferta (reserva online, revalidación al
+//       reservar y Área de Cliente la usan vía calcularOfertaServicio y
+//       pctOfertaEnHueco): esos archivos NO cambian.
+//     · Herramienta de la IA e instrucciones: los tres tipos y cuándo usar
+//       cada uno. La validación comprueba que el día o las horas tengan a
+//       alguien trabajando.
 //   v1.0.2 (22-oct-2026) — El análisis daba «No hay horario de profesionales».
 //     Hair-Times, con widgetPublicoLogic 0.13.0 ya subido: la función de
 //     horario se encuentra (el error «is not a function» desaparece), pero
@@ -118,7 +155,7 @@ import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.0.2';
+const VERSION = '1.0.4';
 const TAG = `[SmartPricing][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -285,8 +322,47 @@ export function camposOfertaReserva() {
 }
 
 /**
+ * v1.0.3 — Valida UNA franja y la devuelve limpia, o null si no vale.
+ *   'dia'        → { tipo, dow, pct }
+ *   'dia_horas'  → { tipo, dow, desde, hasta, pct }
+ *   'horas'      → { tipo, desde, hasta, pct }
+ * Sin `tipo` (franjas guardadas hasta v1.0.2): dow + desde + hasta →
+ * 'dia_horas'; solo dow → 'dia'; solo horas → 'horas'.
+ */
+function normalizarFranja(f) {
+  const pct = Math.round(Number(f?.pct));
+  if (!Number.isFinite(pct) || pct < 1 || pct > 100) return null;
+  const rawDow = f?.dow;
+  const hayDow = rawDow !== null && rawDow !== undefined && rawDow !== '';
+  const dow = Number(rawDow);
+  const dowOk = hayDow && Number.isInteger(dow) && dow >= 0 && dow <= 6;
+  const d = parseHHMM(f?.desde);
+  const h = parseHHMM(f?.hasta);
+  const horasOk = d != null && h != null && d < h;
+  let tipo = String(f?.tipo || '');
+  if (!tipo) tipo = (dowOk && horasOk) ? 'dia_horas' : (dowOk ? 'dia' : (horasOk ? 'horas' : ''));
+  if (tipo === 'dia') return dowOk ? { tipo, dow, pct } : null;
+  if (tipo === 'dia_horas') return (dowOk && horasOk) ? { tipo, dow, desde: fmtHHMM(d), hasta: fmtHHMM(h), pct } : null;
+  if (tipo === 'horas') return horasOk ? { tipo, desde: fmtHHMM(d), hasta: fmtHHMM(h), pct } : null;
+  return null;
+}
+
+// v1.0.4 — Tipos de franja que AKIRA puede proponer según los
+// interruptores DÍAS / HORAS del widget. Sin dato → encendido.
+const TIPOS_FRANJA = ['dia', 'dia_horas', 'horas'];
+function leerInterruptores(raw) {
+  return { dias: raw?.dias !== false, horas: raw?.horas !== false };
+}
+function tiposDesdeInterruptores(intr) {
+  if (intr.dias && intr.horas) return [...TIPOS_FRANJA];
+  if (intr.dias) return ['dia'];
+  if (intr.horas) return ['horas'];
+  return [];
+}
+
+/**
  * Normaliza y valida unas reglas. Devuelve null si no hay nada aplicable.
- * Forma: { ventanaDias, franjas: [{ dow, desde:'HH:MM', hasta:'HH:MM', pct }] }
+ * Forma: { ventanaDias, franjas: [franja normalizada (ver normalizarFranja)] }
  */
 function normalizarReglas(raw) {
   const r = objIn(raw);
@@ -294,14 +370,8 @@ function normalizarReglas(raw) {
   const franjasIn = Array.isArray(r.franjas) ? r.franjas : [];
   const franjas = [];
   for (const f of franjasIn) {
-    const dow = Number(f?.dow);
-    const d = parseHHMM(f?.desde);
-    const h = parseHHMM(f?.hasta);
-    const pct = Math.round(Number(f?.pct));
-    if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
-    if (d == null || h == null || d >= h) continue;
-    if (!Number.isFinite(pct) || pct < 1 || pct > 100) continue;
-    franjas.push({ dow, desde: fmtHHMM(d), hasta: fmtHHMM(h), pct });
+    const limpia = normalizarFranja(f);
+    if (limpia) franjas.push(limpia);
   }
   if (!franjas.length) return null;
   const v = Math.round(Number(r.ventanaDias));
@@ -360,11 +430,16 @@ export function pctOfertaEnHueco(reglas, fechaISO, horaHHmm) {
   if (m == null) return 0;
   const dow = dowDeFecha(String(fechaISO));
   let mejor = 0;
-  for (const f of reglas.franjas) {
-    if (f.dow !== dow) continue;
-    const d = parseHHMM(f.desde), h = parseHHMM(f.hasta);
-    if (d == null || h == null) continue;
-    if (m >= d && m < h && f.pct > mejor) mejor = f.pct;
+  for (const fRaw of reglas.franjas) {
+    // v1.0.3 — tres tipos; normalizarFranja también lee las de antes.
+    const f = normalizarFranja(fRaw);
+    if (!f) continue;
+    if (f.tipo !== 'horas' && f.dow !== dow) continue;
+    if (f.tipo !== 'dia') {
+      const d = parseHHMM(f.desde), h = parseHHMM(f.hasta);
+      if (!(m >= d && m < h)) continue;
+    }
+    if (f.pct > mejor) mejor = f.pct;
   }
   return mejor;
 }
@@ -734,7 +809,7 @@ async function calcularOcupacion(semanas, periodo) {
 
 const TOOL_PROPONER = {
   name: 'proponer_opciones',
-  description: 'Devuelve exactamente tres opciones de ofertas por día y franja horaria.',
+  description: 'Devuelve exactamente tres opciones de ofertas. Cada oferta es un día entero, un tramo de horas de un día, o un tramo de horas de cualquier día.',
   input_schema: {
     type: 'object',
     properties: {
@@ -752,12 +827,13 @@ const TOOL_PROPONER = {
               items: {
                 type: 'object',
                 properties: {
-                  dow: { type: 'integer', description: '0 domingo, 1 lunes … 6 sábado.' },
-                  desde: { type: 'string', description: 'HH:MM, inicio incluido.' },
-                  hasta: { type: 'string', description: 'HH:MM, fin excluido.' },
+                  tipo: { type: 'string', enum: ['dia', 'dia_horas', 'horas'], description: "'dia' = todo el día de la semana indicado; 'dia_horas' = un tramo de horas de ese día; 'horas' = un tramo de horas de cualquier día abierto." },
+                  dow: { type: 'integer', description: "0 domingo, 1 lunes … 6 sábado. Obligatorio en 'dia' y 'dia_horas'; no se usa en 'horas'." },
+                  desde: { type: 'string', description: "HH:MM, inicio incluido. Obligatorio en 'dia_horas' y 'horas'; no se usa en 'dia'." },
+                  hasta: { type: 'string', description: "HH:MM, fin excluido. Obligatorio en 'dia_horas' y 'horas'; no se usa en 'dia'." },
                   pct: { type: 'integer', description: 'Porcentaje de descuento entero.' }
                 },
-                required: ['dow', 'desde', 'hasta', 'pct']
+                required: ['tipo', 'pct']
               }
             }
           },
@@ -834,10 +910,11 @@ async function leerPromosActivas() {
 
 /**
  * Valida y limpia las opciones de la IA contra la ocupación real:
- * solo franjas en horas donde alguien trabaja ese día, porcentajes
+ * solo franjas en días u horas donde alguien trabaja, porcentajes
  * enteros 1–100, como mucho 3 opciones. Lo que no pasa se descarta.
+ * v1.0.3 — tres tipos de franja (ver normalizarFranja).
  */
-function validarOpciones(opcionesIA, ocupacion) {
+function validarOpciones(opcionesIA, ocupacion, tipos = TIPOS_FRANJA) {
   const abierto = {};   // `${dow}|${hora}` → true si hay capacidad
   for (const d of ocupacion.dias) {
     for (const c of d.celdas) if (c.capacidadMin > 0) abierto[`${d.dow}|${parseHHMM(c.hora)}`] = true;
@@ -845,20 +922,27 @@ function validarOpciones(opcionesIA, ocupacion) {
   const out = [];
   for (const op of (Array.isArray(opcionesIA) ? opcionesIA : []).slice(0, 3)) {
     const franjas = [];
-    for (const f of (Array.isArray(op?.franjas) ? op.franjas : [])) {
-      const dow = Number(f?.dow);
-      const dI = parseHHMM(f?.desde), hI = parseHHMM(f?.hasta);
-      const pct = Math.round(Number(f?.pct));
-      if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
-      if (dI == null || hI == null || dI >= hI) continue;
-      if (!Number.isFinite(pct) || pct < 1 || pct > 100) continue;
-      // Al menos una hora de la franja con alguien trabajando.
+    for (const fIA of (Array.isArray(op?.franjas) ? op.franjas : [])) {
+      const f = normalizarFranja(fIA);
+      if (!f) continue;
+      if (!tipos.includes(f.tipo)) continue;   // v1.0.4 — interruptores DÍAS / HORAS
+      // Al menos una hora con alguien trabajando: ese día (dia), ese día
+      // en el tramo (dia_horas) o cualquier día en el tramo (horas).
+      const dows = f.tipo === 'horas' ? [0, 1, 2, 3, 4, 5, 6] : [f.dow];
       let tocaAbierto = false;
-      for (let h = Math.floor(dI / 60) * 60; h < hI; h += 60) {
-        if (abierto[`${dow}|${h}`]) { tocaAbierto = true; break; }
+      for (const dw of dows) {
+        if (f.tipo === 'dia') {
+          tocaAbierto = Object.keys(abierto).some(k => k.startsWith(`${dw}|`));
+        } else {
+          const dI = parseHHMM(f.desde), hI = parseHHMM(f.hasta);
+          for (let h = Math.floor(dI / 60) * 60; h < hI; h += 60) {
+            if (abierto[`${dw}|${h}`]) { tocaAbierto = true; break; }
+          }
+        }
+        if (tocaAbierto) break;
       }
       if (!tocaAbierto) continue;
-      franjas.push({ dow, desde: fmtHHMM(dI), hasta: fmtHHMM(hI), pct });
+      franjas.push(f);
     }
     if (!franjas.length) continue;
     out.push({
@@ -870,30 +954,49 @@ function validarOpciones(opcionesIA, ocupacion) {
   return out;
 }
 
-async function pedirPropuestasIA(ocupacion) {
+async function pedirPropuestasIA(ocupacion, tipos = TIPOS_FRANJA) {
   const apiKey = await getSecret('KAMISUITE');
   if (!apiKey) throw new Error('Secreto KAMISUITE no accesible');
   const promos = await leerPromosActivas();
 
+  // v1.0.4 — Solo los tipos que permiten los interruptores DÍAS / HORAS.
+  const DESC_TIPO = {
+    dia: "- 'dia': un día de la semana entero, a cualquier hora. Úsalo cuando ese día en conjunto (su media) está claramente por debajo de la media del salón. Ejemplo: martes −10 %.",
+    dia_horas: "- 'dia_horas': un tramo de horas de un día concreto. Úsalo cuando el día en general va bien pero ese tramo flojea. Ejemplo: miércoles 14:00–16:00 −10 %.",
+    horas: "- 'horas': un tramo de horas de cualquier día. Úsalo cuando el mismo tramo flojea en casi todos los días abiertos, en lugar de repetirlo día a día. Ejemplo: 14:00–16:00 −10 %."
+  };
+  const lineasTipos = tipos.length > 1
+    ? ['Cada oferta (franja) es de uno de estos tipos, y puedes mezclarlos en una misma opción:']
+    : ['Todas las ofertas (franjas) deben ser de este tipo, y de ningún otro:'];
+  tipos.forEach(t => lineasTipos.push(DESC_TIPO[t]));
+  lineasTipos.push('- Si dos franjas coinciden en una hora, se aplica la mayor; nunca se suman. No cubras lo mismo dos veces sin motivo.');
+  lineasTipos.push(tipos.includes('dia')
+    ? '- Usa la forma más sencilla que cubra lo flojo. Una opción puede ser un único día entero.'
+    : '- Usa la forma más sencilla que cubra lo flojo.');
+
   const system = [
     'Eres AKIRA, asesora de negocio de un salón de peluquería que usa KAMISUITE.',
-    'Tu tarea: proponer ofertas por día de la semana y franja horaria para la reserva online, con el fin de mover clientas desde las horas llenas hacia las horas flojas.',
+    'Tu tarea: proponer ofertas para la reserva online, con el fin de mover clientas desde los días y horas llenos hacia los días y horas flojos.',
+    ...lineasTipos,
     'Reglas:',
     '- Propón EXACTAMENTE tres opciones de intensidad creciente: la primera prudente, la segunda equilibrada y la tercera más ambiciosa.',
-    '- Usa solo franjas con ocupación claramente por debajo de la media del salón. Nunca pongas oferta en franjas llenas.',
-    '- Nunca uses franjas en las que el salón está cerrado.',
+    '- Usa solo días y tramos con ocupación claramente por debajo de la media del salón. Nunca pongas oferta en días o tramos llenos.',
+    '- Nunca uses días ni tramos en los que el salón está cerrado.',
     '- Porcentajes enteros y moderados; el descuento se aplica al precio del servicio principal.',
-    '- Franjas en horas en punto (HH:00), con hasta > desde.',
+    '- Los tramos de horas van en horas en punto (HH:00), con hasta > desde.',
     '- La explicación va dirigida al dueño, en español, en una o dos frases, sin tecnicismos.',
     '- No inventes datos: básate solo en la tabla.'
   ].join('\n');
+
+  const herramienta = JSON.parse(JSON.stringify(TOOL_PROPONER));
+  herramienta.input_schema.properties.opciones.items.properties.franjas.items.properties.tipo.enum = [...tipos];
 
   const body = {
     model: MODEL_PRIMARY,
     max_tokens: IA_MAX_TOKENS,
     system,
     messages: [{ role: 'user', content: promptOcupacion(ocupacion, promos) }],
-    tools: [TOOL_PROPONER],
+    tools: [herramienta],
     tool_choice: { type: 'tool', name: TOOL_PROPONER.name }
   };
 
@@ -903,7 +1006,7 @@ async function pedirPropuestasIA(ocupacion) {
   const u = data.usage || {};
   console.log(`${TAG} 🤖 IA ${Date.now() - t0}ms · in ${u.input_tokens || 0} · out ${u.output_tokens || 0}`);
   if (!bloque) throw new Error('La IA no devolvió opciones');
-  return validarOpciones(bloque.input?.opciones, ocupacion);
+  return validarOpciones(bloque.input?.opciones, ocupacion, tipos);
 }
 
 // =====================================================
@@ -966,10 +1069,16 @@ export const getEstadoSmartPricing = webMethod(
  */
 export const analizarYProponer = webMethod(
   Permissions.SiteMember,
-  async ({ semanas, mesesExcluidos = [], solicitudId = '' } = {}) => {
+  async ({ semanas, mesesExcluidos = [], interruptores = null, solicitudId = '' } = {}) => {
     const t0 = Date.now();
     let filaId = '';
     try {
+      // v1.0.4 — Interruptores DÍAS / HORAS.
+      const intr = leerInterruptores(interruptores);
+      const tipos = tiposDesdeInterruptores(intr);
+      if (!tipos.length) {
+        return { ok: false, version: VERSION, error: { message: 'Enciende Días, Horas o los dos para que AKIRA pueda proponer.' } };
+      }
       const sem = SEMANAS_PERMITIDAS.includes(Number(semanas)) ? Number(semanas) : SEMANAS_DEFECTO;
       const periodo = periodoAnalisis(sem, mesesExcluidos);
       if (periodo.diasAnalizados < DIAS_MINIMOS_ANALISIS) {
@@ -985,7 +1094,7 @@ export const analizarYProponer = webMethod(
         [F_VER.periodoDesde]: new Date(`${ocupacion.desde}T12:00:00Z`),
         [F_VER.periodoHasta]: new Date(`${ocupacion.hasta}T12:00:00Z`),
         [F_VER.ocupacion]: ocupacion,
-        [F_VER.propuestas]: { estado: 'calculando', solicitudId: String(solicitudId || '') },
+        [F_VER.propuestas]: { estado: 'calculando', solicitudId: String(solicitudId || ''), interruptores: intr },
         [F_VER.vigente]: false
       }, AUTH);
       filaId = insert._id;
@@ -993,13 +1102,13 @@ export const analizarYProponer = webMethod(
 
       let propuestas;
       try {
-        const opciones = await pedirPropuestasIA(ocupacion);
+        const opciones = await pedirPropuestasIA(ocupacion, tipos);
         propuestas = opciones.length
-          ? { estado: 'ok', solicitudId: String(solicitudId || ''), opciones }
-          : { estado: 'error', solicitudId: String(solicitudId || ''), mensaje: 'AKIRA no ha encontrado franjas flojas que proponer en este periodo.' };
+          ? { estado: 'ok', solicitudId: String(solicitudId || ''), interruptores: intr, opciones }
+          : { estado: 'error', solicitudId: String(solicitudId || ''), interruptores: intr, mensaje: 'AKIRA no ha encontrado franjas flojas que proponer en este periodo.' };
       } catch (iaErr) {
         console.error(`${TAG} ❌ IA:`, iaErr.message);
-        propuestas = { estado: 'error', solicitudId: String(solicitudId || ''), mensaje: 'AKIRA no ha podido preparar las propuestas. Vuelve a intentarlo en unos minutos.' };
+        propuestas = { estado: 'error', solicitudId: String(solicitudId || ''), interruptores: intr, mensaje: 'AKIRA no ha podido preparar las propuestas. Vuelve a intentarlo en unos minutos.' };
       }
 
       // READ-MERGE-UPDATE: wixData.update reemplaza el documento entero.
