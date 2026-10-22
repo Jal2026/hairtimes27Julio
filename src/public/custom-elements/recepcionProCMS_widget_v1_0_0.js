@@ -1,6 +1,36 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.115  ·  Smart pricing: la oferta se cobra con precio cerrado
+ *
+ *   Diseño aprobado por Jal el 21-oct-2026 (smart pricing, fase 1).
+ *   Pareja backend: recepcionProLogic v1.0.61, que resuelve en la carga de
+ *   citas el DESCUENTO AUTOMÁTICO de cada una (el mayor entre la oferta
+ *   grabada al reservar y la promo de catálogo, nunca la suma) y lo manda
+ *   en los mismos campos que ya pintaba este widget, más
+ *   `descuentoAutoTipo` ('oferta' | 'promo').
+ *
+ *   (A) MISMA FRANJA ARCO IRIS. La cita con oferta usa la franja y el borde
+ *       dorado de la promo, con el mismo texto. No se toca su estética.
+ *   (B) PRECIO CERRADO. Si la cita tiene descuento automático (oferta o
+ *       promo), «＋ Aplicar descuento» se ve en fantasma, desactivado, y no
+ *       se puede sumar una rebaja manual. Decisión de Jal: incluye la promo
+ *       de catálogo, que hasta ahora sí dejaba rebajar encima.
+ *   (C) BONOS Y TARJETAS. Con un canje activo, el descuento automático deja
+ *       de aplicarse y desaparece la franja: nada se acumula. Antes, una
+ *       cita con promo y bono sobre el mismo servicio restaba las dos cosas
+ *       y podía cobrar de menos los complementos.
+ *   (D) TOKEN DEL COBRO. Cuando gana la oferta, la descripción del cobro
+ *       lleva «🌈 Oferta -X.XX€» en lugar de «🌈 Promo -X.XX€». Empieza por
+ *       🌈 para que la factura lo descarte igual, no contiene la palabra
+ *       «descuento» para que el cierre no lo cuente como rebaja manual, e
+ *       importe con punto porque la descripción se separa por comas.
+ *   (E) FIX PAGO MIXTO. El total del pago mixto se calculaba solo con el %
+ *       manual sobre el precio bruto: ignoraba la promo, el descuento en
+ *       euros y el canje, y no cuadraba con el importe que luego se cobra.
+ *       Ahora usa exactamente la misma cuenta que el TOTAL del modal y que
+ *       el cobro.
+ *
  * VERSION: 1.1.114  ·  FIX el buscador de productos perdía el foco
  *
  *   Al teclear, el panel se repinta entero con body.innerHTML, lo que
@@ -2066,7 +2096,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.114]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.115]';
 
   // ─── helpers ───
   function esc(s) {
@@ -6913,7 +6943,10 @@ button { font-family: inherit; cursor: pointer; }
       // y r.descuentoServicioTotal cruzando con ServiceCatalog.
       // Solo visual: NO toca el cálculo del TOTAL ni el descuento manual
       // ad-hoc del operador (siguen funcionando como antes).
-      const tienePromoSvc = r.tienePromoServicio === true && (r.descuentoServicioTotal || 0) > 0;
+      // v1.1.115 — Vale para la promo y para la oferta de smart pricing (el
+      // backend v1.0.61 manda aquí el descuento automático que gana). Con
+      // canje activo no aplica, así que no se pinta.
+      const tienePromoSvc = !this._canjeActivo && r.tienePromoServicio === true && (r.descuentoServicioTotal || 0) > 0;
       const promoBanner = tienePromoSvc
         ? `<div style="background:linear-gradient(135deg,#FF6B6B 0%,#FFE66D 50%,#4ECDC4 100%);color:#1a1a2e;padding:6px 10px;margin:-20px -22px 12px;text-align:center;font-weight:700;font-size:11px;border-radius:16px 16px 0 0;letter-spacing:.4px;">Servicio con descuento promocional <span style="background:rgba(255,255,255,.85);color:#d63031;padding:1px 6px;border-radius:10px;font-weight:800;font-size:10px;margin-left:4px;">-${(r.descuentoServicioTotal || 0).toFixed(2)}€</span></div>`
         : '';
@@ -6984,10 +7017,14 @@ button { font-family: inherit; cursor: pointer; }
         modal.querySelectorAll('.ks-pay[data-m]').forEach(b => b.addEventListener('click', () => {
           const m = b.getAttribute('data-m');
           // v1.1.10 — recalcular total con el descuento actual
-          const rNow = this._modalReserva;
-          const subN = Number(rNow.precioTotal) || 0;
-          const dPctN = Math.min(100, Math.max(0, Number(this._disc) || 0));
-          const totalN = Math.max(0, Math.round((subN - subN * dPctN / 100) * 100) / 100);
+          // v1.1.115 — FIX: la misma cuenta que el TOTAL del modal y que
+          // _pagar (promo/oferta + rebaja manual en % o en € + canje). Antes
+          // solo aplicaba el % manual sobre el bruto y el mixto no cuadraba.
+          const { subtotal: subN, discEur: dEurN } = this._calcDescuento();
+          const canjeN = (this._canjeActivo && this._canjeActivo.ahorro > 0)
+            ? Math.round(this._canjeActivo.ahorro * 100) / 100
+            : 0;
+          const totalN = Math.max(0, Math.round((subN - dEurN - canjeN) * 100) / 100);
           if (m === 'Mixto') this._openMixto(totalN); else this._pagar(m, '');
         }));
         modal.querySelector('#mCancelRes')?.addEventListener('click', () => {
@@ -7244,6 +7281,15 @@ button { font-family: inherit; cursor: pointer; }
     }
     _renderDiscBox() {
       const box = this.shadowRoot.getElementById('discBox'); if (!box) return;
+      // v1.1.115 — PRECIO CERRADO. Con descuento automático (oferta de smart
+      // pricing o promo de catálogo) no se admite rebaja manual: el botón se
+      // ve en fantasma, como constancia de que ya hay un descuento aplicado.
+      if (this._calcDescuento().tienePromo) {
+        this._disc = 0;
+        this._discOpen = false;
+        box.innerHTML = `<button class="ks-disc-toggle" id="discToggle" type="button" disabled style="opacity:.45;cursor:not-allowed" title="Esta cita ya lleva un descuento automático: no admite descuentos adicionales">＋ Aplicar descuento</button>`;
+        return;
+      }
       if (this._disc > 0 || this._discOpen) {
         const mode = this._discMode || 'pct';
         const maxAttr = mode === 'eur' ? '' : 'max="100"';
@@ -7446,7 +7492,9 @@ button { font-family: inherit; cursor: pointer; }
       // `subtotal − discEur` sigue devolviendo el total neto correcto.
       const r = this._modalReserva;
       const subtotalOriginal = Number(r?.precioTotal) || 0;
-      const tienePromo = r?.tienePromoServicio === true && (Number(r?.descuentoServicioTotal) || 0) > 0;
+      // v1.1.115 — Con canje activo (bono o tarjeta) el descuento automático
+      // no se aplica: nada se acumula.
+      const tienePromo = !this._canjeActivo && r?.tienePromoServicio === true && (Number(r?.descuentoServicioTotal) || 0) > 0;
       const ahorroPromo = tienePromo
         ? Math.min(subtotalOriginal, Math.round((Number(r.descuentoServicioTotal) || 0) * 100) / 100)
         : 0;
@@ -8407,7 +8455,11 @@ button { font-family: inherit; cursor: pointer; }
       const importeNeto = Math.max(0, Math.round((subtotal - discEur - ahorroCanje) * 100) / 100);
       const _tokens = [];
       if (tienePromo && ahorroPromo > 0) {
-        _tokens.push(`🌈 Promo -${ahorroPromo.toFixed(2)}€`);
+        // v1.1.115 — «🌈 Oferta» cuando el descuento automático es la oferta
+        // de smart pricing. Mismo prefijo 🌈 (la factura lo descarta) y sin
+        // la palabra «descuento» (el cierre no lo confunde con la rebaja).
+        const _etq = r.descuentoAutoTipo === 'oferta' ? 'Oferta' : 'Promo';
+        _tokens.push(`🌈 ${_etq} -${ahorroPromo.toFixed(2)}€`);
       }
       if (discEur > 0) {
         _tokens.push(this._discMode === 'eur'
