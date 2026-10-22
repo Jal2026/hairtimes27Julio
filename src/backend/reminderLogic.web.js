@@ -1,5 +1,5 @@
 // =====================================================
-// [ReminderJob v1.12.0] - reminderLogic.web.js
+// [ReminderJob v1.12.1] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
 // FUENTE V2: KamisuiteReservations (fuente de verdad de reservas)
 // Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
@@ -38,6 +38,14 @@
 //  FLUJO DE PUNTA A PUNTA: verificado. Ya NO hay tramo muerto.
 //
 // CHANGELOG:
+//   v1.12.1 - Smart pricing: llamadas a smartPricingLogic con await
+//             (22-oct-2026). En Hair-Times las funciones normales de
+//             smartPricingLogic llegaban a otros archivos como promesa sin
+//             esperar (diagnóstico de widgetPublicoLogic 0.13.1). Aquí
+//             `campos`, `d` y el aviso eran promesas: el recordatorio nunca
+//             aplicaba el descuento. Ahora: await en camposOfertaReserva,
+//             descuentoAutomaticoReserva y textoAvisoDescuento, que en
+//             smartPricingLogic v1.0.6 son async. Nada más cambia.
 //   v1.12.0 - Smart pricing (fase 1, 21-oct-2026). Si la cita lleva
 //            descuento automático —la oferta grabada al reservar o la promo
 //            de catálogo, el MAYOR de los dos, nunca la suma, igual que
@@ -265,7 +273,7 @@ import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 // v1.11.0: bloque de sugerencias de producto para el correo
 import { construirBloqueProductos } from 'backend/sugerenciasProductosLogic.web.js';
 
-const TAG = '[ReminderJob v1.12.0]';
+const TAG = '[ReminderJob v1.12.1]';
 
 // v1.7.0: colección fuente de verdad de reservas en V2
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -615,7 +623,7 @@ async function aplicarDescuentoAutomaticoCitas(citas) {
   try {
     if (!Array.isArray(citas) || !citas.length) return;
     const sp = await import('backend/smartPricingLogic.web');
-    const campos = sp.camposOfertaReserva();
+    const campos = await sp.camposOfertaReserva();   // v1.12.1 — await
     const uids = [];
     for (const c of citas) {
       for (const f of _fasesDeReserva(c._reg)) {
@@ -627,7 +635,7 @@ async function aplicarDescuentoAutomaticoCitas(citas) {
     for (const c of citas) {
       const r = c._reg || {};
       const precio = Number(r.precioTotal) || 0;
-      const d = sp.descuentoAutomaticoReserva({
+      const d = await sp.descuentoAutomaticoReserva({   // v1.12.1 — await
         fases: _fasesDeReserva(r),
         ofertaPct: r[campos.pct],
         ofertaAhorro: r[campos.ahorro],
@@ -635,7 +643,7 @@ async function aplicarDescuentoAutomaticoCitas(citas) {
       });
       if (d.importe > 0 && precio > 0) {
         c.importeTotal = _importeES(Math.max(0, precio - d.importe));
-        const aviso = sp.textoAvisoDescuento(d.tipo, d.pct);
+        const aviso = await sp.textoAvisoDescuento(d.tipo, d.pct);   // v1.12.1 — await
         if (aviso) c.servicios = c.servicios ? `${c.servicios} · ${aviso}` : aviso;
         conDescuento++;
       }
