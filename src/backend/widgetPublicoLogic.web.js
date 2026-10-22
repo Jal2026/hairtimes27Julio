@@ -1,7 +1,21 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.13.0
+// VERSION: 0.13.1
+//
+// v0.13.1 — DIAGNÓSTICO TEMPORAL DE SMART PRICING (22-oct-2026).
+//   Hair-Times: getOfertasDias registra «0 con oferta» con el martes 27
+//   abierto (35 horas libres), aunque la versión vigente es «martes · todo
+//   el día −10%», SalonConfig.smartPricingActivo = true y Botox Capilar
+//   tiene smartPricing = true, precio 99 y sin promoción (comprobado en el
+//   CMS). Con esos mismos datos, smartPricingLogic 1.0.5 da −10% el
+//   martes. No hay aviso «ofertasDeHuecos (no-blocking)»: la función no
+//   falla, calcula 0.
+//     · ofertasDeHuecos escribe UNA línea 🔎 cuando un día con horas acaba
+//       sin ninguna oferta, o cuando la versión vigente llega apagada. Dice
+//       qué ha leído: activo, versión, franjas, servicio (smartPricing,
+//       precio, promo) y el resultado de la primera hora.
+//     · No cambia ningún resultado. Se quita cuando se sepa la causa.
 //
 // v0.13.0 — SMART PRICING: OFERTAS POR DÍA Y HORA (fase 1, 21-oct-2026).
 //
@@ -1073,7 +1087,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.13.0';
+const VERSION = '0.13.1';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -2090,12 +2104,26 @@ async function ofertasDeHuecos({ fecha, huecos, principalSetupUid }) {
   try {
     const sp = await import('backend/smartPricingLogic.web');
     const vig = await sp.leerReglasVigentes();
-    if (!vig.activo) return nada;
+    if (!vig.activo) {
+      // v0.13.1 — DIAGNÓSTICO TEMPORAL
+      console.log(`${TAG} 🔎 ofertasDeHuecos ${fecha}: vigente APAGADA · ${JSON.stringify(vig)}`);
+      return nada;
+    }
     const item = await sp.leerItemCatalogo(principalSetupUid);
     const ofertas = {};
     for (const h of huecos) {
       const of = sp.calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: h, item });
       if (of.pct > 0) ofertas[h] = of.pct;
+    }
+    // v0.13.1 — DIAGNÓSTICO TEMPORAL: día con horas que acaba sin oferta.
+    if (!Object.keys(ofertas).length) {
+      const h0 = huecos[0];
+      const prueba = sp.calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: h0, item });
+      const regla = sp.pctOfertaEnHueco(vig.reglas, fecha, h0);
+      const svc = item
+        ? `${item.label} setupUid=${item.setupUid} smartPricing=${JSON.stringify(item.smartPricing)} price=${JSON.stringify(item.price)} promo=${JSON.stringify(item.descuentoActivo)}/${JSON.stringify(item.descuentoPromo)}`
+        : `NO ENCONTRADO (${principalSetupUid})`;
+      console.log(`${TAG} 🔎 ofertasDeHuecos ${fecha}: 0 ofertas en ${huecos.length} horas · versión ${vig.versionId} franjas=${JSON.stringify(vig.reglas && vig.reglas.franjas)} · servicio ${svc} · ${h0}: regla=${JSON.stringify(regla)} oferta=${JSON.stringify(prueba)}`);
     }
     return { activo: true, ventanaDias: vig.reglas.ventanaDias, ofertas };
   } catch (e) {
