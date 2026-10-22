@@ -1,11 +1,22 @@
 /* ============================================================================
  * kami-area-cliente.js
  * ----------------------------------------------------------------------------
- * VERSION: 1.2.0
- * FECHA:   1 de julio de 2026
+ * VERSION: 1.2.2
+ * FECHA:   21 de octubre de 2026
  *
  * Área de Cliente KAMISUITE — Custom Element con Shadow DOM.
  * Mismo patrón que <kami-reserva> del widget público. Tag: <kami-area-cliente>.
+ *
+ * v1.2.2 — Smart pricing: aviso al mover una cita con oferta.
+ *   NUMERACIÓN: construido sobre la 1.2.0 del repo de Hair-Times. La 1.2.1
+ *   (condiciones del bono, 21-ago-2026) se subió a mano en Salón Kami y no
+ *   está en Hair-Times; este archivo no la contiene.
+ *   - Si la cita lleva oferta y la clienta elige una hora nueva, debajo de
+ *     las horas aparece una línea: o se queda con la oferta de la nueva
+ *     hora, o la pierde si confirma. Datos de clienteAreaLogic v1.6.8
+ *     (`ofertaActualPct` y `ofertas`), puenteados por el page code v1.3.8.
+ *   - Reutiliza la clase `.hint` del propio selector: cero CSS nuevo.
+ *   - Citas sin oferta: no cambia nada.
  *
  * v1.2.0 — Multi-tenant skins completos (7 pieles).
  *   - KR_SKINS embebido ahora tiene las 7 pieles del bundle canónico:
@@ -677,6 +688,9 @@ class KamiAreaCliente extends HTMLElement {
         sel.huecosError = res.error || null;
         sel.huecosMotivo = res.motivo || null;
         sel.loadingHuecos = false;
+        // v1.2.2 — smart pricing (solo llega en citas con oferta)
+        sel.ofertaActualPct = Number(res.ofertaActualPct) || 0;
+        sel.ofertas = (res.ofertas && typeof res.ofertas === 'object') ? res.ofertas : {};
         // Si la hora elegida previamente ya no aparece, deseleccionar
         if (sel.hora && !sel.huecos.includes(sel.hora)) sel.hora = '';
         this.repaintSection('proximas');
@@ -1504,6 +1518,16 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
 
     const puede = fechaVal && horaVal && !busy && !loading;
     const btnConfirmTxt = busy ? 'Moviendo…' : 'Confirmar cambio';
+
+    // v1.2.2 — SMART PRICING. Aviso antes de confirmar en citas con oferta.
+    let avisoOferta = '';
+    const pctAct = Number(sel.ofertaActualPct) || 0;
+    if (pctAct > 0 && horaVal && huecos && huecos.includes(horaVal)) {
+      const pctNueva = Number((sel.ofertas || {})[horaVal]) || 0;
+      avisoOferta = pctNueva > 0
+        ? `<p class="hint">Esta hora también tiene oferta: tu cita se queda con un ${pctNueva}% de descuento.</p>`
+        : `<p class="hint">Esta hora no tiene oferta: si confirmas el cambio, pierdes tu descuento del ${pctAct}%.</p>`;
+    }
     return `<div class="mover">
       <h4>Mover cita con ${esc(c.profesional)}</h4>
       <p class="hint">Elige un nuevo día y hora. Mantienes el mismo servicio y profesional.</p>
@@ -1516,6 +1540,7 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
       </div>
       <p class="lbl-mini">Hora</p>
       ${horasBlock}
+      ${avisoOferta}
       <div class="foot">
         <button class="btn btn-ghost btn-sm" data-act="mover" data-id="${c.id}" ${busy ? 'disabled' : ''}>Cancelar</button>
         <button class="btn btn-primary btn-sm" data-act="moverConfirm" data-id="${c.id}" ${puede ? '' : 'disabled'}>${ic('check')} ${btnConfirmTxt}</button>
