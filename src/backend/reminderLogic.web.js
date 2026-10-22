@@ -1,5 +1,5 @@
 // =====================================================
-// [ReminderJob v1.11.0] - reminderLogic.web.js
+// [ReminderJob v1.12.0] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
 // FUENTE V2: KamisuiteReservations (fuente de verdad de reservas)
 // Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
@@ -31,10 +31,25 @@
 //    · brevoLogic.enviarEmailPlantilla (plantilla reminderLayout).
 //    · sugerenciasProductosLogic.construirBloqueProductos (v1.0.0) →
 //      bloque de sugerencias de producto del recordatorio.
+//    · smartPricingLogic (v1.0.0, import dinámico) → descuento automático
+//      de cada cita (oferta grabada o promo de catálogo) para el importe
+//      neto y el aviso del recordatorio.
 //    · wix-crm-backend triggeredEmails (plantilla VGPVvYO).
 //  FLUJO DE PUNTA A PUNTA: verificado. Ya NO hay tramo muerto.
 //
 // CHANGELOG:
+//   v1.12.0 - Smart pricing (fase 1, 21-oct-2026). Si la cita lleva
+//            descuento automático —la oferta grabada al reservar o la promo
+//            de catálogo, el MAYOR de los dos, nunca la suma, igual que
+//            cobra Recepción PRO—, el importe del recordatorio pasa a ser el
+//            NETO a pagar en el salón y se añade el aviso al final de
+//            «servicios» (una sola línea: vale para el email y para el
+//            WhatsApp sin tocar ninguna plantilla de Meta).
+//            · leerCitasV2 llama a aplicarDescuentoAutomaticoCitas al final,
+//              con UNA consulta al catálogo para todas las citas del día.
+//            · Import dinámico de smartPricingLogic dentro de try/catch: si
+//              falla, el recordatorio sale exactamente como en v1.11.0.
+//            · Sin descuento, importe y servicios no cambian en nada.
 //   v1.11.0 - Sugerencias de producto en el recordatorio (camino Brevo).
 //            · leerCitasV2 arrastra `group` de KamisuiteReservations
 //              (categoría del servicio principal, la escribe
@@ -250,7 +265,7 @@ import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 // v1.11.0: bloque de sugerencias de producto para el correo
 import { construirBloqueProductos } from 'backend/sugerenciasProductosLogic.web.js';
 
-const TAG = '[ReminderJob v1.11.0]';
+const TAG = '[ReminderJob v1.12.0]';
 
 // v1.7.0: colección fuente de verdad de reservas en V2
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -554,9 +569,13 @@ async function leerCitasV2(inicio, fin, fechaYMD) {
         importeTotal: r.precioTotal ? `${r.precioTotal} €` : '',
         estadoPago: r.status === 'PAGADO' ? 'Pagado' : 'Pago en salón',
         _startMs: start.getTime(),
-        _endMs: end.getTime()
+        _endMs: end.getTime(),
+        _reg: r   // v1.12.0 — registro original, solo para el descuento automático
       });
     }
+
+    // v1.12.0 — SMART PRICING: importe neto y aviso de descuento.
+    await aplicarDescuentoAutomaticoCitas(citas);
 
     console.log(`${TAG} 📅 Reservas V2 encontradas: ${citas.length} (bloqueos descartados: ${bloqueosFiltrados} | fuera del día: ${fueraDeDia})`);
     return citas;
@@ -564,6 +583,68 @@ async function leerCitasV2(inicio, fin, fechaYMD) {
   } catch (e) {
     console.error(`${TAG} ❌ Error leerCitasV2:`, e.message);
     return [];
+  }
+}
+
+// v1.12.0 — Fases de una reserva (campo Objeto {items:[...]}, JSON string
+// legacy o array directo). Mismo criterio defensivo que jsonIn de
+// recepcionProLogic.
+function _fasesDeReserva(r) {
+  let v = r ? r.fases : null;
+  if (v == null || v === '') return [];
+  if (typeof v === 'string') {
+    try { v = JSON.parse(v); } catch (e) { return []; }
+  }
+  if (Array.isArray(v)) return v;
+  if (v && Array.isArray(v.items)) return v.items;
+  return [];
+}
+
+// v1.12.0 — Importe en formato del recordatorio: entero sin decimales,
+// con decimales en formato español.
+function _importeES(n) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  return Number.isInteger(v) ? `${v} €` : `${v.toFixed(2).replace('.', ',')} €`;
+}
+
+// v1.12.0 — SMART PRICING. Para cada cita con descuento automático (el
+// mayor entre la oferta grabada y la promo de catálogo), importe NETO y
+// aviso al final de «servicios». No-blocking: ante cualquier fallo las
+// citas quedan como estaban.
+async function aplicarDescuentoAutomaticoCitas(citas) {
+  try {
+    if (!Array.isArray(citas) || !citas.length) return;
+    const sp = await import('backend/smartPricingLogic.web');
+    const campos = sp.camposOfertaReserva();
+    const uids = [];
+    for (const c of citas) {
+      for (const f of _fasesDeReserva(c._reg)) {
+        if (f && f.tipo === 'servicio' && f.setupUid) uids.push(f.setupUid);
+      }
+    }
+    const promoIdx = await sp.cargarIndicePromos(uids);
+    let conDescuento = 0;
+    for (const c of citas) {
+      const r = c._reg || {};
+      const precio = Number(r.precioTotal) || 0;
+      const d = sp.descuentoAutomaticoReserva({
+        fases: _fasesDeReserva(r),
+        ofertaPct: r[campos.pct],
+        ofertaAhorro: r[campos.ahorro],
+        promoIdx
+      });
+      if (d.importe > 0 && precio > 0) {
+        c.importeTotal = _importeES(Math.max(0, precio - d.importe));
+        const aviso = sp.textoAvisoDescuento(d.tipo, d.pct);
+        if (aviso) c.servicios = c.servicios ? `${c.servicios} · ${aviso}` : aviso;
+        conDescuento++;
+      }
+    }
+    if (conDescuento) console.log(`${TAG} 🏷️ ${conDescuento} cita(s) con descuento automático en el recordatorio`);
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ Descuento automático en recordatorio (no-blocking): ${e.message}`);
+  } finally {
+    for (const c of (citas || [])) delete c._reg;
   }
 }
 
