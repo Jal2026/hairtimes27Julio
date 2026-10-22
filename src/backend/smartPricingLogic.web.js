@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE - Backend: Smart Pricing
 // =====================================================
-// VERSION: 1.0.1
+// VERSION: 1.0.2
 // FECHA: 22 de octubre de 2026
 // ARCHIVO: backend/smartPricingLogic.web.js
 //
@@ -51,9 +51,9 @@
 //    módulo fallara al cargar, la reserva, el recordatorio y el Área de
 //    Cliente siguen funcionando sin ofertas.
 //  LLAMA A:
-//    · widgetPublicoLogic.leerHorarioStaffEnDia (import dinámico, para leer
-//      el horario EXACTAMENTE igual que el motor de reservas y no crear una
-//      tercera copia de esa función).
+//    · Nadie para leer horarios: desde v1.0.2 usa su COPIA LITERAL de
+//      widgetPublicoLogic.leerHorarioStaffEnDia (v0.13.0). Si esa función
+//      cambia allí, se cambia también aquí.
 //    · API de Anthropic (secreto KAMISUITE, modelo Sonnet), mismo patrón de
 //      fetch que akiraLogic v1.9.0.
 //
@@ -77,6 +77,24 @@
 //  remedio que AKIRA aplicó al 504 de su primera pregunta (20-ago-2026).
 //
 // CHANGELOG:
+//   v1.0.2 (22-oct-2026) — El análisis daba «No hay horario de profesionales».
+//     Hair-Times, con widgetPublicoLogic 0.13.0 ya subido: la función de
+//     horario se encuentra (el error «is not a function» desaparece), pero
+//     la capacidad sale 0. El staff y el lector de horario son idénticos a
+//     los del motor de reservas, que funciona; lo único distinto es que aquí
+//     se llama a través de `await import('backend/widgetPublicoLogic.web')`.
+//     En el proyecto no hay ningún precedente de llamar así a una función
+//     NORMAL (no webMethod) y SÍNCRONA de otro .web.js.
+//     · calcularOcupacion usa una copia literal de leerHorarioStaffEnDia
+//       dentro de este archivo (llamada local, síncrona). Ya no importa
+//       widgetPublicoLogic.
+//     · DIAGNÓSTICO TEMPORAL (log 🔎): en cada análisis se llama una vez a
+//       la función de widgetPublicoLogic por import dinámico y se registra
+//       si devuelve el objeto o una promesa. Decide si la reserva online,
+//       el recordatorio y el Área de Cliente (que llaman así a funciones
+//       síncronas de ESTE archivo) necesitan `await`. No cambia ningún
+//       resultado. Se quita cuando se sepa.
+//     · Log 🔎 con nº de profesionales activos y cuántos tienen horario.
 //   v1.0.1 (22-oct-2026) — Quitar meses del análisis.
 //     Jal: «si te pilla verano ya estamos jodidos... Julio y agosto no es
 //     una muestra válida para aplicar en septiembre octubre». Decidió
@@ -100,7 +118,7 @@ import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const TAG = `[SmartPricing][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -476,6 +494,54 @@ export function textoAvisoDescuento(tipo, pct) {
 // OCUPACIÓN (lo calcula JavaScript, no la IA)
 // =====================================================
 
+// v1.0.2 — COPIA LITERAL de widgetPublicoLogic v0.13.0 leerHorarioStaffEnDia.
+// Lee horario {from,to} del staff para un dow concreto.
+// Devuelve null si está cerrado, no tiene horario configurado, o no parsea.
+function leerHorarioStaffEnDia(staffRow, dow) {
+  const raw = staffRow?.workingHoursSessionIds;
+  if (!raw) return null;
+  let items = [];
+  try {
+    if (typeof raw === 'string') {
+      const obj = JSON.parse(raw);
+      items = Array.isArray(obj?.items) ? obj.items : (Array.isArray(obj) ? obj : []);
+    } else if (raw && typeof raw === 'object') {
+      items = Array.isArray(raw.items) ? raw.items : (Array.isArray(raw) ? raw : []);
+    }
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ workingHours JSON inválido (${staffRow?.canonicalName || staffRow?._id}):`, e.message);
+    return null;
+  }
+  const day = items.find(it => Number(it?.dow) === dow);
+  if (!day || !day.open) return null;
+  const from = parseHHMM(day.from);
+  const to = parseHHMM(day.to);
+  if (from == null || to == null || from >= to) return null;
+  return { from, to };
+}
+
+// v1.0.2 — DIAGNÓSTICO TEMPORAL. Una llamada a la función de
+// widgetPublicoLogic por import dinámico, para saber si una función normal
+// y síncrona de otro .web.js devuelve su valor o una promesa. Solo registra;
+// nunca cambia el análisis ni lo hace fallar.
+async function diagnosticoImportDinamico(staffRow, dow) {
+  try {
+    const wp = await import('backend/widgetPublicoLogic.web');
+    const fn = wp && wp.leerHorarioStaffEnDia;
+    if (typeof fn !== 'function') {
+      console.log(`${TAG} 🔎 import dinámico: leerHorarioStaffEnDia es ${typeof fn}`);
+      return;
+    }
+    const r = fn(staffRow, dow);
+    const esPromesa = !!(r && typeof r.then === 'function');
+    let resuelto = r;
+    if (esPromesa) { try { resuelto = await r; } catch (eR) { resuelto = `rechazo: ${eR.message}`; } }
+    console.log(`${TAG} 🔎 import dinámico: devuelve ${esPromesa ? 'PROMESA' : 'VALOR'} · local=${JSON.stringify(leerHorarioStaffEnDia(staffRow, dow))} · importado=${JSON.stringify(resuelto)}`);
+  } catch (e) {
+    console.log(`${TAG} 🔎 import dinámico: falla al importar (${e.message})`);
+  }
+}
+
 async function leerStaffActivo() {
   const r = await wixData.query(CMS_STAFF)
     .eq('active', true)
@@ -548,12 +614,19 @@ function nombreMes(ym) {
 }
 
 async function calcularOcupacion(semanas, periodo) {
-  const { leerHorarioStaffEnDia } = await import('backend/widgetPublicoLogic.web');
-
   const { desde, hasta, excl, diasAnalizados } = periodo || periodoAnalisis(semanas, []);
 
   const [staff, reservas] = await Promise.all([leerStaffActivo(), leerReservasPeriodo(desde, hasta)]);
   const staffIds = new Set(staff.map(s => String(s.wixResourceId || s._id)));
+
+  // v1.0.2 — Diagnóstico: profesionales y horario (log 🔎).
+  const conHorario = staff.filter(s => [0, 1, 2, 3, 4, 5, 6].some(d => leerHorarioStaffEnDia(s, d)));
+  console.log(`${TAG} 🔎 profesionales activos ${staff.length} · con horario ${conHorario.length}${conHorario.length ? '' : ' · ' + staff.map(s => `${s.canonicalName || s._id}:${typeof s.workingHoursSessionIds}`).join(', ')}`);
+  if (conHorario.length) {
+    const s0 = conHorario[0];
+    const d0 = [1, 2, 3, 4, 5, 6, 0].find(d => leerHorarioStaffEnDia(s0, d));
+    await diagnosticoImportDinamico(s0, d0);
+  }
 
   // key `${ymd}|${staffId}` → { ocup:[{s,e}], bloq:[{s,e}] }
   const porDiaStaff = {};
