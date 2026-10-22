@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE - Backend: Smart Pricing
 // =====================================================
-// VERSION: 1.0.4
+// VERSION: 1.0.5
 // FECHA: 22 de octubre de 2026
 // ARCHIVO: backend/smartPricingLogic.web.js
 //
@@ -33,7 +33,8 @@
 //    · SmartPricingVersiones  → versión vigente, último análisis.
 //    · KamisuiteReservations  → fases de las citas del periodo analizado.
 //    · StaffConfig            → profesionales activos y su horario.
-//    · ServiceCatalog         → precio base y promo del servicio.
+//    · ServiceCatalog         → precio base, promo del servicio y, desde
+//                               v1.0.5, smartPricing (servicio con ofertas).
 //  ESCRIBE en:
 //    · SmartPricingVersiones  → una fila por análisis; la elegida pasa a
 //                               vigente (READ-MERGE-UPDATE siempre).
@@ -77,6 +78,24 @@
 //  remedio que AKIRA aplicó al 504 de su primera pregunta (20-ago-2026).
 //
 // CHANGELOG:
+//   v1.0.5 (22-oct-2026) — Smart pricing solo en los servicios marcados.
+//     Jal: «En los baratos como arreglo de corte no merece la pena. Hay que
+//     incentivar los servicios más caros». Nuevo campo en ServiceCatalog
+//     `smartPricing` (Booleano), constante F_CAT_SMART.
+//     · calcularOfertaServicio solo da oferta si el servicio principal
+//       tiene smartPricing === true (estricto, como el interruptor de
+//       Setup Salón: vacío = sin oferta). Es la función que usan la
+//       reserva online para enseñar la oferta y para revalidarla al
+//       reservar, así que ningún otro archivo cambia.
+//     · Las citas que ya tienen la oferta guardada la conservan: Recepción
+//       cobra el porcentaje guardado en la cita.
+//     · Se quita el diagnóstico temporal de v1.0.2 (🔎 import dinámico):
+//       en Hair-Times devolvió VALOR, así que las llamadas de la reserva,
+//       el recordatorio y el Área de Cliente a este archivo son correctas.
+//       Se queda el log 🔎 de profesionales con horario.
+//     · Sigue la copia propia de leerHorarioStaffEnDia: es la versión con
+//       la que el análisis funciona en Hair-Times. Por qué falló la 1.0.1
+//       no está aclarado (el import dinámico devuelve el valor bien).
 //   v1.0.4 (22-oct-2026) — Interruptores DÍAS y HORAS antes de analizar.
 //     Jal pidió interruptores previos al análisis para elegir qué tipo de
 //     oferta propone AKIRA. Sin respuesta sobre «día y horas», se aplica
@@ -155,7 +174,7 @@ import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.0.4';
+const VERSION = '1.0.5';
 const TAG = `[SmartPricing][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -179,6 +198,8 @@ const F_VER = {
   elegidaPor:    'elegidaPor'
 };
 const F_CFG_ACTIVO = 'smartPricingActivo';
+// v1.0.5 — ServiceCatalog: el servicio participa en smart pricing.
+const F_CAT_SMART = 'smartPricing';
 const F_RES = {
   pct:       'ofertaPct',
   ahorro:    'ofertaAhorro',
@@ -478,12 +499,14 @@ export async function leerItemCatalogo(setupUid, { fresco = false } = {}) {
 /**
  * Oferta efectiva de un hueco para un servicio concreto.
  * Devuelve { pct, ahorro, basePrice }; pct=0 cuando no hay oferta que
- * mostrar: sin regla, servicio a valorar, o promo de catálogo igual o
- * mayor (nunca dos descuentos).
+ * mostrar: sin regla, servicio no marcado para smart pricing (v1.0.5),
+ * servicio a valorar, o promo de catálogo igual o mayor (nunca dos
+ * descuentos).
  */
 export function calcularOfertaServicio({ reglas, fecha, hora, item }) {
   const nada = { pct: 0, ahorro: 0, basePrice: 0 };
   if (!reglas || !item) return nada;
+  if (item[F_CAT_SMART] !== true) return nada;   // v1.0.5 — solo servicios marcados
   // Precio base: mismo criterio que adaptarServicio (price > 0, si no "a valorar").
   const basePrice = toNum(item.price) > 0 ? toNum(item.price) : 0;
   if (!basePrice) return nada;
@@ -595,28 +618,6 @@ function leerHorarioStaffEnDia(staffRow, dow) {
   return { from, to };
 }
 
-// v1.0.2 — DIAGNÓSTICO TEMPORAL. Una llamada a la función de
-// widgetPublicoLogic por import dinámico, para saber si una función normal
-// y síncrona de otro .web.js devuelve su valor o una promesa. Solo registra;
-// nunca cambia el análisis ni lo hace fallar.
-async function diagnosticoImportDinamico(staffRow, dow) {
-  try {
-    const wp = await import('backend/widgetPublicoLogic.web');
-    const fn = wp && wp.leerHorarioStaffEnDia;
-    if (typeof fn !== 'function') {
-      console.log(`${TAG} 🔎 import dinámico: leerHorarioStaffEnDia es ${typeof fn}`);
-      return;
-    }
-    const r = fn(staffRow, dow);
-    const esPromesa = !!(r && typeof r.then === 'function');
-    let resuelto = r;
-    if (esPromesa) { try { resuelto = await r; } catch (eR) { resuelto = `rechazo: ${eR.message}`; } }
-    console.log(`${TAG} 🔎 import dinámico: devuelve ${esPromesa ? 'PROMESA' : 'VALOR'} · local=${JSON.stringify(leerHorarioStaffEnDia(staffRow, dow))} · importado=${JSON.stringify(resuelto)}`);
-  } catch (e) {
-    console.log(`${TAG} 🔎 import dinámico: falla al importar (${e.message})`);
-  }
-}
-
 async function leerStaffActivo() {
   const r = await wixData.query(CMS_STAFF)
     .eq('active', true)
@@ -694,14 +695,9 @@ async function calcularOcupacion(semanas, periodo) {
   const [staff, reservas] = await Promise.all([leerStaffActivo(), leerReservasPeriodo(desde, hasta)]);
   const staffIds = new Set(staff.map(s => String(s.wixResourceId || s._id)));
 
-  // v1.0.2 — Diagnóstico: profesionales y horario (log 🔎).
+  // v1.0.2 — Profesionales y horario (log 🔎).
   const conHorario = staff.filter(s => [0, 1, 2, 3, 4, 5, 6].some(d => leerHorarioStaffEnDia(s, d)));
   console.log(`${TAG} 🔎 profesionales activos ${staff.length} · con horario ${conHorario.length}${conHorario.length ? '' : ' · ' + staff.map(s => `${s.canonicalName || s._id}:${typeof s.workingHoursSessionIds}`).join(', ')}`);
-  if (conHorario.length) {
-    const s0 = conHorario[0];
-    const d0 = [1, 2, 3, 4, 5, 6, 0].find(d => leerHorarioStaffEnDia(s0, d));
-    await diagnosticoImportDinamico(s0, d0);
-  }
 
   // key `${ymd}|${staffId}` → { ocup:[{s,e}], bloq:[{s,e}] }
   const porDiaStaff = {};
