@@ -3,7 +3,45 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.1.4 (bundle)
+ * VERSION:   2.1.6 (bundle)
+ *
+ * v2.1.6 — SMART PRICING: TIRA ESTABLE Y PRECIO «DESDE» (22-oct-2026).
+ *   1) «A veces sale y otras no» (Jal, Hair-Times, hoy a las 22:15). La
+ *      tira solo pedia las ofertas de los demas dias si el dia ELEGIDO
+ *      volvia con horas. Un dia sin horas (hoy ya sin huecos, cerrado o
+ *      pasado) vuelve sin `smartPricing` y la tira perdia todos los −X %.
+ *        · La respuesta de horas solo ENCIENDE `_sp`; ya no lo apaga.
+ *        · `pedir-ofertas` se emite siempre tras cada respuesta de horas;
+ *          lo decide getOfertasDias (apagado → { activo:false } sin tocar
+ *          el motor). Sigue la regla de no repetir la misma consulta en
+ *          un minuto.
+ *        · La respuesta de varios dias fija `_sp` (activo y ventana). Si
+ *          con ella se conoce por primera vez la ventana, se vuelve a pedir
+ *          para incluir sus dias.
+ *   2) Precio «desde». Jal: si el dia tiene oferta y aun no hay hora
+ *      elegida, el precio y el total decian 99 € con las horas en −10 %
+ *      («el cliente va a desconfiar»). Ahora, con oferta en el dia y sin
+ *      hora: precio tachado y «desde 89,10 €» encima de las horas y en el
+ *      total (sin texto bajo «Total»: no cabe junto al tachado). Al elegir la hora,
+ *      todo queda como en v2.1.5.
+ *        · `_calc` devuelve `desde` { pct, saved, total } (o null). No
+ *          cambia total, saved ni promo: el envio de la reserva y la
+ *          confirmacion siguen igual.
+ *
+ * v2.1.5 — SMART PRICING: SIN «−X%» FANTASMA AL CAMBIAR DE DIA (22-oct-2026).
+ *   Jal: al pulsar el lunes, durante un instante su chip enseñaba el −10 %
+ *   y luego se quitaba. Causa: al pulsar un dia la tira se repinta al
+ *   momento, y para el dia elegido usaba `_ofertasDia`, que hasta que
+ *   llegan sus horas sigue siendo la del dia elegido ANTES.
+ *     · `_ofertasDiaFecha` guarda a que dia pertenece `_ofertasDia` (la
+ *       fecha de la respuesta de huecos).
+ *     · `_ofertasDelDia()` devuelve `_ofertasDia` solo si es del dia
+ *       elegido; si no, vacio. La usan la hora elegida, la propuesta y los
+ *       chips de hora.
+ *     · `_maxPctDia`: mientras no llegan las horas del dia nuevo, su chip
+ *       usa los datos de varios dias (`_ofertasDias`), que ya incluyen los
+ *       dias visibles. Asi enseña su propio −X % o nada, nunca el de otro.
+ *     · Solo cambia esa lectura; peticiones, calculo y pintado, como v2.1.4.
  *
  * v2.1.4 — SMART PRICING: MINI SELLO EN DIAS Y HORAS (22-oct-2026).
  *   Jal vio la prueba de la tira de dias con el «−X%» dentro de una
@@ -1150,7 +1188,9 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.1.4
+   VERSION: 2.1.6
+   v2.1.6 — Tira de ofertas estable con dias sin horas; precio «desde».
+   v2.1.5 — Sin «−X%» fantasma en el chip del dia al cambiar de dia.
    v2.1.4 — Mini sello «−X%» en dias y horas con oferta.
    v2.1.3 — Aviso de oferta mas visible, en el color de accion del salon.
    v2.1.2 — Smart pricing: insignias de oferta en dias y horas, propuesta de
@@ -1394,6 +1434,7 @@ window.KR_applySkin = function (el, name) {
       // v2.1.2 — smart pricing
       this._pendingOfertasReqId = null;
       this._ofertasDia = {};      // { 'HH:MM': pct } del dia elegido
+      this._ofertasDiaFecha = null; // v2.1.5 — dia al que pertenece _ofertasDia
       this._ofertasDias = {};     // { 'YYYY-MM-DD': [{hora, pct}] } resto de dias
       this._sp = null;            // { activo, ventanaDias } o null
       this._horaPendiente = null; // hora a seleccionar al llegar los huecos
@@ -1773,7 +1814,9 @@ window.KR_applySkin = function (el, name) {
 
         /* v2.1.2 — Smart pricing. Solo tokens del skin activo.
            v2.1.3 — Aviso de la propuesta en el color de accion del salon.
-           v2.1.4 — «−X%» de dias y horas como mini sello. */
+           v2.1.4 — «−X%» de dias y horas como mini sello.
+           v2.1.6 — «desde» delante del precio con oferta. */
+        .kr-desde { font-size: 0.5em; font-weight: var(--kr-w-medium); color: var(--kr-ink-2); margin-right: 4px; letter-spacing: 0; }
         .kr-day__tag--oferta { background: var(--kr-accent-2); color: var(--kr-accent-ink); font-weight: 800; font-size: 0.68rem; line-height: 1; padding: 3px 7px; border-radius: var(--kr-radius-pill); margin-top: 2px; }
         .kr-day.is-sel .kr-day__tag--oferta { background: var(--kr-orange-ink); color: var(--kr-orange-2); opacity: 1; }
         .kr-hour__oferta { display: inline-block; margin-left: 5px; padding: 3px 7px; border-radius: var(--kr-radius-pill); font-size: 0.78em; font-weight: 800; line-height: 1; vertical-align: 1px; background: var(--kr-accent-2); color: var(--kr-accent-ink); }
@@ -1855,6 +1898,7 @@ window.KR_applySkin = function (el, name) {
       };
       // v2.1.2 — Las ofertas dependen del servicio: se vacian al cambiarlo.
       this._ofertasDia = {};
+      this._ofertasDiaFecha = null;   // v2.1.5
       this._ofertasDias = {};
       this._sp = null;
       this._horaPendiente = null;
@@ -2101,7 +2145,11 @@ window.KR_applySkin = function (el, name) {
       }
       // v2.1.2 — Smart pricing del dia pedido (vacio si esta apagado).
       this._ofertasDia = (res && res.ok && res.ofertas && typeof res.ofertas === 'object') ? res.ofertas : {};
-      this._sp = (res && res.ok && res.smartPricing && res.smartPricing.activo) ? res.smartPricing : null;
+      // v2.1.5 — La respuesta es la del ultimo dia pedido (ver requestId).
+      this._ofertasDiaFecha = (res && res.fecha) || this.state.dayId;
+      // v2.1.6 — Un dia sin horas llega sin smart pricing: eso NO lo apaga.
+      // El estado lo fija la respuesta de varios dias (_handleOfertasResponse).
+      if (res && res.ok && res.smartPricing && res.smartPricing.activo) this._sp = res.smartPricing;
       // v2.0.4 — Estado "cerrado": el salón no abre ese día.
       // El backend lo señaliza con motivo:'cerrado' (huecos:[]).
       this.state.salonCerrado = res && res.ok && res.motivo === 'cerrado';
@@ -2130,11 +2178,8 @@ window.KR_applySkin = function (el, name) {
       this._renderActions();
       this._renderSummary();
       // v2.1.2 — Insignia del dia elegido, ofertas del resto y propuesta.
-      if (this._sp && this._sp.activo) {
-        this._emitirPedirOfertas();
-      } else {
-        this._ofertasDias = {};
-      }
+      // v2.1.6 — Siempre: getOfertasDias dice si esta encendido.
+      this._emitirPedirOfertas();
       this._renderDays();
       requestAnimationFrame(() => this._updateFades());
       this._renderPropuesta();
@@ -2144,10 +2189,16 @@ window.KR_applySkin = function (el, name) {
        v2.1.2 — SMART PRICING (ofertas por dia y hora)
        ================================================================= */
 
+    // v2.1.5 — Ofertas del dia elegido solo si ya son SUYAS (si no, vacio).
+    _ofertasDelDia() {
+      if (!this.state || this._ofertasDiaFecha !== this.state.dayId) return {};
+      return this._ofertasDia || {};
+    }
+
     // Porcentaje de oferta de la hora elegida (0 si no hay).
     _ofertaPctHoraSel() {
       if (!this._config || !this.state || !this.state.hour) return 0;
-      const v = Number((this._ofertasDia || {})[this.state.hour]);
+      const v = Number(this._ofertasDelDia()[this.state.hour]);
       return (Number.isFinite(v) && v > 0) ? v : 0;
     }
 
@@ -2155,7 +2206,8 @@ window.KR_applySkin = function (el, name) {
     _maxPctDia(id) {
       if (!this._sp || !this._sp.activo) return 0;
       let max = 0;
-      if (this.state && id === this.state.dayId) {
+      // v2.1.5 — El dia elegido usa sus horas solo cuando ya han llegado.
+      if (this.state && id === this.state.dayId && this._ofertasDiaFecha === id) {
         Object.values(this._ofertasDia || {}).forEach(p => { const n = Number(p); if (n > max) max = n; });
       } else {
         ((this._ofertasDias || {})[id] || []).forEach(o => { const n = Number(o && o.pct); if (n > max) max = n; });
@@ -2185,9 +2237,9 @@ window.KR_applySkin = function (el, name) {
     // alrededor del dia elegido. Mismos datos de composicion que pedir-huecos.
     _emitirPedirOfertas() {
       if (!this._config || !this.state || !this._selectedService) return;
-      if (!this._sp || !this._sp.activo) return;
       const sel = this.state.dayId;
-      const ventana = Math.max(0, Number(this._sp.ventanaDias) || 0);
+      // v2.1.6 — Sin estado conocido aun: solo los dias visibles.
+      const ventana = (this._sp && this._sp.activo) ? Math.max(0, Number(this._sp.ventanaDias) || 0) : 0;
       const fechas = new Set((this.days || []).map(d => d.id));
       for (let i = -ventana; i <= ventana; i++) {
         if (i !== 0) fechas.add(this._isoSumarDias(sel, i));
@@ -2224,12 +2276,19 @@ window.KR_applySkin = function (el, name) {
     _handleOfertasResponse(res) {
       if (!this.state) return;
       if (res && res.requestId && res.requestId !== this._pendingOfertasReqId) return;
-      this._ofertasDias = (res && res.ok && res.activo && res.dias && typeof res.dias === 'object') ? res.dias : {};
+      // v2.1.6 — Esta respuesta fija el estado del smart pricing (activo y
+      // ventana). Un fallo de red no lo cambia.
+      const habiaSp = !!(this._sp && this._sp.activo);
+      const activo = !!(res && res.ok && res.activo);
+      if (res && res.ok) this._sp = activo ? { activo: true, ventanaDias: Number(res.ventanaDias) || 0 } : null;
+      this._ofertasDias = (activo && res.dias && typeof res.dias === 'object') ? res.dias : {};
       // Si la consulta fallo, se permite repetirla en el siguiente cambio.
       if (!(res && res.ok)) this._ofertasClave = null;
       this._renderDays();
       requestAnimationFrame(() => this._updateFades());
       this._renderPropuesta();
+      // v2.1.6 — Primera vez que se conoce la ventana: pedir sus dias.
+      if (activo && !habiaSp && this._sp.ventanaDias > 0) this._emitirPedirOfertas();
     }
 
     // Hora con oferta mas cercana a la elegida dentro de la ventana. Solo
@@ -2243,7 +2302,7 @@ window.KR_applySkin = function (el, name) {
       const horaSel = this._hhmmMin(this.state.hour);
       if (horaSel == null) return null;
       const cands = [];
-      Object.entries(this._ofertasDia || {}).forEach(([h, p]) => cands.push({ fecha: sel, hora: h, pct: Number(p) }));
+      Object.entries(this._ofertasDelDia()).forEach(([h, p]) => cands.push({ fecha: sel, hora: h, pct: Number(p) }));
       Object.entries(this._ofertasDias || {}).forEach(([f, arr]) => {
         if (f === sel) return;
         (Array.isArray(arr) ? arr : []).forEach(o => cands.push({ fecha: f, hora: o && o.hora, pct: Number(o && o.pct) }));
@@ -2633,8 +2692,20 @@ window.KR_applySkin = function (el, name) {
       // front por si alguna vista la necesita.
       const durServidor = Number(this._durServidor);
       const durFinal = (Number.isFinite(durServidor) && durServidor > 0) ? durServidor : dur;
+      // v2.1.6 — «desde»: el dia elegido tiene horas con oferta y aun no hay
+      // hora. Mayor oferta del dia sobre el precio base, igual que arriba.
+      // Solo para mostrar: total, saved y promo no cambian.
+      let desde = null;
+      if (!tbd && !(this.state && this.state.hour) && cfg.basePrice != null) {
+        let maxDia = 0;
+        Object.values(this._ofertasDelDia()).forEach(p => { const n = Number(p); if (n > maxDia) maxDia = n; });
+        if (maxDia > promoCfg) {
+          const savedD = Math.round(cfg.basePrice * (maxDia / 100) * 100) / 100;
+          if (savedD > 0.005) desde = { pct: maxDia, saved: savedD, total: Math.round((price - savedD) * 100) / 100 };
+        }
+      }
       return { subtotal: price, total, saved, promo, duration: durFinal, durationLocal: dur, tbd,
-               esOferta: promo > 0 && ofertaHora > promoCfg };
+               esOferta: promo > 0 && ofertaHora > promoCfg, desde };
     }
 
     _slotsFor(day, duration) {
@@ -3337,9 +3408,12 @@ window.KR_applySkin = function (el, name) {
       const countTxt = count == null
         ? `<span class="kr-spin" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:-2px"></span> Calculando…`
         : `<b>${count}</b> ${count === 1 ? "hora disponible" : "horas disponibles"}`;
+      // v2.1.6 — Dia con oferta y sin hora: «desde» con el precio tachado.
       const priceNow = calc.tbd
         ? `<span class="kr-priceblock__tbd">A valorar</span>`
-        : `${calc.promo ? `<span class="kr-priceblock__was">${EUR(calc.subtotal)}</span>` : ""}<span class="kr-priceblock__now">${EUR(calc.total)}</span>`;
+        : calc.desde
+          ? `<span class="kr-priceblock__was">${EUR(calc.subtotal)}</span><span class="kr-priceblock__now"><small class="kr-desde">desde</small>${EUR(calc.desde.total)}</span>`
+          : `${calc.promo ? `<span class="kr-priceblock__was">${EUR(calc.subtotal)}</span>` : ""}<span class="kr-priceblock__now">${EUR(calc.total)}</span>`;
       c.innerHTML = `
         <div class="kr-hours-count">${countTxt}</div>
         <div class="kr-priceblock">
@@ -3379,7 +3453,7 @@ window.KR_applySkin = function (el, name) {
       slots.forEach(t => {
         // v2.1.2 — La hora puede llevar su oferta dentro; la seleccion va por
         // data-hora y no por textContent.
-        const pctH = Number((this._ofertasDia || {})[t]) || 0;
+        const pctH = Number(this._ofertasDelDia()[t]) || 0;
         const b = el("button", "kr-hour" + (this.state.hour === t ? " is-sel" : ""),
           pctH > 0 ? `${t} <span class="kr-hour__oferta">−${pctH}%</span>` : t);
         b.type = "button";
@@ -3457,12 +3531,17 @@ window.KR_applySkin = function (el, name) {
         proRows += `<div class="kr-prow"><span class="kr-prow__k">Compl. con</span><span class="kr-prow__v">${this._proName(this.state.proExtra)}</span></div>`;
       }
 
+      // v2.1.6 — Dia con oferta y sin hora: «desde» con el precio tachado.
       const totalNums = calc.tbd
         ? `<span class="kr-total__now kr-total__now--tbd">A valorar</span>`
-        : `${calc.promo ? `<span class="kr-total__was">${EUR(calc.subtotal)}</span>` : ""}<span class="kr-total__now">${EUR(calc.total)}</span>`;
+        : calc.desde
+          ? `<span class="kr-total__was">${EUR(calc.subtotal)}</span><span class="kr-total__now"><small class="kr-desde">desde</small>${EUR(calc.desde.total)}</span>`
+          : `${calc.promo ? `<span class="kr-total__was">${EUR(calc.subtotal)}</span>` : ""}<span class="kr-total__now">${EUR(calc.total)}</span>`;
       const totalLab = calc.tbd
         ? `<span class="kr-total__save">Se confirma en salón</span>`
-        : (calc.saved > 0.5 ? `<span class="kr-total__save">Ahorras ${EUR(calc.saved)}</span>` : "");
+        : calc.desde
+          ? ""   // el tachado y el «desde» ya lo dicen; con texto no cabe
+          : (calc.saved > 0.5 ? `<span class="kr-total__save">Ahorras ${EUR(calc.saved)}</span>` : "");
 
       // v2.0.10 — Panel destacado de descuento promocional al inicio del
       // resumen, antes del nombre del servicio y demás filas. Solo
