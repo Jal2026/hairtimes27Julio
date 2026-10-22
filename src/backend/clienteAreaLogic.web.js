@@ -1,7 +1,18 @@
 // =====================================================
 // KAMISUITE — Backend: Área de Cliente
 // =====================================================
-// VERSION: 1.6.8
+// VERSION: 1.6.9
+//
+// v1.6.9 — SMART PRICING: llamadas a smartPricingLogic con await
+//   (22-oct-2026). En Hair-Times las funciones normales de smartPricingLogic
+//   llegaban a otros archivos como promesa sin esperar (diagnóstico de
+//   widgetPublicoLogic 0.13.1). Aquí `campos` y el porcentaje de cada hora
+//   eran promesas: al mover una cita con oferta, el Área de Cliente no veía
+//   su oferta ni la del hueco nuevo.
+//     · camposOfertaReserva → await (async en smartPricingLogic v1.0.6).
+//     · El porcentaje de las horas → una llamada `await
+//       sp.pctOfertasEnHoras({ fecha, horas, fresco:true })`.
+//     · Requiere smartPricingLogic v1.0.6. Nada más cambia.
 //
 // v1.6.8 — SMART PRICING: la oferta de la cita al moverla (21-oct-2026).
 //   NUMERACIÓN: construido sobre la 1.6.6, que es la que hay en el repo de
@@ -439,7 +450,7 @@ import { cancelarReserva, reprogramarReserva } from 'backend/recepcionProLogic.w
 import { getHuecosDisponibles } from 'backend/widgetPublicoLogic.web';
 import wixData from 'wix-data';
 
-const VERSION = '1.6.8';
+const VERSION = '1.6.9';
 const TAG = `[ClienteArea][${VERSION}]`;
 
 // App ID constante de Wix Stores. Requerido en catalogReference.appId
@@ -1852,17 +1863,12 @@ async function ofertaParaCambio(reg, fecha, huecos) {
   const nada = { ofertaActualPct: 0, ofertas: {} };
   try {
     const sp = await import('backend/smartPricingLogic.web');
-    const campos = sp.camposOfertaReserva();
+    const campos = await sp.camposOfertaReserva();   // v1.6.9 — await
     const pctActual = Number(reg?.[campos.pct]) || 0;
     if (!(pctActual > 0)) return nada;
-    const vig = await sp.leerReglasVigentes({ fresco: true });
-    const ofertas = {};
-    if (vig.activo) {
-      for (const h of (Array.isArray(huecos) ? huecos : [])) {
-        const pct = sp.pctOfertaEnHueco(vig.reglas, fecha, h);
-        if (pct > 0) ofertas[h] = pct;
-      }
-    }
+    // v1.6.9 — Una llamada async con await para todas las horas.
+    const r = await sp.pctOfertasEnHoras({ fecha, horas: Array.isArray(huecos) ? huecos : [], fresco: true });
+    const ofertas = (r && r.activo && r.ofertas) ? r.ofertas : {};
     return { ofertaActualPct: pctActual, ofertas };
   } catch (e) {
     console.warn(`${TAG} ⚠️ ofertaParaCambio (no-blocking): ${e.message}`);
@@ -1877,13 +1883,14 @@ async function ofertaParaCambio(reg, fecha, huecos) {
 async function recalcularOfertaTrasMover(reservaId, regAntes, nuevaFecha, nuevaHora) {
   try {
     const sp = await import('backend/smartPricingLogic.web');
-    const campos = sp.camposOfertaReserva();
+    const campos = await sp.camposOfertaReserva();   // v1.6.9 — await
     const pctAntes = Number(regAntes?.[campos.pct]) || 0;
     const ahorroAntes = Number(regAntes?.[campos.ahorro]) || 0;
     if (!(pctAntes > 0) || !(ahorroAntes > 0)) return;   // cita sin oferta: nada que hacer
 
-    const vig = await sp.leerReglasVigentes({ fresco: true });
-    const pctNuevo = vig.activo ? sp.pctOfertaEnHueco(vig.reglas, nuevaFecha, nuevaHora) : 0;
+    // v1.6.9 — Una llamada async con await (antes pctOfertaEnHueco síncrona).
+    const vig = await sp.pctOfertasEnHoras({ fecha: nuevaFecha, horas: [nuevaHora], fresco: true });
+    const pctNuevo = vig.activo ? (Number((vig.ofertas || {})[nuevaHora]) || 0) : 0;
     const base = Math.round((ahorroAntes * 100 / pctAntes) * 100) / 100;
 
     const actual = await wixData.get(CMS_RESERVAS, reservaId, { suppressAuth: true });
