@@ -1,7 +1,41 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.12.1
+// VERSION: 0.13.0
+//
+// v0.13.0 — SMART PRICING: OFERTAS POR DÍA Y HORA (fase 1, 21-oct-2026).
+//
+//   Diseño aprobado por Jal: «KAMISUITE — Smart Pricing · Diseño Fase 1».
+//   Las reglas viven en backend/smartPricingLogic.web.js; aquí solo se
+//   aplican. Este archivo lo importa SIEMPRE de forma dinámica y dentro de
+//   try/catch: si aquel módulo fallara, la reserva funciona igual, sin
+//   ofertas.
+//
+//   (A) getHuecosDisponibles devuelve, además de las horas, `ofertas`
+//       { 'HH:MM': pct } y `smartPricing` { activo, ventanaDias } cuando
+//       llega `principalSetupUid` y el smart pricing está encendido. Solo
+//       para mostrar: si la lectura falla, las horas salen sin oferta.
+//       El Área de Cliente lo llama sin `principalSetupUid` y no cambia.
+//   (B) getOfertasDias (NUEVO): para una lista de fechas, devuelve las
+//       horas LIBRES con oferta de cada día, para las insignias de la tira
+//       de días y la propuesta de cambio de hueco. Mide la duración real
+//       una sola vez y reutiliza el motor de huecos día a día. Solo se
+//       ofrece lo que el motor da como libre.
+//   (C) crearReservaPublica revalida la oferta EN EL SERVIDOR con la
+//       versión vigente leída en fresco. Si la clienta vio una oferta y el
+//       servidor no puede confirmarla igual o mejor, RECHAZA con mensaje y
+//       ⛔ en el log (mismo criterio estricto que la guardia de cierre).
+//       La oferta confirmada viaja a crearPackReserva en el parámetro
+//       opcional `oferta` y se escribe en la MISMA inserción de la cita.
+//   (D) Confirmación (email y WhatsApp): el importe pasa a ser el NETO que
+//       se pagará en el salón cuando la cita lleva descuento automático
+//       (el mayor entre oferta y promo de catálogo, nunca la suma, misma
+//       regla que cobra Recepción PRO), y se añade el aviso dentro de
+//       «servicios», en una sola línea: no cambia ninguna plantilla de Meta.
+//       Sin descuento, el importe sale exactamente como antes.
+//   (E) `leerHorarioStaffEnDia` pasa a exportarse (sin cambiar una línea de
+//       su cuerpo) para que smartPricingLogic mida la ocupación con el
+//       MISMO horario que el motor, sin crear una tercera copia.
 //
 // v0.12.1 — LA GUARDIA DE CIERRE PASA A SER ESTRICTA.
 //
@@ -1039,7 +1073,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.12.1';
+const VERSION = '0.13.0';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -2040,6 +2074,43 @@ async function medirDuracionRealPack({ fecha, horaHHmm, principalSetupUid, compl
 
 const SLOT_STEP = 15;   // minutos entre slots
 
+// v0.13.0 — SMART PRICING. Tope de días por consulta de getOfertasDias:
+// la tira del widget enseña 6 días y la ventana estándar añade ±2 sobre el
+// elegido. Más de 10 no aporta nada y multiplica consultas al motor.
+const MAX_FECHAS_OFERTAS = 10;
+
+// v0.13.0 — Ofertas de las horas libres de un día, SOLO PARA MOSTRAR.
+// Lee la versión vigente con la caché de 60 s de smartPricingLogic. Ante
+// cualquier fallo devuelve { activo:false } y las horas salen sin oferta:
+// nunca bloquea la disponibilidad. Lo que se promete de verdad se
+// revalida en fresco al crear la reserva (crearReservaPublica).
+async function ofertasDeHuecos({ fecha, huecos, principalSetupUid }) {
+  const nada = { activo: false, ventanaDias: 0, ofertas: {} };
+  if (!principalSetupUid || !Array.isArray(huecos) || !huecos.length) return nada;
+  try {
+    const sp = await import('backend/smartPricingLogic.web');
+    const vig = await sp.leerReglasVigentes();
+    if (!vig.activo) return nada;
+    const item = await sp.leerItemCatalogo(principalSetupUid);
+    const ofertas = {};
+    for (const h of huecos) {
+      const of = sp.calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: h, item });
+      if (of.pct > 0) ofertas[h] = of.pct;
+    }
+    return { activo: true, ventanaDias: vig.reglas.ventanaDias, ofertas };
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ ofertasDeHuecos (no-blocking): ${e.message}`);
+    return nada;
+  }
+}
+
+// v0.13.0 — Importe con descuento para la confirmación: entero sin
+// decimales ("16€"), con decimales en formato español ("14,40€").
+function fmtEurosAviso(n) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  return Number.isInteger(v) ? `${v}€` : `${v.toFixed(2).replace('.', ',')}€`;
+}
+
 function parseHHMM(s) {
   const m = String(s || '').match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
@@ -2055,7 +2126,7 @@ function fmtHHMM(min) {
 
 // Lee horario {from,to} del staff para un dow concreto.
 // Devuelve null si está cerrado, no tiene horario configurado, o no parsea.
-function leerHorarioStaffEnDia(staffRow, dow) {
+export function leerHorarioStaffEnDia(staffRow, dow) {
   const raw = staffRow?.workingHoursSessionIds;
   if (!raw) return null;
   let items = [];
@@ -2553,17 +2624,96 @@ export const getHuecosDisponibles = webMethod(
         : '';
       console.log(`${TAG} ✅ huecos ${fecha} dow=${dow} proId=${proId || 'any'} dur=${dur}min: ${huecos.length} slots (abre ${fmtHHMM(minFrom)}, cierra ${fmtHHMM(maxTo)}, grace ${graceMin}min)${bufferLog}${modoLog}. ${elapsed}s`);
 
+      // v0.13.0 — SMART PRICING. Solo con `principalSetupUid` (widget
+      // público). El Área de Cliente no lo envía y recibe lo de siempre.
+      const sp = await ofertasDeHuecos({ fecha, huecos, principalSetupUid });
+
       return {
         ok: true, version: VERSION,
         fecha, proId, durationMin: dur,
         huecos,
         abreA: fmtHHMM(minFrom),
-        cierraA: fmtHHMM(maxTo)
+        cierraA: fmtHHMM(maxTo),
+        ofertas: sp.ofertas,
+        smartPricing: { activo: sp.activo, ventanaDias: sp.ventanaDias }
       };
 
     } catch (e) {
       console.error(`${TAG} ❌ getHuecosDisponibles:`, e.message);
       return { ok: false, version: VERSION, error: safeErr(e), huecos: [] };
+    }
+  }
+);
+
+// =====================================================
+// 5·bis · OFERTAS DE VARIOS DÍAS        ◄── NUEVO v0.13.0
+// =====================================================
+// Para la tira de días (insignia «−X %») y para la propuesta de cambio de
+// hueco del widget público. Devuelve, por fecha, SOLO las horas libres que
+// llevan oferta para esa composición exacta y ese profesional:
+//   { ok, activo, ventanaDias, durationMin, dias: { 'YYYY-MM-DD': [{hora, pct}] } }
+// Apagado o sin versión vigente → { ok:true, activo:false, dias:{} } sin
+// tocar el motor (coste cero).
+//
+// La duración real se mide UNA vez (no depende del día) y cada día pasa
+// por getHuecosDisponibles con esa cifra y sin `complementosSetupUid`, que
+// es su camino de «duración ya medida». Así la disponibilidad es la misma
+// que verá la clienta al pinchar el día.
+export const getOfertasDias = webMethod(
+  Permissions.Anyone,
+  async ({ fechas, proId, durationMin, idStaffPermitidos, proExtraId, principalSetupUid, complementosSetupUid, varianteSel } = {}) => {
+    const t0 = Date.now();
+    const apagado = { ok: true, version: VERSION, activo: false, ventanaDias: 0, dias: {} };
+    try {
+      if (!principalSetupUid) return apagado;
+
+      let sp;
+      try {
+        sp = await import('backend/smartPricingLogic.web');
+      } catch (eImp) {
+        console.warn(`${TAG} ⚠️ getOfertasDias: smartPricingLogic no disponible (${eImp.message})`);
+        return apagado;
+      }
+      const vig = await sp.leerReglasVigentes();
+      if (!vig.activo) return apagado;
+
+      const hoy = ahoraMadrid().ymd;
+      const lista = [...new Set((Array.isArray(fechas) ? fechas : [])
+        .map(String)
+        .filter(f => /^\d{4}-\d{2}-\d{2}$/.test(f) && f >= hoy))]
+        .sort()
+        .slice(0, MAX_FECHAS_OFERTAS);
+      if (!lista.length) return { ...apagado, activo: true, ventanaDias: vig.reglas.ventanaDias };
+
+      let dur = toNum(durationMin) || 60;
+      if (Array.isArray(complementosSetupUid)) {
+        const durReal = await medirDuracionRealPack({ fecha: lista[0], principalSetupUid, complementosSetupUid, varianteSel });
+        if (durReal != null) dur = durReal;
+      }
+
+      const resultados = await Promise.all(lista.map(f => getHuecosDisponibles({
+        fecha: f,
+        proId,
+        durationMin: dur,
+        idStaffPermitidos: Array.isArray(idStaffPermitidos) ? idStaffPermitidos : [],
+        proExtraId: proExtraId || '',
+        principalSetupUid
+      })));
+
+      const dias = {};
+      let conOferta = 0;
+      lista.forEach((f, i) => {
+        const r = resultados[i];
+        const of = (r && r.ok && r.ofertas && typeof r.ofertas === 'object') ? r.ofertas : {};
+        dias[f] = Object.keys(of).sort().map(h => ({ hora: h, pct: of[h] }));
+        if (dias[f].length) conOferta++;
+      });
+
+      console.log(`${TAG} 🏷️ getOfertasDias ${lista.length} días (${conOferta} con oferta) dur=${dur}min · ${((Date.now() - t0) / 1000).toFixed(2)}s`);
+      return { ok: true, version: VERSION, activo: true, ventanaDias: vig.reglas.ventanaDias, durationMin: dur, dias };
+    } catch (e) {
+      console.error(`${TAG} ❌ getOfertasDias:`, e.message);
+      return { ...apagado, ok: false, error: safeErr(e) };
     }
   }
 );
@@ -2669,7 +2819,11 @@ export const crearReservaPublica = webMethod(
         // del `empleado2Id` de V1). wixResourceId concreto. Si no llega,
         // llega vacío, llega 'any', o coincide con `staffId` → toda la cita
         // va al profesional principal, comportamiento v0.8.0 idéntico.
-        staffExtraId = ''
+        staffExtraId = '',
+        // v0.13.0 — Porcentaje de oferta que la clienta VIO en pantalla para
+        // esta hora (0 si ninguna). Solo sirve para comprobar que lo
+        // prometido se cumple: la oferta que se graba la calcula el servidor.
+        ofertaPct = 0
       } = payload || {};
 
       // Validación mínima de campos
@@ -3055,6 +3209,54 @@ export const crearReservaPublica = webMethod(
         };
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // v0.13.0 — SMART PRICING: la oferta la confirma el servidor
+      // ─────────────────────────────────────────────────────────────
+      // Se relee la versión vigente EN FRESCO (sin caché). Reglas:
+      //   · La clienta vio X % y el servidor confirma X % o más → se graba
+      //     lo del servidor (nunca menos de lo prometido).
+      //   · La clienta vio X % y el servidor no puede confirmarlo (apagado,
+      //     otra versión, error de lectura) → ⛔ se rechaza con mensaje:
+      //     prometer un precio y cobrar otro no es aceptable.
+      //   · La clienta no vio oferta → se graba la que confirme el servidor,
+      //     si hay alguna; si no se puede leer, la cita nace sin oferta.
+      let ofertaReserva = null;
+      {
+        const pctVisto = Math.max(0, Math.round(toNum(ofertaPct)));
+        let pctServidor = 0;
+        let ahorroServidor = 0;
+        let versionServidor = '';
+        let leido = false;
+        try {
+          const sp = await import('backend/smartPricingLogic.web');
+          const vig = await sp.leerReglasVigentes({ fresco: true });
+          leido = true;
+          if (vig.activo) {
+            const itemSvc = await sp.leerItemCatalogo(principalSetupUid, { fresco: true });
+            const of = sp.calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: horaHHmm, item: itemSvc });
+            pctServidor = of.pct;
+            ahorroServidor = of.ahorro;
+            versionServidor = vig.versionId;
+          }
+        } catch (spErr) {
+          console.warn(`${TAG} ⚠️ Smart pricing no concluyente al reservar: ${spErr.message}`);
+        }
+
+        if (pctVisto > 0 && (!leido || pctServidor < pctVisto)) {
+          console.warn(`${TAG} ⛔ Oferta no confirmada: la clienta vio −${pctVisto}% y el servidor da −${pctServidor}% (${fecha} ${horaHHmm}, ${principalSetupUid}) → reserva rechazada`);
+          return {
+            ok: false,
+            version: VERSION,
+            codigo: 'OFERTA_CAMBIADA',
+            error: { message: 'La oferta de esta hora ya no está disponible. Revisa las horas y vuelve a elegir.' }
+          };
+        }
+        if (pctServidor > 0 && ahorroServidor > 0) {
+          ofertaReserva = { pct: pctServidor, ahorro: ahorroServidor, versionId: versionServidor };
+          console.log(`${TAG} 🏷️ Oferta confirmada −${pctServidor}% (−${ahorroServidor}€) · vista −${pctVisto}%`);
+        }
+      }
+
       // Delegar en crearPackReserva del backend de Recepción Pro.
       // Import dinámico para no acoplar el módulo en tiempo de carga.
       const { crearPackReserva } = await import('backend/recepcionProLogic.web');
@@ -3078,7 +3280,10 @@ export const crearReservaPublica = webMethod(
         origenRecepcion: false,  // v0.3.0 — origen WEB (no Recepción Pro)
         // v0.7.7 — Variante del principal (null si base o si el servicio
         // no tiene variantes). crearPackReserva v1.0.25 lo procesa.
-        varianteSel: varianteSel || null
+        varianteSel: varianteSel || null,
+        // v0.13.0 — Oferta confirmada por el servidor (null si no hay).
+        // crearPackReserva v1.0.61 la escribe en la misma inserción.
+        oferta: ofertaReserva
       });
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
@@ -3252,6 +3457,30 @@ export const crearReservaPublica = webMethod(
             }
           }
 
+          // v0.13.0 — DESCUENTO AUTOMÁTICO en la confirmación. El mayor
+          // entre la oferta grabada y la promo de catálogo, con la misma
+          // regla que cobra Recepción PRO. Sin descuento, nada cambia.
+          // No-blocking: si falla, la confirmación sale como antes.
+          let descAuto = { tipo: '', importe: 0, pct: 0 };
+          try {
+            const sp = await import('backend/smartPricingLogic.web');
+            const fasesD = Array.isArray(resultado?.fases) ? resultado.fases : [];
+            const promoIdx = await sp.cargarIndicePromos(
+              fasesD.filter(f => f && f.tipo === 'servicio').map(f => f.setupUid)
+            );
+            descAuto = sp.descuentoAutomaticoReserva({
+              fases: fasesD,
+              ofertaPct: ofertaReserva ? ofertaReserva.pct : 0,
+              ofertaAhorro: ofertaReserva ? ofertaReserva.ahorro : 0,
+              promoIdx
+            });
+            const aviso = descAuto.importe > 0 ? sp.textoAvisoDescuento(descAuto.tipo, descAuto.pct) : '';
+            if (aviso) serviciosStr = `${serviciosStr} · ${aviso}`;
+          } catch (dErr) {
+            console.warn(`${TAG} ⚠️ Descuento en la confirmación (no-blocking): ${dErr.message}`);
+            descAuto = { tipo: '', importe: 0, pct: 0 };
+          }
+
           serviciosStr = unaLinea(serviciosStr);
           estilistaStr = unaLinea(estilistaStr);
 
@@ -3267,7 +3496,11 @@ export const crearReservaPublica = webMethod(
           const em = endMin % 60;
           const horaFinal = String(eh).padStart(2, '0') + ':' + String(em).padStart(2, '0');
 
-          const importeStr = `${resultado?.precioTotal || 0}€`;
+          // v0.13.0 — Con descuento automático, el importe es el NETO que se
+          // pagará en el salón. Sin descuento, exactamente como antes.
+          const importeStr = descAuto.importe > 0
+            ? fmtEurosAviso(Math.max(0, toNum(resultado?.precioTotal) - descAuto.importe))
+            : `${resultado?.precioTotal || 0}€`;
           // Origen 'Reserva Online' como en V1 — distingue del de Recepción Pro.
           const origenStr = 'Reserva Online';
           // Las reservas web no pagan online aún (futuro: integración pasarela).
