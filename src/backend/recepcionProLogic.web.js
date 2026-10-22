@@ -1,9 +1,37 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.60
-// FECHA: 30 de septiembre de 2026
+// VERSION: 1.0.61
+// FECHA: 21 de octubre de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.61: 🏷️ SMART PRICING — OFERTA GRABADA EN LA CITA (fase 1).
+//          Diseño aprobado por Jal el 21-oct-2026.
+//
+//          (A) crearPackReserva acepta un parámetro OPCIONAL `oferta`
+//              { pct, ahorro, versionId }. Si llega válido, se escribe en
+//              la MISMA inserción de la reserva (tres campos nuevos de
+//              KamisuiteReservations, ver F_RES_OFERTA). Así no puede
+//              existir una cita creada sin la oferta que se le prometió.
+//              Solo lo envía widgetPublicoLogic v0.13.0, después de
+//              revalidar la oferta en el servidor.
+//              QUÉ CAMBIA PARA QUIEN YA LLAMABA: nada. Recepción PRO V2,
+//              Recepción LITE MOBILE y el modo solo-cálculo no envían
+//              `oferta`: entra a null y el registro es idéntico byte a byte
+//              al de v1.0.60. El modo solo-cálculo sale antes de construir
+//              el registro, así que nunca lo toca.
+//          (B) getReservasPorFecha lee la oferta grabada y resuelve el
+//              DESCUENTO AUTOMÁTICO de cada cita: el MAYOR entre la oferta y
+//              la promo de catálogo, nunca la suma (decisión de Jal). Cuando
+//              gana la oferta, se rellenan los mismos campos que ya consume
+//              el widget (tienePromoServicio / descuentoServicioTotal) con el
+//              importe de la oferta, y `descuentoAutoTipo` dice cuál ganó
+//              ('oferta' | 'promo' | ''), para que el cobro anote el token
+//              correcto. Bloque síncrono sin consultas: no puede romper la
+//              agenda.
+//          Los IDs de campo están SOLO en F_RES_OFERTA. Se duplican aquí a
+//          propósito en vez de importar smartPricingLogic: este backend lo
+//          usan tres pantallas y no debe depender de que otro módulo cargue.
 //
 // v1.0.60: 🧮 MODO SOLO-CÁLCULO EN crearPackReserva.
 //          Nuevo parámetro OPCIONAL `soloCalcular` (Boolean, default false).
@@ -1413,7 +1441,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.60';
+const VERSION = '1.0.61';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1421,6 +1449,15 @@ const CMS_CATALOGO = 'ServiceCatalog';
 const CMS_RESERVAS = 'KamisuiteReservations';
 const CMS_PAGOS = 'PaymentReservations';
 const CMS_STAFF = 'StaffConfig';
+
+// v1.0.61 — SMART PRICING: campos de la oferta en KamisuiteReservations.
+// Nombres PROPUESTOS: confirmar con cmsFieldReader tras crearlos. Mismos
+// valores que camposOfertaReserva() de smartPricingLogic.
+const F_RES_OFERTA = {
+  pct:       'ofertaPct',
+  ahorro:    'ofertaAhorro',
+  versionId: 'ofertaVersionId'
+};
 
 // v1.0.31 — F4/F5: colecciones de Productos Custom
 const CMS_VOUCHERS              = 'KamisuiteVouchers';
@@ -2551,7 +2588,11 @@ export const crearPackReserva = webMethod(
         // justo después de construir la cascada. Lo usa widgetPublicoLogic
         // para medir la cita con el MISMO código que la construye, en vez de
         // fiarse de la duración que llega del navegador.
-        soloCalcular = false
+        soloCalcular = false,
+        // v1.0.61 — SMART PRICING. Oferta ya confirmada por el servidor
+        // { pct, ahorro, versionId }. Solo la envía widgetPublicoLogic
+        // v0.13.0. Ausente → null → registro idéntico a v1.0.60.
+        oferta = null
       } = payload || {};
 
       if (!fecha || !horaHHmm || !principalSetupUid) {
@@ -2875,6 +2916,23 @@ export const crearPackReserva = webMethod(
         origenRecepcion: !!origenRecepcion   // v1.0.17 — bool del payload (default true)
       };
 
+      // v1.0.61 — SMART PRICING. La oferta va en la MISMA inserción. Se
+      // valida aquí también: porcentaje entero 1–100 y ahorro > 0, nunca
+      // mayor que el precio de la cita. Sin oferta válida, el registro no
+      // cambia en nada.
+      if (oferta && typeof oferta === 'object') {
+        const oPct = Math.round(Number(oferta.pct));
+        const oAhorro = Math.round(toNum(oferta.ahorro) * 100) / 100;
+        if (Number.isFinite(oPct) && oPct >= 1 && oPct <= 100 && oAhorro > 0) {
+          registro[F_RES_OFERTA.pct] = oPct;
+          registro[F_RES_OFERTA.ahorro] = Math.min(oAhorro, toNum(precioTotal));
+          registro[F_RES_OFERTA.versionId] = String(oferta.versionId || '');
+          console.log(`${TAG} 🏷️ Oferta grabada en la cita: −${oPct}% (−${registro[F_RES_OFERTA.ahorro]}€)`);
+        } else {
+          console.warn(`${TAG} ⚠️ Oferta recibida no válida, se ignora: ${JSON.stringify(oferta)}`);
+        }
+      }
+
       const inserted = await wixData.insert(CMS_RESERVAS, registro, { suppressAuth: true });
       const reservaId = inserted?._id || '';
 
@@ -3055,7 +3113,10 @@ export const getReservasPorFecha = webMethod(
         tienePromoServicio: false,               // v1.0.19 — se rellena abajo si aplica
         descuentoServicioTotal: 0,               // v1.0.19 — suma del ahorro
         serviciosPromo: [],                      // v1.0.19 — detalle de servicios con promo
-        productosVendidos: []                    // v1.0.55 — se rellena abajo si aplica
+        productosVendidos: [],                   // v1.0.55 — se rellena abajo si aplica
+        ofertaPct: toNum(item[F_RES_OFERTA.pct]),       // v1.0.61 — oferta grabada al reservar
+        ofertaAhorro: toNum(item[F_RES_OFERTA.ahorro]), // v1.0.61
+        descuentoAutoTipo: ''                    // v1.0.61 — 'oferta' | 'promo' | '' (se resuelve abajo)
       }));
 
 
@@ -3144,6 +3205,22 @@ export const getReservasPorFecha = webMethod(
       } catch (ePromo) {
         // No-blocking: cada reserva conserva sus defaults (false/0/[])
         console.warn(`${TAG} ⚠ cruce promo (no-blocking):`, ePromo.message);
+      }
+
+      // v1.0.61 — SMART PRICING. Descuento automático = el MAYOR entre la
+      // oferta grabada y la promo de catálogo; nunca la suma. Si gana la
+      // oferta, viaja en los mismos campos que ya pinta y cobra el widget.
+      // Síncrono y sin consultas: no puede romper la agenda.
+      for (const r of reservas) {
+        const ofA = Math.round((Number(r.ofertaAhorro) || 0) * 100) / 100;
+        const prA = Number(r.descuentoServicioTotal) || 0;
+        if (ofA > 0 && ofA > prA) {
+          r.descuentoAutoTipo = 'oferta';
+          r.tienePromoServicio = true;
+          r.descuentoServicioTotal = ofA;
+        } else if (r.tienePromoServicio === true && prA > 0) {
+          r.descuentoAutoTipo = 'promo';
+        }
       }
 
       // v1.0.55 — Cruce con las ventas de producto hechas DESDE estas citas.
