@@ -1,8 +1,25 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.13
+   salonConfigLogic.web.js  v1.0.14
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.14 · 21 Oct 2026 · Interruptor de smart pricing
+     - ALL_FIELDS     += smartPricingActivo
+     - BOOLEAN_FIELDS += smartPricingActivo
+     - Enciende las ofertas por día y hora de la reserva online (fase 1
+       del smart pricing, diseño aprobado por Jal el 21-oct-2026).
+     - Semántica IGUAL que dailySummaryActive: solo con true EXPLÍCITO.
+       Vacío, null o error de lectura → APAGADO. Nadie empieza a ver
+       ofertas por desplegar, y en fechas fuertes (Navidad) se apaga aquí.
+     - LO CONSUME: smartPricingLogic.web.js v1.0.0 (leerReglasVigentes,
+       getEstadoSmartPricing).
+     - CMS: crear en SalonConfig `smartPricingActivo` (Booleano) y
+       confirmar el ID con cmsFieldReader.
+     - Pareja widget: widget_salon_config v1.0.20 (toggle en Módulos
+       Opcionales, sin defaultOn).
+     - Page code sin cambios.
+     - De paso: el TAG decía v1.0.12 con la cabecera en v1.0.13. Ahora
+       los dos dicen v1.0.14.
    v1.0.13 · 4 Sep 2026 · Resumen diario del día por email
      - ALL_FIELDS     += dailySummaryActive, dailySummaryTime,
                          dailySummaryRecipients
@@ -207,7 +224,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[SalonConfig v1.0.12]';
+const TAG = '[SalonConfig v1.0.14]';
 const COLLECTION = 'SalonConfig';
 
 // ── Lista completa de field IDs (53 user fields) ──
@@ -285,7 +302,10 @@ const ALL_FIELDS = [
   //           (lo consume resumenDiarioLogic v1.1.0)
   'dailySummaryActive',
   'dailySummaryTime',
-  'dailySummaryRecipients'
+  'dailySummaryRecipients',
+  // v1.0.14 — interruptor del smart pricing
+  //           (lo consume smartPricingLogic v1.0.0)
+  'smartPricingActivo'
 ];
 
 // ── Campos booleanos (para parseo correcto) ──
@@ -305,6 +325,9 @@ const BOOLEAN_FIELDS = [
   // v1.0.13 — interruptor del resumen diario. Sin defaultOn: nace
   // apagado a propósito (ver changelog).
   'dailySummaryActive',
+  // v1.0.14 — interruptor del smart pricing. Mismo criterio: apagado
+  // salvo true explícito.
+  'smartPricingActivo',
 ];
 
 // ── Campos numéricos ──
