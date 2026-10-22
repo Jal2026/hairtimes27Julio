@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE - Backend: Smart Pricing
 // =====================================================
-// VERSION: 1.0.5
+// VERSION: 1.0.6
 // FECHA: 22 de octubre de 2026
 // ARCHIVO: backend/smartPricingLogic.web.js
 //
@@ -40,14 +40,13 @@
 //                               vigente (READ-MERGE-UPDATE siempre).
 //  LE LLAMAN:
 //    · Page code de la página de gestión de smart pricing (webMethods).
-//    · widgetPublicoLogic     → leerReglasVigentes, leerItemCatalogo,
-//                               calcularOfertaServicio, camposOfertaReserva,
+//    · widgetPublicoLogic     → leerReglasVigentes, ofertasDeHoras,
 //                               cargarIndicePromos, descuentoAutomaticoReserva,
 //                               textoAvisoDescuento.
 //    · reminderLogic          → cargarIndicePromos, descuentoAutomaticoReserva,
 //                               textoAvisoDescuento, camposOfertaReserva.
-//    · clienteAreaLogic       → leerReglasVigentes, pctOfertaEnHueco,
-//                               camposOfertaReserva.
+//    · clienteAreaLogic       → pctOfertasEnHoras, camposOfertaReserva.
+//    v1.0.6: TODAS async y llamadas con await (ver CHANGELOG).
 //    Todos lo importan de forma DINÁMICA y dentro de try/catch: si este
 //    módulo fallara al cargar, la reserva, el recordatorio y el Área de
 //    Cliente siguen funcionando sin ofertas.
@@ -78,6 +77,27 @@
 //  remedio que AKIRA aplicó al 504 de su primera pregunta (20-ago-2026).
 //
 // CHANGELOG:
+//   v1.0.6 (22-oct-2026) — Desde otros archivos, solo funciones async.
+//     Diagnóstico en Hair-Times (widgetPublicoLogic 0.13.1, 22-oct-2026):
+//     desde widgetPublicoLogic, las funciones NORMALES de este archivo
+//     (pctOfertaEnHueco, calcularOfertaServicio) llegaban como `{}`, una
+//     promesa sin esperar, y las `async` esperadas con await
+//     (leerReglasVigentes, leerItemCatalogo) llegaban bien. Resultado:
+//     ninguna oferta en la reserva, aunque regla, servicio y precio
+//     estaban bien.
+//     · REGLA: todo lo que otros .web.js llaman de aquí es `async` y se
+//       llama con await. Es el patrón que el log demuestra que funciona.
+//     · camposOfertaReserva, descuentoAutomaticoReserva y
+//       textoAvisoDescuento pasan a `async` (nadie las usa dentro de este
+//       archivo).
+//     · Nuevas `async`, para no llamar hora a hora desde fuera:
+//         ofertasDeHoras({ fecha, horas, setupUid, fresco })
+//           → { activo, versionId, ventanaDias, ofertas:{ 'HH:MM': {pct, ahorro} } }
+//         pctOfertasEnHoras({ fecha, horas, fresco })
+//           → { activo, versionId, ofertas:{ 'HH:MM': pct } }  (solo regla)
+//     · pctOfertaEnHueco y calcularOfertaServicio siguen siendo síncronas:
+//       las usa este archivo por dentro. Desde fuera ya no se llaman.
+//     · Cálculos idénticos a v1.0.5.
 //   v1.0.5 (22-oct-2026) — Smart pricing solo en los servicios marcados.
 //     Jal: «En los baratos como arreglo de corte no merece la pena. Hay que
 //     incentivar los servicios más caros». Nuevo campo en ServiceCatalog
@@ -174,7 +194,7 @@ import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.0.5';
+const VERSION = '1.0.6';
 const TAG = `[SmartPricing][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -338,7 +358,7 @@ function solape(a, b, c, d) {
  * Función y no constante exportada: es el patrón de export del proyecto en
  * backends .web.js (funciones planas, como akiraEntrenador).
  */
-export function camposOfertaReserva() {
+export async function camposOfertaReserva() {   // v1.0.6 — async
   return { ...F_RES };
 }
 
@@ -519,6 +539,43 @@ export function calcularOfertaServicio({ reglas, fecha, hora, item }) {
   return { pct: pctRegla, ahorro, basePrice };
 }
 
+/**
+ * v1.0.6 — Ofertas de varias horas de un día para un servicio, en UNA
+ * llamada async. Es lo que usa la reserva online (mostrar y revalidar).
+ * Mismo cálculo que calcularOfertaServicio, hora a hora.
+ * @returns {{activo:boolean, versionId:string, ventanaDias:number,
+ *            ofertas: Object<string, {pct:number, ahorro:number}>}}
+ */
+export async function ofertasDeHoras({ fecha, horas, setupUid, fresco = false } = {}) {
+  const nada = { activo: false, versionId: '', ventanaDias: 0, ofertas: {} };
+  const vig = await leerReglasVigentes({ fresco });
+  if (!vig.activo) return nada;
+  const item = await leerItemCatalogo(setupUid, { fresco });
+  const ofertas = {};
+  for (const h of (Array.isArray(horas) ? horas : [])) {
+    const of = calcularOfertaServicio({ reglas: vig.reglas, fecha, hora: h, item });
+    if (of.pct > 0) ofertas[h] = { pct: of.pct, ahorro: of.ahorro };
+  }
+  return { activo: true, versionId: vig.versionId, ventanaDias: vig.reglas.ventanaDias, ofertas };
+}
+
+/**
+ * v1.0.6 — Porcentaje de la REGLA vigente en varias horas de un día, sin
+ * mirar el servicio (Área de Cliente: la cita ya lleva su oferta y se
+ * recalcula el porcentaje del hueco nuevo). Una llamada async.
+ * @returns {{activo:boolean, versionId:string, ofertas: Object<string, number>}}
+ */
+export async function pctOfertasEnHoras({ fecha, horas, fresco = false } = {}) {
+  const vig = await leerReglasVigentes({ fresco });
+  if (!vig.activo) return { activo: false, versionId: '', ofertas: {} };
+  const ofertas = {};
+  for (const h of (Array.isArray(horas) ? horas : [])) {
+    const pct = pctOfertaEnHueco(vig.reglas, fecha, h);
+    if (pct > 0) ofertas[h] = pct;
+  }
+  return { activo: true, versionId: vig.versionId, ofertas };
+}
+
 // =====================================================
 // DESCUENTO AUTOMÁTICO DE UNA CITA (confirmación y recordatorio)
 // =====================================================
@@ -553,7 +610,7 @@ export async function cargarIndicePromos(setupUids) {
  * promo de catálogo (suma por servicio, como recepción). Nunca la suma.
  * Devuelve { tipo: 'oferta'|'promo'|'', importe, pct }.
  */
-export function descuentoAutomaticoReserva({ fases, ofertaPct, ofertaAhorro, promoIdx }) {
+export async function descuentoAutomaticoReserva({ fases, ofertaPct, ofertaAhorro, promoIdx }) {   // v1.0.6 — async
   let promoTotal = 0;
   let promoPct = 0;
   const uids = new Set();
@@ -581,7 +638,7 @@ export function descuentoAutomaticoReserva({ fases, ofertaPct, ofertaAhorro, pro
  * recordatorio. Una sola línea (los parámetros de plantilla de WhatsApp no
  * admiten saltos). PROPUESTA DE COPY pendiente de aprobación de Jal.
  */
-export function textoAvisoDescuento(tipo, pct) {
+export async function textoAvisoDescuento(tipo, pct) {   // v1.0.6 — async
   const p = Math.round(toNum(pct));
   if (tipo === 'oferta' && p > 0) return `Oferta −${p} % al pagar en el salón`;
   if (tipo === 'promo' && p > 0) return `Promoción −${p} % al pagar en el salón`;
