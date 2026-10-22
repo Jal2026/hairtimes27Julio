@@ -1,7 +1,12 @@
 // =====================================================
 // KAMISUITE — Page Code: /area-cliente
 // =====================================================
-// VERSION: 1.3.7
+// VERSION: 1.3.8
+//
+// v1.3.8 — Smart pricing: el handler 'pedirHuecosMover' reenvía al widget
+//   `ofertaActualPct` y `ofertas` que devuelve getHuecosCambioReserva
+//   (clienteAreaLogic v1.6.8). Solo llegan con valor en citas con oferta.
+//   Pareja con CE v1.2.2. Nada más cambia.
 //
 // v1.3.7 — Fallback del skin alineado con el resto del sistema.
 //   - `ctx.skin` y `getSalonConfig` caen a 'niebla' (default sistema)
@@ -175,7 +180,7 @@ import {
 } from 'backend/clienteAreaLogic.web';
 import { getSalonConfig } from 'backend/widgetPublicoLogic.web';
 
-const TAG = '[ClienteAreaPage][v1.3.7]';
+const TAG = '[ClienteAreaPage][v1.3.8]';
 
 const ctx = {
   memberContactId: null,
@@ -404,6 +409,9 @@ function wireListeners() {
         huecos: r?.huecos || [],
         motivo: r?.motivo,
         error: r?.error?.message || null,
+        // v1.3.8 — smart pricing
+        ofertaActualPct: Number(r?.ofertaActualPct) || 0,
+        ofertas: (r && r.ofertas && typeof r.ofertas === 'object') ? r.ofertas : {},
         ts: Date.now()
       }));
     } catch (e) {
