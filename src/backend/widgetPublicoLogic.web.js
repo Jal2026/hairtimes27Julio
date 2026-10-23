@@ -1,7 +1,38 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.13.2
+// VERSION: 0.14.0
+//
+// v0.14.0 — 🔗 SERVICIO ENLAZADO EN LA RESERVA ONLINE (23-oct-2026).
+//   Un servicio puede llevar otro enlazado que EMPIEZA A LA VEZ, cada uno
+//   con su profesional y su cobro (ServiceCatalog.servicioEnlazado, setupUid
+//   del otro). Caso Hair-Times: spa capilar (Raquel, Ricardo o Angela) +
+//   spa masaje de EMY. No es el segundo profesional de los complementos:
+//   aquel va DESPUÉS del principal; este, a la vez y en otra cita.
+//   Enlace válido = el servicio enlazado está activo, es del catálogo de
+//   Recepción (uso kamisuite o ambos, mismo criterio que crearPackReserva)
+//   y tiene profesional asignado. Si no, el servicio se comporta como hoy.
+//     (A) adaptarServicio emite `enlazado` { setupUid, name, price,
+//         duration, promoPct, smartPricing, idStaff } o null, para que el
+//         widget enseñe el precio cerrado (la suma) y la fila «A la vez».
+//     (B) getHuecosDisponibles, con `principalSetupUid` (widget público y
+//         getOfertasDias): una hora solo vale si ADEMÁS algún profesional
+//         del enlazado (que no sea el elegido para el principal) está libre
+//         desde esa misma hora durante lo que dura el enlazado, dentro de
+//         su horario y del margen del salón. Duración del enlazado medida
+//         con el motor de packs (modo solo-cálculo). El Área de Cliente no
+//         envía `principalSetupUid` y no cambia.
+//     (C) crearReservaPublica resuelve el profesional del enlazado con
+//         resolverStaffLibre (libre, con horario y margen, sin el del
+//         principal ni el de los complementos). Si no hay nadie, rechaza.
+//         La oferta del enlazado: solo si la hora tiene oferta para el
+//         principal, la que dé smartPricingLogic para el enlazado (respeta
+//         su interruptor y su promo). crearPackReserva v1.0.62 crea las dos
+//         citas o ninguna.
+//     (D) Un solo aviso: «servicios» con los dos nombres, «profesional» con
+//         «… · <enlazado> con <profesional>», hora final del que acaba más
+//         tarde e importe de las dos con sus descuentos automáticos.
+//   Requiere recepcionProLogic v1.0.62.
 //
 // v0.13.2 — SMART PRICING: LLAMADAS A smartPricingLogic SOLO CON AWAIT
 //   (22-oct-2026). El diagnóstico de la 0.13.1 dio la causa: en Hair-Times
@@ -1105,7 +1136,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.13.2';
+const VERSION = '0.14.0';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -1133,9 +1164,14 @@ const USOS_PUBLICOS     = ['publico', 'ambos'];
 // USOS_VALIDOS de recepcionProLogic: lo que puede reservar el salón, que
 // no coincide con lo que se ofrece al público. Solo lo usa
 // getComposicionServicio; ninguna función anterior lo mira.
+// v0.14.0 — También decide si un servicio enlazado es válido (tiene que
+// estar en el catálogo con el que crearPackReserva crea la cita).
 const USOS_INTERNOS     = ['kamisuite', 'ambos'];
 const TIPOS_PRINCIPALES = ['principal', 'ambos'];
 const NOTA_RECURSO_INTERNO = 'RECURSO INTERNO';
+
+// v0.14.0 — SERVICIO ENLAZADO: setupUid del servicio que empieza a la vez.
+const F_CAT_ENLAZADO = 'servicioEnlazado';
 
 // =====================================================
 // HELPERS
@@ -1510,6 +1546,56 @@ function calcularDurPrincipalCascada(it, porSetupUid) {
 //   - requiresExtraPro: false por ahora (no lo modela el catálogo).
 //     El widget puede ocultar el bloque sin problema (deuda v1.0).
 
+// v0.14.0 — idStaff de una fila del catálogo. Lectura defensiva idéntica a
+// la de adaptarServicio (Object {ids}, array legacy o string JSON legacy).
+function idsStaffDe(row) {
+  let arr = [];
+  const raw = row ? row.idStaff : null;
+  if (raw) {
+    if (Array.isArray(raw.ids)) arr = raw.ids;
+    else if (Array.isArray(raw)) arr = raw;
+    else if (typeof raw === 'string') {
+      try {
+        const p = JSON.parse(raw);
+        if (Array.isArray(p?.ids)) arr = p.ids;
+        else if (Array.isArray(p)) arr = p;
+      } catch (_) {}
+    }
+  }
+  return arr.filter(x => typeof x === 'string' && x.length > 0);
+}
+
+// v0.14.0 — ¿Es válido el enlazado `e`? Mismo criterio que el catálogo de
+// crearPackReserva (active === true y uso kamisuite/ambos, literal) y con
+// al menos un profesional asignado.
+function enlazadoValido(e) {
+  return !!e && e.active === true && USOS_INTERNOS.includes(e.uso) && idsStaffDe(e).length > 0;
+}
+
+// v0.14.0 — Datos PÚBLICOS del servicio enlazado para el widget: lo justo
+// para el precio cerrado y la fila «A la vez». null si no hay enlace válido.
+// Promo con la misma regla dura que `promoPct` de adaptarServicio.
+function enlazadoPublico(it, porSetupUidFases) {
+  const uid = String(it?.[F_CAT_ENLAZADO] || '').trim();
+  if (!uid || uid === it.setupUid || !porSetupUidFases) return null;
+  const e = porSetupUidFases[uid];
+  if (!enlazadoValido(e)) return null;
+  return {
+    setupUid: uid,
+    name: e.label || '',
+    price: toNum(e.price) > 0 ? toNum(e.price) : 0,
+    duration: calcularBaseDurationCascada(e, porSetupUidFases),
+    promoPct: (e.descuentoActivo === true
+               && typeof e.descuentoPromo === 'number'
+               && Number.isFinite(e.descuentoPromo)
+               && e.descuentoPromo > 0)
+      ? Math.min(100, Math.max(0, e.descuentoPromo))
+      : 0,
+    smartPricing: e.smartPricing === true,
+    idStaff: idsStaffDe(e)
+  };
+}
+
 function adaptarServicio(it, porSetupUid, porSetupUidFases) {
   // v0.7.4 — OBLIGATORIEDAD por FASE explícita. Cada fase tipo:'servicio'
   // del mapeoFases admite el flag `obligatorio` (Boolean, default false).
@@ -1721,6 +1807,8 @@ function adaptarServicio(it, porSetupUid, porSetupUidFases) {
     // bundle. [] si el servicio no tiene ninguna.
     reglas,
     claseServicio: it.claseServicio || '',
+    // v0.14.0 — servicio que empieza a la vez (null si no hay enlace válido).
+    enlazado: enlazadoPublico(it, porSetupUidFases),
     idStaff: idStaffArr,   // v0.6.0 — wixResourceIds permitidos. [] = todos.
     // v0.9.6 — ¿Este servicio se vende también en bono? Dato PÚBLICO y
     // GENÉRICO: no dice nada de quién reserva ni de si tiene bono. Sirve solo
@@ -2138,6 +2226,55 @@ async function ofertasDeHuecos({ fecha, huecos, principalSetupUid }) {
 
 // v0.13.0 — Importe con descuento para la confirmación: entero sin
 // decimales ("16€"), con decimales en formato español ("14,40€").
+// v0.14.0 — SERVICIO ENLAZADO de un principal, para el motor de huecos y la
+// reserva. Devuelve null si el principal no tiene enlace válido, o
+// { setupUid, label, idStaff, durMin }. Caché de 60 s por principal: la
+// tira de días lanza hasta 10 consultas de huecos en paralelo. Los errores
+// de consulta NO se tapan: los recoge el try/catch del llamante.
+// `durMin` se mide con el motor de packs (modo solo-cálculo), sin hora
+// concreta: la duración no depende de la hora. Si no se puede medir, cae a
+// la duración base de la cascada.
+const TTL_ENLACE_MS = 60000;
+const _cacheEnlace = new Map();
+async function leerEnlaceServicio(principalSetupUid) {
+  if (!principalSetupUid) return null;
+  const c = _cacheEnlace.get(principalSetupUid);
+  if (c && (Date.now() - c.at) < TTL_ENLACE_MS) return c.enlace;
+
+  let enlace = null;
+  const rP = await wixData.query(CMS_CATALOGO)
+    .eq('setupUid', principalSetupUid)
+    .limit(1)
+    .find({ suppressAuth: true });
+  const pr = rP.items?.[0];
+  const uidEnl = String(pr?.[F_CAT_ENLAZADO] || '').trim();
+  if (pr && uidEnl && uidEnl !== principalSetupUid) {
+    const rE = await wixData.query(CMS_CATALOGO)
+      .eq('setupUid', uidEnl)
+      .limit(1)
+      .find({ suppressAuth: true });
+    const e = rE.items?.[0];
+    if (!enlazadoValido(e)) {
+      console.warn(`${TAG} ⚠️ "${pr.label}" tiene servicio enlazado ${uidEnl} no válido (inactivo, fuera del catálogo de Recepción o sin profesional asignado) → se ignora el enlace.`);
+    } else {
+      let durMin = await medirDuracionRealPack({
+        fecha: ahoraMadrid().ymd,
+        principalSetupUid: uidEnl,
+        complementosSetupUid: [],
+        varianteSel: null
+      });
+      if (!(durMin > 0)) durMin = toNum(e.duration) || 0;
+      if (durMin > 0) {
+        enlace = { setupUid: uidEnl, label: e.label || '', idStaff: idsStaffDe(e), durMin };
+      } else {
+        console.warn(`${TAG} ⚠️ Servicio enlazado "${e.label}" sin duración medible → se ignora el enlace.`);
+      }
+    }
+  }
+  _cacheEnlace.set(principalSetupUid, { at: Date.now(), enlace });
+  return enlace;
+}
+
 function fmtEurosAviso(n) {
   const v = Math.round((Number(n) || 0) * 100) / 100;
   return Number.isInteger(v) ? `${v}€` : `${v.toFixed(2).replace('.', ',')}€`;
@@ -2591,6 +2728,28 @@ export const getHuecosDisponibles = webMethod(
         }
       }
 
+      // 4-bis) v0.14.0 — SERVICIO ENLAZADO. Profesionales del enlazado que
+      // trabajan ese día. Si no trabaja ninguno, no hay ninguna hora válida.
+      let enl = null;
+      if (principalSetupUid) {
+        const infoEnl = await leerEnlaceServicio(principalSetupUid);
+        if (infoEnl) {
+          const idsEnl = new Set(infoEnl.idStaff.map(String));
+          const dispEnl = activos
+            .filter(s => idsEnl.has(String(s.wixResourceId || s._id)))
+            .map(s => ({ staff: s, horario: leerHorarioStaffEnDia(s, dow) }))
+            .filter(h => h.horario);
+          if (!dispEnl.length) {
+            console.log(`${TAG} 🚫 ${fecha} dow=${dow}: ningún profesional de "${infoEnl.label}" (servicio enlazado) trabaja ese día`);
+            return {
+              ok: true, version: VERSION, fecha, proId, durationMin: dur,
+              huecos: [], motivo: 'cerrado', abreA: null
+            };
+          }
+          enl = { ...infoEnl, disp: dispEnl };
+        }
+      }
+
       // 5) Generar slots y filtrar
       // Un slot [m, m+dur) está libre para proId 'any' si AL MENOS UN staff
       // candidato lo tiene dentro de su horario y NO tiene ocupación cruzada.
@@ -2644,6 +2803,25 @@ export const getHuecosDisponibles = webMethod(
           if (solapeExtra) continue;
         }
 
+        // ── TRAMO C · v0.14.0 servicio enlazado, A LA VEZ ──
+        // Desde la misma hora `m`, durante lo que dura el enlazado, con un
+        // profesional distinto del elegido para el principal.
+        if (enl) {
+          const finEnl = m + enl.durMin;
+          let libreEnl = false;
+          for (const { staff, horario } of enl.disp) {
+            const sidE = staff.wixResourceId || staff._id;
+            if (proId && proId !== 'any' && sidE === proId) continue;
+            if (m < horario.from || finEnl > horario.to + graceMin) continue;
+            const solapeE = ocupados.some(o =>
+              o.staffId && o.staffId === sidE &&
+              m < o.endMin && finEnl > o.startMin
+            );
+            if (!solapeE) { libreEnl = true; break; }
+          }
+          if (!libreEnl) continue;
+        }
+
         huecos.push(fmtHHMM(m));
       }
 
@@ -2654,7 +2832,7 @@ export const getHuecosDisponibles = webMethod(
       const bufferLog = (minAdmisible > 0)
         ? ` | ⏱️ hoy: desde ${fmtHHMM(minAdmisible)} (antelación ${bufferMin}min)`
         : '';
-      console.log(`${TAG} ✅ huecos ${fecha} dow=${dow} proId=${proId || 'any'} dur=${dur}min: ${huecos.length} slots (abre ${fmtHHMM(minFrom)}, cierra ${fmtHHMM(maxTo)}, grace ${graceMin}min)${bufferLog}${modoLog}. ${elapsed}s`);
+      console.log(`${TAG} ✅ huecos ${fecha} dow=${dow} proId=${proId || 'any'} dur=${dur}min: ${huecos.length} slots (abre ${fmtHHMM(minFrom)}, cierra ${fmtHHMM(maxTo)}, grace ${graceMin}min)${bufferLog}${modoLog}${enl ? ` | 🔗 a la vez: ${enl.label} ${enl.durMin}min` : ''}. ${elapsed}s`);
 
       // v0.13.0 — SMART PRICING. Solo con `principalSetupUid` (widget
       // público). El Área de Cliente no lo envía y recibe lo de siempre.
@@ -3289,6 +3467,75 @@ export const crearReservaPublica = webMethod(
         }
       }
 
+      // ─────────────────────────────────────────────────────────────
+      // v0.14.0 — SERVICIO ENLAZADO: profesional y oferta
+      // ─────────────────────────────────────────────────────────────
+      // Mismo criterio que la hora ofrecida (tramo C del motor): libre
+      // desde la misma hora durante lo que dura, dentro de su horario y del
+      // margen, y distinto del principal y del de los complementos. Si no
+      // hay nadie, se rechaza: la clienta reservó las dos cosas a la vez.
+      let staffIdEnlFinal = '';
+      let ofertaEnlazada = null;
+      let enlInfo = null;
+      try {
+        enlInfo = await leerEnlaceServicio(principalSetupUid);
+      } catch (eEnl) {
+        console.warn(`${TAG} ⛔ No se pudo leer el servicio enlazado de ${principalSetupUid}: ${eEnl.message} → reserva rechazada`);
+        return {
+          ok: false,
+          version: VERSION,
+          error: { message: 'No hemos podido comprobar la disponibilidad de la cita. Inténtalo de nuevo en unos segundos.' }
+        };
+      }
+      if (enlInfo) {
+        const durEnl = await medirDuracionRealPack({
+          fecha, horaHHmm,
+          principalSetupUid: enlInfo.setupUid,
+          complementosSetupUid: [],
+          varianteSel: null
+        });
+        if (durEnl == null) {
+          console.warn(`${TAG} ⛔ No se pudo medir la duración del enlazado ${enlInfo.setupUid} → reserva rechazada`);
+          return {
+            ok: false,
+            version: VERSION,
+            error: { message: 'No hemos podido comprobar la duración de la cita. Inténtalo de nuevo en unos segundos.' }
+          };
+        }
+        const idsEnl = enlInfo.idStaff
+          .map(String)
+          .filter(id => id !== String(staffIdFinal) && id !== String(staffIdExtraFinal || ''));
+        const elegidoEnl = idsEnl.length
+          ? await resolverStaffLibre({ fecha, horaHHmm, durationMin: durEnl, idStaffPermitidos: idsEnl, graceMin })
+          : null;
+        if (!elegidoEnl) {
+          console.warn(`${TAG} ⛔ Enlazado "${enlInfo.label}" sin profesional libre a ${fecha} ${horaHHmm} (${durEnl}min) → reserva rechazada`);
+          return {
+            ok: false,
+            version: VERSION,
+            error: { message: `No hay ningún profesional disponible para ${enlInfo.label} a esa hora. Prueba con otro horario.` }
+          };
+        }
+        staffIdEnlFinal = elegidoEnl.staffId;
+
+        // Oferta del enlazado: solo si la hora lleva oferta para el
+        // principal (es la que la clienta vio). La decide smartPricingLogic
+        // para el enlazado, con su interruptor y su promo. En fresco.
+        if (ofertaReserva) {
+          try {
+            const sp = await import('backend/smartPricingLogic.web');
+            const r = await sp.ofertasDeHoras({ fecha, horas: [horaHHmm], setupUid: enlInfo.setupUid, fresco: true });
+            const o = (r && r.activo) ? (r.ofertas || {})[horaHHmm] : null;
+            if (o && Number(o.pct) > 0 && Number(o.ahorro) > 0) {
+              ofertaEnlazada = { pct: Number(o.pct), ahorro: Number(o.ahorro), versionId: r.versionId || '' };
+            }
+          } catch (spEnlErr) {
+            console.warn(`${TAG} ⚠️ Oferta del enlazado no concluyente (se crea sin oferta): ${spEnlErr.message}`);
+          }
+        }
+        console.log(`${TAG} 🔗 Enlazado "${enlInfo.label}" con ${elegidoEnl.staffName || staffIdEnlFinal} (${durEnl}min)${ofertaEnlazada ? ` · oferta −${ofertaEnlazada.pct}%` : ''}`);
+      }
+
       // Delegar en crearPackReserva del backend de Recepción Pro.
       // Import dinámico para no acoplar el módulo en tiempo de carga.
       const { crearPackReserva } = await import('backend/recepcionProLogic.web');
@@ -3315,12 +3562,16 @@ export const crearReservaPublica = webMethod(
         varianteSel: varianteSel || null,
         // v0.13.0 — Oferta confirmada por el servidor (null si no hay).
         // crearPackReserva v1.0.61 la escribe en la misma inserción.
-        oferta: ofertaReserva
+        oferta: ofertaReserva,
+        // v0.14.0 — Servicio enlazado ('' / null si no hay).
+        // crearPackReserva v1.0.62 crea las dos citas o ninguna.
+        staffIdEnlazado: staffIdEnlFinal,
+        ofertaEnlazada
       });
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
       if (resultado?.ok) {
-        console.log(`${TAG} ✅ crearReservaPublica: reservaId=${resultado.reservaId} | ${fecha} ${horaHHmm} +${toNum(resultado.duracionTotal) || durEfectiva}min real (validado con ${durEfectiva}min, payload ${toNum(durationMin)}min) | staff=${staffNameFinal || staffIdFinal}${staffIdExtraFinal ? ` +extra=${staffNameExtraFinal || staffIdExtraFinal}` : ''} | ${resultado.precioTotal}€ | ${elapsed}s`);
+        console.log(`${TAG} ✅ crearReservaPublica: reservaId=${resultado.reservaId} | ${fecha} ${horaHHmm} +${toNum(resultado.duracionTotal) || durEfectiva}min real (validado con ${durEfectiva}min, payload ${toNum(durationMin)}min) | staff=${staffNameFinal || staffIdFinal}${staffIdExtraFinal ? ` +extra=${staffNameExtraFinal || staffIdExtraFinal}` : ''}${resultado.enlazada ? ` | 🔗 ${resultado.enlazada.label} con ${resultado.enlazada.staffName} (${resultado.enlazada.reservaId})` : ''} | ${resultado.precioTotal}€ | ${elapsed}s`);
 
         // ─────────────────────────────────────────────────────────────
         // v0.9.0 — REPARTO ENTRE DOS PROFESIONALES (fases del tramo B)
@@ -3493,12 +3744,23 @@ export const crearReservaPublica = webMethod(
           // entre la oferta grabada y la promo de catálogo, con la misma
           // regla que cobra Recepción PRO. Sin descuento, nada cambia.
           // No-blocking: si falla, la confirmación sale como antes.
+          // v0.14.0 — SERVICIO ENLAZADO: los dos en el mismo aviso, con el
+          // formato del segundo profesional («… · Spa masaje con EMY»).
+          const enlRes = resultado?.enlazada || null;
+          if (enlRes) {
+            serviciosStr = `${serviciosStr} + ${unaLinea(enlRes.label)}`;
+            estilistaStr = `${estilistaStr} · ${unaLinea(enlRes.label)} con ${enlRes.staffName || ''}`;
+          }
+
           let descAuto = { tipo: '', importe: 0, pct: 0 };
+          let descEnl = { tipo: '', importe: 0, pct: 0 };   // v0.14.0
           try {
             const sp = await import('backend/smartPricingLogic.web');
             const fasesD = Array.isArray(resultado?.fases) ? resultado.fases : [];
+            // v0.14.0 — fases del enlazado (para su promo de catálogo)
+            const fasesE = (enlRes && Array.isArray(enlRes.fases)) ? enlRes.fases : [];
             const promoIdx = await sp.cargarIndicePromos(
-              fasesD.filter(f => f && f.tipo === 'servicio').map(f => f.setupUid)
+              fasesD.concat(fasesE).filter(f => f && f.tipo === 'servicio').map(f => f.setupUid)
             );
             descAuto = await sp.descuentoAutomaticoReserva({   // v0.13.2 — await
               fases: fasesD,
@@ -3506,11 +3768,22 @@ export const crearReservaPublica = webMethod(
               ofertaAhorro: ofertaReserva ? ofertaReserva.ahorro : 0,
               promoIdx
             });
-            const aviso = descAuto.importe > 0 ? await sp.textoAvisoDescuento(descAuto.tipo, descAuto.pct) : '';   // v0.13.2 — await
+            if (enlRes) {
+              descEnl = await sp.descuentoAutomaticoReserva({
+                fases: fasesE,
+                ofertaPct: ofertaEnlazada ? ofertaEnlazada.pct : 0,
+                ofertaAhorro: ofertaEnlazada ? ofertaEnlazada.ahorro : 0,
+                promoIdx
+              });
+            }
+            // El aviso es uno: el del principal y, si no tiene, el del enlazado.
+            const dAviso = descAuto.importe > 0 ? descAuto : descEnl;
+            const aviso = dAviso.importe > 0 ? await sp.textoAvisoDescuento(dAviso.tipo, dAviso.pct) : '';   // v0.13.2 — await
             if (aviso) serviciosStr = `${serviciosStr} · ${aviso}`;
           } catch (dErr) {
             console.warn(`${TAG} ⚠️ Descuento en la confirmación (no-blocking): ${dErr.message}`);
             descAuto = { tipo: '', importe: 0, pct: 0 };
+            descEnl = { tipo: '', importe: 0, pct: 0 };
           }
 
           serviciosStr = unaLinea(serviciosStr);
@@ -3522,7 +3795,11 @@ export const crearReservaPublica = webMethod(
 
           // 4) Hora final = horaInicio + duracionTotal.
           const [hh, mi] = String(horaHHmm).split(':').map(Number);
-          const totalMin = Number(resultado?.duracionTotal) || 0;
+          // v0.14.0 — Con servicio enlazado, la del que acaba más tarde.
+          const totalMin = Math.max(
+            Number(resultado?.duracionTotal) || 0,
+            enlRes ? (Number(enlRes.duracionTotal) || 0) : 0
+          );
           const endMin = hh * 60 + mi + totalMin;
           const eh = Math.floor(endMin / 60);
           const em = endMin % 60;
@@ -3530,9 +3807,12 @@ export const crearReservaPublica = webMethod(
 
           // v0.13.0 — Con descuento automático, el importe es el NETO que se
           // pagará en el salón. Sin descuento, exactamente como antes.
-          const importeStr = descAuto.importe > 0
-            ? fmtEurosAviso(Math.max(0, toNum(resultado?.precioTotal) - descAuto.importe))
-            : `${resultado?.precioTotal || 0}€`;
+          // v0.14.0 — Con servicio enlazado, las dos citas con sus descuentos.
+          const precioAviso = toNum(resultado?.precioTotal) + (enlRes ? toNum(enlRes.precioTotal) : 0);
+          const descAviso = descAuto.importe + (enlRes ? descEnl.importe : 0);
+          const importeStr = descAviso > 0
+            ? fmtEurosAviso(Math.max(0, precioAviso - descAviso))
+            : (enlRes ? fmtEurosAviso(precioAviso) : `${resultado?.precioTotal || 0}€`);
           // Origen 'Reserva Online' como en V1 — distingue del de Recepción Pro.
           const origenStr = 'Reserva Online';
           // Las reservas web no pagan online aún (futuro: integración pasarela).
