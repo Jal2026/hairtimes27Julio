@@ -1,6 +1,26 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.116  ·  Cita enlazada: marca en la agenda y en la cita
+ *
+ *   Pareja backend: recepcionProLogic v1.0.62. Un servicio con servicio
+ *   enlazado crea dos citas a la misma hora, cada una en la columna de su
+ *   profesional y con su cobro. getReservasPorFecha manda `grupoEnlazado`.
+ *   La pareja se busca en las citas del día ya cargadas (empiezan a la vez,
+ *   así que siempre son del mismo día). Ninguna lógica de cobro cambia.
+ *
+ *   (A) AGENDA. Cada bloque de una cita enlazada lleva 🔗 junto a la hora,
+ *       y el primero, si cabe, la etiqueta «🔗 <profesional de la otra>»
+ *       con el mismo estilo que «⛓ cascada». El tooltip dice con qué va.
+ *   (B) MODAL DE LA CITA. Bajo la hora, recuadro «🔗 A la vez: <servicio>
+ *       · <profesional> · hora · estado». Tocarlo abre la otra cita.
+ *   (C) CANCELAR. El aviso dice que se cancelan las dos (o que la otra ya
+ *       está cobrada y no se toca). El backend cancela las dos.
+ *   (D) Avisos al crear, cancelar, cambiar fecha o mover una fase dicen
+ *       cuándo la otra cita también ha cambiado.
+ *   Una clase CSS nueva (.ks-appt-link, tamaño del icono). Nada más de
+ *   estética cambia.
+ *
  * VERSION: 1.1.115  ·  Smart pricing: la oferta se cobra con precio cerrado
  *
  *   Diseño aprobado por Jal el 21-oct-2026 (smart pricing, fase 1).
@@ -2096,7 +2116,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.115]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.116]';
 
   // ─── helpers ───
   function esc(s) {
@@ -2658,6 +2678,7 @@ button { font-family: inherit; cursor: pointer; }
 .ks-appt-inner { position: relative; z-index: 2; display: flex; flex-direction: column; gap: 1px; padding: 4px 8px; color: #fff; height: 100%; }
 .ks-appt-topline { display: flex; align-items: baseline; gap: 5px; min-width: 0; padding-right: 18px; }
 /* v1.1.55 — bajada de tosquedad: hora 700→500, cliente 700→600. */
+.ks-appt-link { font-size: 9.5px; line-height: 1; flex: none; }   /* v1.1.116 — cita enlazada */
 .ks-appt-time { font-size: 9.5px; font-weight: 500; opacity: .82; font-variant-numeric: tabular-nums; flex: none; }
 .ks-appt-client { font-size: 11px; font-weight: 600; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ks-appt-svc { font-size: 10px; font-weight: 500; opacity: .92; line-height: 1.2; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
@@ -3682,7 +3703,9 @@ button { font-family: inherit; cursor: pointer; }
               }
               break;
             }
-            this._toast(`Reserva creada · ${p.precioTotal}€`);
+            this._toast(p.enlazada
+              ? `Reserva creada · ${p.precioTotal}€ · 🔗 ${p.enlazada.label} con ${p.enlazada.staffName} a la vez`
+              : `Reserva creada · ${p.precioTotal}€`);   // v1.1.116
             this._desarmar();
             this._sendToPage('getReservas', { fecha: this._fecha });
           } else this._toast('Error: ' + (p.error?.message || 'no se pudo crear'));
@@ -3791,7 +3814,7 @@ button { font-family: inherit; cursor: pointer; }
           }
           break;
         case 'reservaCancelada':
-          if (p.ok) { this._toast('Cita cancelada'); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
+          if (p.ok) { this._toast(p.enlazadasCanceladas > 0 ? 'Cita cancelada · también la enlazada 🔗' : 'Cita cancelada'); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error al cancelar');
           break;
         // v1.1.40 — bloqueos persistentes
@@ -3829,7 +3852,7 @@ button { font-family: inherit; cursor: pointer; }
           break;
         // v1.1.16 — respuestas "antes de cobrar"
         case 'reserva-reprogramada':
-          if (p.ok) { this._toast('Cita reprogramada'); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
+          if (p.ok) { this._toast(p.enlazadasMovidas > 0 ? 'Cita reprogramada · la enlazada 🔗 también' : 'Cita reprogramada'); this._closeSubModal(); this._closeModal(); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo reprogramar'));
           break;
         case 'fase-movida':
@@ -3844,7 +3867,7 @@ button { font-family: inherit; cursor: pointer; }
             break;
           }
           // v1.1.29 — drag&drop por fase
-          if (p.ok) { this._toast('Fase movida ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
+          if (p.ok) { this._toast(p.enlazadasMovidas > 0 ? 'Fase movida ✓ · la cita enlazada 🔗 se ha movido igual' : 'Fase movida ✓'); this._sendToPage('getReservas', { fecha: this._fecha }); }
           else this._toast('Error: ' + (p.error || 'no se pudo mover la fase'));
           break;
         case 'fase-extendida':
@@ -6164,6 +6187,19 @@ button { font-family: inherit; cursor: pointer; }
     }
 
     // Helper: ISO → minutos desde medianoche en Madrid.
+    // v1.1.116 — CITA ENLAZADA: la otra cita del grupo entre las del día
+    // cargado (no cancelada), o null.
+    _hermanaEnlazada(r) {
+      const g = r && r.grupoEnlazado;
+      if (!g) return null;
+      return (this._reservas || []).find(x => x && x._id !== r._id && x.grupoEnlazado === g && x.status !== 'CANCELADA') || null;
+    }
+    // v1.1.116 — Servicio principal de una cita (primera línea del detalle).
+    _labelPrincipalReserva(r) {
+      const l = String((String(r?.serviciosDetail || '').split(';;')[0] || '').split('|')[0] || '').trim();
+      return l || String(r?.title || '').split(' — ')[0] || 'Servicio';
+    }
+
     _isoToMadridMin(iso) {
       if (!iso) return null;
       try {
@@ -6361,12 +6397,17 @@ button { font-family: inherit; cursor: pointer; }
       const titleMode = this._settings?.titleMode || 'cliente';
       const labelFase = opts.label || 'Servicio';
       const cliente = r.clientName || '';
+      // v1.1.116 — CITA ENLAZADA: 🔗 junto a la hora en todos sus bloques y,
+      // en el primero, el profesional de la otra cita (estilo «⛓ cascada»).
+      const herm = this._hermanaEnlazada(r);
+      const enlIcon = herm ? '<span class="ks-appt-link">🔗</span>' : '';
+      const enlFlag = (herm && opts.esFasePrincipal) ? ` <span class="ks-cascade-flag">🔗 ${esc(herm.staffName || '')}</span>` : '';
       const lineaArriba = titleMode === 'servicio'
-        ? `<span class="ks-appt-time">${hhmm}</span><span class="ks-appt-client">${esc(labelFase)}${opts.cascada && opts.esFasePrincipal ? ' <span class="ks-cascade-flag">⛓ cascada</span>' : ''}</span>`
-        : `<span class="ks-appt-time">${hhmm}</span><span class="ks-appt-client">${esc(cliente)}</span>`;
+        ? `<span class="ks-appt-time">${hhmm}</span>${enlIcon}<span class="ks-appt-client">${esc(labelFase)}${opts.cascada && opts.esFasePrincipal ? ' <span class="ks-cascade-flag">⛓ cascada</span>' : ''}${enlFlag}</span>`
+        : `<span class="ks-appt-time">${hhmm}</span>${enlIcon}<span class="ks-appt-client">${esc(cliente)}</span>`;
       const lineaAbajo = titleMode === 'servicio'
         ? `<span class="ks-appt-svc">${esc(cliente)}</span>`
-        : `<span class="ks-appt-svc">${esc(labelFase)}${opts.cascada && opts.esFasePrincipal ? '<span class="ks-cascade-flag">⛓ cascada</span>' : ''}</span>`;
+        : `<span class="ks-appt-svc">${esc(labelFase)}${opts.cascada && opts.esFasePrincipal ? '<span class="ks-cascade-flag">⛓ cascada</span>' : ''}${enlFlag}</span>`;
       // v1.1.67 — rango extendido con el minuto de las fases plegadas (tiny),
       // y línea de leyenda plegada (marcadores de 1 min, p.ej. tamaño de pelo).
       const rangoEndTxt = (opts.rangoEndMin != null) ? minToHHMM(opts.rangoEndMin) : endHHMM;
@@ -6394,7 +6435,7 @@ button { font-family: inherit; cursor: pointer; }
       // disponibilidad y no un mensaje de nadie.
       const notaCliente = String(r.notes || '').trim();
       const tieneNota = !!notaCliente && !notaCliente.includes('RECURSO INTERNO');
-      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}${tieneNota ? ' has-nota' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" title="${esc(labelFase)} · ${hhmm}–${endHHMM}${cliente ? ' · ' + esc(cliente) : ''}${tieneNota ? ' · ✉ Mensaje del cliente (ver Ficha técnica)' : ''}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
+      return `<button class="ks-appt ${paid ? 'is-paid' : 'is-pending'}${esMedida ? ' is-medida' : ''}${tieneNota ? ' has-nota' : ''}" data-id="${esc(r._id)}" data-fase-idx="${opts.faseIndex}" data-fase-dur="${dur}" data-fase-start="${esc(opts.startISO)}" data-draggable="${draggable}" title="${esc(labelFase)} · ${hhmm}–${endHHMM}${cliente ? ' · ' + esc(cliente) : ''}${tieneNota ? ' · ✉ Mensaje del cliente (ver Ficha técnica)' : ''}${herm ? ' · 🔗 A la vez con ' + esc(this._labelPrincipalReserva(herm)) + ' (' + esc(herm.staffName || '') + ')' : ''}" style="top:${top}px;height:${height}px;${lanePos}--staff:${staff.color};--fam:${fam}">
         <span class="ks-appt-statusdot">${paid ? '✓' : '€'}</span>
         ${draggable ? `<span class="ks-appt-timeadj" title="Ajustar hora de inicio">🕑</span>` : ''}
         <span class="ks-appt-inner">
@@ -6902,6 +6943,17 @@ button { font-family: inherit; cursor: pointer; }
       const mostrarTachado = tienePromo || discEur > 0 || ahorroCanje > 0;
       const staffName = r.staffName || 'Sin asignar';
 
+      // v1.1.116 — CITA ENLAZADA: recuadro con la otra cita. Tocarlo la abre.
+      const hermM = this._hermanaEnlazada(r);
+      let enlBox = '';
+      if (hermM) {
+        const dH = hermM.fechaReserva ? new Date(hermM.fechaReserva) : null;
+        const hhH = dH ? dH.toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+        const endHH = dH ? minToHHMM(hhmmToMin(hhH) + (Number(hermM.duracionTotal) || 0)) : '';
+        const pagH = hermM.status === 'PAGADO';
+        enlBox = `<button type="button" id="mEnl" style="display:block;width:100%;text-align:left;margin-top:8px;padding:8px 10px;border:1px solid var(--ks-line);border-radius:10px;background:var(--ks-paper2);color:var(--ks-ink);font:inherit;font-size:12px;cursor:pointer;">🔗 A la vez: <b>${esc(this._labelPrincipalReserva(hermM))}</b> · ${esc(hermM.staffName || 'Sin asignar')} · ${hhH}${endHH ? '–' + endHH : ''} · ${pagH ? 'Cobrada' : 'Pendiente'}<span style="display:block;margin-top:2px;font-size:11px;color:var(--ks-ink2);">Se cancela y se cambia de hora junto con esta cita. Se cobra por separado. Toca para abrirla.</span></button>`;
+      }
+
       const scrim = document.createElement('div'); scrim.className = 'ks-modal-scrim'; scrim.id = 'modalScrim';
       scrim.addEventListener('click', e => { if (e.target === scrim) this._closeModal(); });
       const modal = document.createElement('div'); modal.className = 'ks-modal';
@@ -6964,6 +7016,7 @@ button { font-family: inherit; cursor: pointer; }
         <div class="ks-modal-head"><span class="ks-modal-staff">${esc(staffName.toUpperCase())}</span><span class="ks-modal-status ${paid ? 'paid' : 'pending'}">${paid ? 'Cobrada' : 'Pendiente'}</span>${origenBadge}<button class="ks-modal-x" id="mX">✕</button></div>
         <div class="ks-modal-client">${esc(r.clientName || '')}${provBadge}</div>
         <div class="ks-modal-meta">${hhmm}${endH ? '–' + endH : ''}</div>
+        ${enlBox}
         ${contactRow}
         ${modalWarn}
         <div class="ks-modal-items">${itemsHTML}${productosHTML}</div>
@@ -7010,6 +7063,11 @@ button { font-family: inherit; cursor: pointer; }
       modal.querySelector('#mClose').addEventListener('click', () => this._closeModal());
       // v1.1.97 — FICHA DEL CLIENTE. Disponible también con la cita pagada:
       // la fórmula se anota al terminar el servicio, no antes de cobrar.
+      // v1.1.116 — abrir la cita enlazada
+      modal.querySelector('#mEnl')?.addEventListener('click', () => {
+        const h = this._hermanaEnlazada(r);
+        if (h) this._openModal(h);
+      });
       modal.querySelector('#mFichaCli')?.addEventListener('click', () => this._openFichaTecnica(r));
       if (!paid && this._puede('editarCita')) {
         this._renderDiscBox();
@@ -7028,7 +7086,14 @@ button { font-family: inherit; cursor: pointer; }
           if (m === 'Mixto') this._openMixto(totalN); else this._pagar(m, '');
         }));
         modal.querySelector('#mCancelRes')?.addEventListener('click', () => {
-          if (confirm('¿Cancelar esta cita? Se borrarán sus huecos del calendario.')) this._sendToPage('cancelarReserva', { reservaId: r._id });
+          // v1.1.116 — con cita enlazada, el aviso dice qué pasa con la otra.
+          const hC = this._hermanaEnlazada(r);
+          const txtC = !hC
+            ? '¿Cancelar esta cita? Se borrarán sus huecos del calendario.'
+            : (hC.status === 'PAGADO'
+                ? `¿Cancelar esta cita? Se borrarán sus huecos del calendario.\n\nVa a la vez que ${this._labelPrincipalReserva(hC)} con ${hC.staffName || 'otra profesional'}, que ya está cobrada y no se toca.`
+                : `¿Cancelar esta cita? Va a la vez que ${this._labelPrincipalReserva(hC)} con ${hC.staffName || 'otra profesional'}: se cancelarán LAS DOS y se borrarán sus huecos del calendario.`);
+          if (confirm(txtC)) this._sendToPage('cancelarReserva', { reservaId: r._id });
         });
         // v1.1.90 — Aplicar gramos de una línea con tarifa por peso.
         // Se envían GRAMOS, nunca euros: el importe lo calcula el backend
