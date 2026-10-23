@@ -1,8 +1,15 @@
 // =====================================================
 // KAMISUITE — Page Code: /reservar/{slug}
 // =====================================================
-// VERSION: 0.4.2
-// FECHA: 21 de octubre de 2026
+// VERSION: 0.4.3
+// FECHA: 23 de octubre de 2026
+//
+// v0.4.3:
+//   + SERVICIO ENLAZADO. 'reservar' devuelve además `enlazada`
+//     { reservaId, staffName, label, precioTotal, duracionTotal } cuando
+//     crearReservaPublica v0.14.0 crea también la cita enlazada (null si
+//     no hay). El widget (bundle v2.2.0) la usa en la pantalla de reserva
+//     confirmada. Nada más cambia.
 //
 // v0.4.2:
 //   + SMART PRICING (fase 1). Puente de las ofertas por dia y hora entre
@@ -153,7 +160,7 @@ import {
   getOfertasDias          // v0.4.2 — smart pricing
 } from 'backend/widgetPublicoLogic.web';
 
-const TAG = '[ReservarPage][v0.4.2]';
+const TAG = '[ReservarPage][v0.4.3]';
 
 // v0.3.6 — Tamanos de las variantes redimensionadas de la imagen de servicio.
 // Se corresponden con lo que el bundle pinta realmente:
@@ -476,6 +483,14 @@ function montarCustomElement() {
         error: res?.ok ? null : (res?.error?.message || 'Error creando reserva'),
         // v0.4.2 — 'OFERTA_CAMBIADA' cuando la oferta vista ya no vale.
         codigo: res?.codigo || null,
+        // v0.4.3 — Cita enlazada creada a la vez (null si no hay).
+        enlazada: (res && res.ok && res.enlazada) ? {
+          reservaId: res.enlazada.reservaId || null,
+          staffName: res.enlazada.staffName || '',
+          label: res.enlazada.label || '',
+          precioTotal: res.enlazada.precioTotal || 0,
+          duracionTotal: res.enlazada.duracionTotal || 0
+        } : null,
         ts: Date.now()
       }));
     } catch (e) {
