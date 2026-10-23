@@ -1,5 +1,5 @@
 // =====================================================
-// [ReminderJob v1.12.1] - reminderLogic.web.js
+// [ReminderJob v1.12.2] - reminderLogic.web.js
 // Recordatorios automáticos 24h antes de la cita
 // FUENTE V2: KamisuiteReservations (fuente de verdad de reservas)
 // Email: Wix Triggered VGPVvYO (cascada) o Brevo (plantilla CMS)
@@ -38,6 +38,17 @@
 //  FLUJO DE PUNTA A PUNTA: verificado. Ya NO hay tramo muerto.
 //
 // CHANGELOG:
+//   v1.12.2 - Cita enlazada (23-oct-2026). Un servicio con servicio
+//             enlazado crea dos citas a la misma hora (recepcionProLogic
+//             v1.0.62, campo grupoEnlazado). La agrupación por cliente ya
+//             las juntaba en un solo recordatorio, pero:
+//             · el importe era el de UNA de las dos → ahora, si la cita que
+//               da el importe es de un grupo enlazado, se suman las del
+//               grupo (cada una ya con su descuento automático);
+//             · la hora final era la de la cita que empieza la última, que
+//               con dos citas a la misma hora puede ser la que acaba antes
+//               → ahora es la del que acaba más tarde.
+//             Sin cita enlazada, el recordatorio es idéntico.
 //   v1.12.1 - Smart pricing: llamadas a smartPricingLogic con await
 //             (22-oct-2026). En Hair-Times las funciones normales de
 //             smartPricingLogic llegaban a otros archivos como promesa sin
@@ -273,7 +284,7 @@ import { enviarEmailPlantilla } from 'backend/brevoLogic.web.js';
 // v1.11.0: bloque de sugerencias de producto para el correo
 import { construirBloqueProductos } from 'backend/sugerenciasProductosLogic.web.js';
 
-const TAG = '[ReminderJob v1.12.1]';
+const TAG = '[ReminderJob v1.12.2]';
 
 // v1.7.0: colección fuente de verdad de reservas en V2
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -578,6 +589,8 @@ async function leerCitasV2(inicio, fin, fechaYMD) {
         estadoPago: r.status === 'PAGADO' ? 'Pagado' : 'Pago en salón',
         _startMs: start.getTime(),
         _endMs: end.getTime(),
+        _grupoEnlazado: String(r.grupoEnlazado || ''),   // v1.12.2
+        _importeNum: Number(r.precioTotal) || 0,           // v1.12.2 — neto abajo si hay descuento
         _reg: r   // v1.12.0 — registro original, solo para el descuento automático
       });
     }
@@ -643,6 +656,7 @@ async function aplicarDescuentoAutomaticoCitas(citas) {
       });
       if (d.importe > 0 && precio > 0) {
         c.importeTotal = _importeES(Math.max(0, precio - d.importe));
+        c._importeNum = Math.max(0, precio - d.importe);   // v1.12.2
         const aviso = await sp.textoAvisoDescuento(d.tipo, d.pct);   // v1.12.1 — await
         if (aviso) c.servicios = c.servicios ? `${c.servicios} · ${aviso}` : aviso;
         conDescuento++;
@@ -817,8 +831,20 @@ function agruparPorCliente(citas) {
       : citasCliente.map(c => c.servicios).filter(Boolean).join(', ');
 
     const primeraHora = citasCliente[0].horaInicio;
-    const ultimaHora = citasCliente[citasCliente.length - 1].horaFinal;
-    const importe = citasCliente.find(c => c.importeTotal)?.importeTotal || '';
+    // v1.12.2 — la del que acaba más tarde (con dos citas a la misma hora,
+    // la última por inicio puede ser la que acaba antes).
+    const citaFin = citasCliente.reduce((a, c) => ((c._endMs || 0) > (a._endMs || 0) ? c : a), citasCliente[0]);
+    const ultimaHora = citaFin.horaFinal;
+    let importe = citasCliente.find(c => c.importeTotal)?.importeTotal || '';
+    // v1.12.2 — CITA ENLAZADA: si la cita que da el importe va en grupo,
+    // el importe es la suma del grupo.
+    const citaImporte = citasCliente.find(c => c.importeTotal);
+    if (citaImporte && citaImporte._grupoEnlazado) {
+      const delGrupo = citasCliente.filter(c => c._grupoEnlazado === citaImporte._grupoEnlazado);
+      if (delGrupo.length > 1) {
+        importe = _importeES(delGrupo.reduce((acc, c) => acc + (Number(c._importeNum) || 0), 0));
+      }
+    }
 
     const emailReal = citasCliente.find(c => !esEmailSalon(c.clientEmail) && c.clientEmail)?.clientEmail || '';
 
