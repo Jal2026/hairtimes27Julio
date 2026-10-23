@@ -3,7 +3,31 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.1.7 (bundle)
+ * VERSION:   2.2.0 (bundle)
+ *
+ * v2.2.0 — SERVICIO ENLAZADO: DOS SERVICIOS A LA VEZ (23-oct-2026).
+ *   Caso Hair-Times: spa capilar + spa masaje de EMY a la vez, cada uno con
+ *   su profesional y su cobro. widgetPublicoLogic v0.14.0 manda en cada
+ *   servicio `enlazado` { setupUid, name, price, duration, promoPct,
+ *   smartPricing, idStaff } o null. Sin enlazado, todo es como en v2.1.7.
+ *     · Tarjeta y cabecera del servicio: «desde» con el precio cerrado (la
+ *       suma) y la duración del que acaba más tarde.
+ *     · _calc: el precio del enlazado entra en subtotal y total. Su
+ *       descuento es el mayor entre su promo y la oferta de la hora (esta
+ *       solo si su smart pricing está en ON), sobre su propio precio: lo
+ *       mismo que cobrará Recepción PRO en su cita. `saved` suma los dos.
+ *       `promo` y `esOferta` siguen siendo los del principal (son los que
+ *       decide el envío de la oferta vista). Nuevo `durationVista` = la
+ *       duración del que acaba más tarde, SOLO para mostrar: `duration`
+ *       sigue siendo la del principal, que es la que viaja al backend.
+ *     · Resumen y reserva confirmada: fila «A la vez» con el servicio
+ *       enlazado y su profesional (si solo hay uno asignado, o el que
+ *       devuelve la reserva). En la confirmada, el total es el del resumen.
+ *     · Panel de descuento: si solo se descuenta el principal, dice sobre
+ *       qué servicio es («Descuento (−10% en Spa capilar)»), porque el
+ *       porcentaje ya no es sobre el total de la reserva.
+ *     · La disponibilidad de las dos la decide el backend: no cambia nada
+ *       en peticiones ni en el envío de la reserva.
  *
  * v2.1.7 — COMPLEMENTO SI/NO OBLIGATORIO Y AVISO DEL CANDADO (22-oct-2026).
  *   1) «Lavado previo» en Botox Capilar (Jal, Hair-Times). Un complemento
@@ -1208,7 +1232,8 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.1.7
+   VERSION: 2.2.0
+   v2.2.0 — Servicio enlazado a la vez: precio cerrado, fila «A la vez».
    v2.1.7 — Complemento Si/No obligatorio fijo en «Si»; aviso del candado
             oculto al elegir hora.
    v2.1.6 — Tira de ofertas estable con dias sin horas; precio «desde».
@@ -1974,14 +1999,23 @@ window.KR_applySkin = function (el, name) {
         body.appendChild(el('h3', 'kr-svc-card__name', svc.name || ''));
         if (svc.description) body.appendChild(el('p', 'kr-svc-card__desc', svc.description));
         const meta = el('div', 'kr-svc-card__meta');
-        if (svc.basePrice != null) {
+        // v2.2.0 — Con servicio enlazado: precio cerrado (la suma) y la
+        // duración del que acaba más tarde.
+        const enlCard = (svc.enlazado && svc.enlazado.setupUid) ? svc.enlazado : null;
+        const precioCard = enlCard
+          ? ((svc.basePrice != null ? svc.basePrice : 0) + (Number(enlCard.price) || 0))
+          : svc.basePrice;
+        const durCard = enlCard
+          ? Math.max(Number(svc.baseDuration) || 0, Number(enlCard.duration) || 0)
+          : svc.baseDuration;
+        if (precioCard != null && (!enlCard || precioCard > 0)) {
           meta.innerHTML =
-            `<span class="kr-svc-card__price">desde ${EUR(svc.basePrice)}</span> ` +
-            `<span>· ${durTxt(svc.baseDuration)}</span>`;
+            `<span class="kr-svc-card__price">desde ${EUR(precioCard)}</span> ` +
+            `<span>· ${durTxt(durCard)}</span>`;
         } else {
           meta.innerHTML =
             `<span class="kr-svc-card__price kr-svc-card__price--tbd">A valorar</span> ` +
-            `<span>· ${durTxt(svc.baseDuration)}</span>`;
+            `<span>· ${durTxt(durCard)}</span>`;
         }
         body.appendChild(meta);
         card.appendChild(body);
@@ -2420,7 +2454,8 @@ window.KR_applySkin = function (el, name) {
           data: this._lastContactData || {},
           calc: this._calc(),
           reservaId: res.reservaId || null,
-          precioTotal: res.precioTotal || null
+          precioTotal: res.precioTotal || null,
+          enlazada: res.enlazada || null   // v2.2.0 — cita enlazada creada a la vez
         };
         this._renderConfirm();
       } else {
@@ -2675,6 +2710,11 @@ window.KR_applySkin = function (el, name) {
       // depilación con importe, `price` deja de ser 0 y el widget pasa
       // a mostrar la cifra real en resumen, bloque de precio, botón
       // primario y confirmación.
+      // v2.2.0 — SERVICIO ENLAZADO: su precio entra en el precio cerrado.
+      const enlCfg = this._enlazado();
+      const enlPrice = enlCfg ? (Number(enlCfg.price) || 0) : 0;
+      price += enlPrice;
+
       const tbd = unknown || price <= 0;
       // v2.0.10 — El descuento promocional se aplica SOLO al precio base
       // del servicio principal, NO a los complementos. Paridad estricta
@@ -2706,7 +2746,14 @@ window.KR_applySkin = function (el, name) {
       const promoBase = (promoRaw && cfg.basePrice != null) ? cfg.basePrice : 0;
       const saved = promoRaw ? Math.round(promoBase * (promoRaw / 100) * 100) / 100 : 0;
       const promo = (saved > 0.005) ? promoRaw : 0;
-      const total = Math.round((price - saved) * 100) / 100;
+      // v2.2.0 — Descuento del enlazado: el mayor entre su promo y la oferta
+      // de la hora (esta solo si su smart pricing está en ON), sobre su
+      // propio precio. Es lo que cobrará Recepción PRO en su cita.
+      const enlPct = enlCfg
+        ? Math.max(Number(enlCfg.promoPct) || 0, (enlCfg.smartPricing && ofertaHora > 0) ? ofertaHora : 0)
+        : 0;
+      const enlSaved = (!tbd && enlPct > 0 && enlPrice > 0) ? Math.round(enlPrice * (enlPct / 100) * 100) / 100 : 0;
+      const total = Math.round((price - saved - enlSaved) * 100) / 100;
       // v2.1.0 — Si el backend ya ha medido esta configuracion, su cifra es
       // la que vale: sale del motor que construye las fases. `_durServidor`
       // se pone a null en cuanto se pide una consulta nueva, asi que
@@ -2715,6 +2762,8 @@ window.KR_applySkin = function (el, name) {
       // front por si alguna vista la necesita.
       const durServidor = Number(this._durServidor);
       const durFinal = (Number.isFinite(durServidor) && durServidor > 0) ? durServidor : dur;
+      // v2.2.0 — Solo para mostrar: la del que acaba más tarde.
+      const durVista = Math.max(durFinal, enlCfg ? (Number(enlCfg.duration) || 0) : 0);
       // v2.1.6 — «desde»: el dia elegido tiene horas con oferta y aun no hay
       // hora. Mayor oferta del dia sobre el precio base, igual que arriba.
       // Solo para mostrar: total, saved y promo no cambian.
@@ -2724,10 +2773,15 @@ window.KR_applySkin = function (el, name) {
         Object.values(this._ofertasDelDia()).forEach(p => { const n = Number(p); if (n > maxDia) maxDia = n; });
         if (maxDia > promoCfg) {
           const savedD = Math.round(cfg.basePrice * (maxDia / 100) * 100) / 100;
-          if (savedD > 0.005) desde = { pct: maxDia, saved: savedD, total: Math.round((price - savedD) * 100) / 100 };
+          // v2.2.0 — el enlazado con su propio descuento a ese porcentaje
+          const enlPctD = enlCfg ? Math.max(Number(enlCfg.promoPct) || 0, enlCfg.smartPricing ? maxDia : 0) : 0;
+          const enlSavedD = (enlPctD > 0 && enlPrice > 0) ? Math.round(enlPrice * (enlPctD / 100) * 100) / 100 : 0;
+          if (savedD > 0.005) desde = { pct: maxDia, saved: Math.round((savedD + enlSavedD) * 100) / 100, total: Math.round((price - savedD - enlSavedD) * 100) / 100 };
         }
       }
-      return { subtotal: price, total, saved, promo, duration: durFinal, durationLocal: dur, tbd,
+      return { subtotal: price, total, saved: Math.round((saved + enlSaved) * 100) / 100, promo, duration: durFinal, durationLocal: dur, tbd,
+               durationVista: durVista,   // v2.2.0
+               savedEnl: enlSaved,        // v2.2.0 — ahorro solo del enlazado
                esOferta: promo > 0 && ofertaHora > promoCfg, desde };
     }
 
@@ -2921,8 +2975,16 @@ window.KR_applySkin = function (el, name) {
       }
       // Línea de metadatos (precio + duración + promo)
       const meta = el('div', 'kr-svc-header__meta');
-      if (cfg.basePrice != null) {
-        const price = el('span', 'kr-svc-header__price'); price.textContent = `desde ${EUR(cfg.basePrice).replace(/\u00A0/g,' ')}`;
+      // v2.2.0 — Con servicio enlazado: precio cerrado y duración mayor.
+      const enlHead = this._enlazado();
+      const precioHead = enlHead
+        ? ((cfg.basePrice != null ? cfg.basePrice : 0) + (Number(enlHead.price) || 0))
+        : cfg.basePrice;
+      const durHead = enlHead
+        ? Math.max(Number(cfg.baseDuration) || 0, Number(enlHead.duration) || 0)
+        : cfg.baseDuration;
+      if (precioHead != null && (!enlHead || precioHead > 0)) {
+        const price = el('span', 'kr-svc-header__price'); price.textContent = `desde ${EUR(precioHead).replace(/\u00A0/g,' ')}`;
         meta.appendChild(price);
         if (cfg.promoPct) {
           const promo = el('span', 'kr-svc-header__promo');
@@ -2938,7 +3000,7 @@ window.KR_applySkin = function (el, name) {
         meta.appendChild(price);
       }
       meta.appendChild(el('span', 'kr-svc-header__dot'));
-      const dur = el('span', 'kr-svc-header__dur'); dur.textContent = `≈ ${durTxt(cfg.baseDuration).replace(/\u00A0/g,' ')}`;
+      const dur = el('span', 'kr-svc-header__dur'); dur.textContent = `≈ ${durTxt(durHead).replace(/\u00A0/g,' ')}`;
       meta.appendChild(dur);
       body.appendChild(meta);
       head.appendChild(body);
@@ -3455,7 +3517,7 @@ window.KR_applySkin = function (el, name) {
       c.innerHTML = `
         <div class="kr-hours-count">${countTxt}</div>
         <div class="kr-priceblock">
-          <div class="kr-priceblock__lab">${calc.tbd ? "Estimación" : "Precio"} · ${durTxt(calc.duration)}</div>
+          <div class="kr-priceblock__lab">${calc.tbd ? "Estimación" : "Precio"} · ${durTxt(calc.durationVista)}</div>
           <div class="kr-priceblock__row">${priceNow}</div>
         </div>`;
     }
@@ -3519,6 +3581,30 @@ window.KR_applySkin = function (el, name) {
     /* ---- summary (espejo pasivo) + modo responsive + gating ---- */
     _proName(id) { const p = this._service.pros.find(p => p.id === id); return p ? p.name : "—"; }
 
+    // v2.2.0 — Servicio enlazado del servicio elegido (o null).
+    _enlazado() {
+      const e = this._service && this._service.enlazado;
+      return (e && typeof e === 'object' && e.setupUid) ? e : null;
+    }
+    // v2.2.0 — Con servicio enlazado y descuento solo en el principal, el
+    // porcentaje no es sobre el total: se dice sobre qué servicio es.
+    _sufijoDescuento(calc) {
+      if (!this._enlazado() || (calc && calc.savedEnl > 0)) return '';
+      return ` en ${this._service.name}`;
+    }
+    // v2.2.0 — Texto de la fila «A la vez»: servicio y, si se sabe, quién
+    // lo hace (el que devolvió la reserva o el único asignado).
+    _enlazadoTxt(staffNameReal) {
+      const e = this._enlazado();
+      if (!e) return '';
+      let quien = staffNameReal || '';
+      if (!quien && Array.isArray(e.idStaff) && e.idStaff.length === 1) {
+        const p = (this._service.pros || []).find(x => String(x.id) === String(e.idStaff[0]));
+        quien = p ? p.name : '';
+      }
+      return `${e.name}${quien ? ` <small>con ${quien}</small>` : ''}`;
+    }
+
     _applyServiceShape() {
       const cfg = this._service;
       const hasComps = !!(cfg.complements && cfg.complements.length);
@@ -3568,6 +3654,10 @@ window.KR_applySkin = function (el, name) {
       if (cfg.requiresExtraPro && !this.state.sameExtra) {
         proRows += `<div class="kr-prow"><span class="kr-prow__k">Compl. con</span><span class="kr-prow__v">${this._proName(this.state.proExtra)}</span></div>`;
       }
+      // v2.2.0 — Servicio enlazado, a la vez.
+      if (this._enlazado()) {
+        proRows += `<div class="kr-prow"><span class="kr-prow__k">A la vez</span><span class="kr-prow__v">${this._enlazadoTxt('')}</span></div>`;
+      }
 
       // v2.1.6 — Dia con oferta y sin hora: «desde» con el precio tachado.
       const totalNums = calc.tbd
@@ -3594,7 +3684,7 @@ window.KR_applySkin = function (el, name) {
           <div class="kr-summary__promo-title">${calc.esOferta ? "🎉 ENHORABUENA, tienes un descuento por reservar este día y hora" : "🎉 ENHORABUENA, este servicio tiene un descuento promocional"}</div>
           <div class="kr-summary__promo-rows">
             <div class="kr-prow"><span class="kr-prow__k">Precio original</span><span class="kr-prow__v">${EUR(calc.subtotal)}</span></div>
-            <div class="kr-prow"><span class="kr-prow__k">Descuento (−${calc.promo}%)</span><span class="kr-prow__v">−${EUR(calc.saved)}</span></div>
+            <div class="kr-prow"><span class="kr-prow__k">Descuento (−${calc.promo}%${this._sufijoDescuento(calc)})</span><span class="kr-prow__v">−${EUR(calc.saved)}</span></div>
             <div class="kr-prow"><span class="kr-prow__k">Precio final a pagar en salón</span><span class="kr-prow__v">${EUR(calc.total)}</span></div>
           </div>
         </div>`
@@ -3609,7 +3699,7 @@ window.KR_applySkin = function (el, name) {
           <div class="kr-prow"><span class="kr-prow__k">Hora</span>${hourTxt}</div>
           ${proRows}
           ${compRows}
-          <div class="kr-prow"><span class="kr-prow__k">Duración aprox.</span><span class="kr-prow__v">${durTxt(calc.duration)}</span></div>
+          <div class="kr-prow"><span class="kr-prow__k">Duración aprox.</span><span class="kr-prow__v">${durTxt(calc.durationVista)}</span></div>
         </div>
         <div class="kr-total">
           <div class="kr-total__lab"><b>Total</b>${totalLab}</div>
@@ -3973,7 +4063,9 @@ window.KR_applySkin = function (el, name) {
       // Recepción Pro V2 / marcarPagadoReserva (importeNeto). Si pintamos
       // conf.precioTotal al cliente, vería el bruto (16€) en lugar del
       // neto que realmente pagará (14,40€). Coherencia con el resumen.
-      const totalReal = (calc.promo && calc.saved > 0.005)
+      // v2.2.0 — Con servicio enlazado el backend devuelve el precio del
+      // principal; el total es el del resumen (las dos citas).
+      const totalReal = ((calc.promo && calc.saved > 0.005) || this._enlazado())
         ? calc.total
         : ((conf.precioTotal != null) ? conf.precioTotal : calc.total);
       const reservaId = conf.reservaId || null;
@@ -4000,7 +4092,7 @@ window.KR_applySkin = function (el, name) {
             <div class="kr-summary__promo-title">${calc.esOferta ? "🎉 ENHORABUENA, tienes un descuento por reservar este día y hora" : "🎉 ENHORABUENA, este servicio tiene un descuento promocional"}</div>
             <div class="kr-summary__promo-rows">
               <div class="kr-prow"><span class="kr-prow__k">Precio original</span><span class="kr-prow__v">${EUR(calc.subtotal)}</span></div>
-              <div class="kr-prow"><span class="kr-prow__k">Descuento (−${calc.promo}%)</span><span class="kr-prow__v">−${EUR(calc.saved)}</span></div>
+              <div class="kr-prow"><span class="kr-prow__k">Descuento (−${calc.promo}%${this._sufijoDescuento(calc)})</span><span class="kr-prow__v">−${EUR(calc.saved)}</span></div>
               <div class="kr-prow"><span class="kr-prow__k">Precio final a pagar en salón</span><span class="kr-prow__v">${EUR(calc.total)}</span></div>
             </div>
           </div>`
@@ -4023,7 +4115,8 @@ window.KR_applySkin = function (el, name) {
             ${localizador ? `<div class="kr-prow"><span class="kr-prow__k">Localizador</span><span class="kr-prow__v"><code>${localizador}</code></span></div>` : ''}
             <div class="kr-prow"><span class="kr-prow__k">Cuándo</span><span class="kr-prow__v">${whenTxt}</span></div>
             <div class="kr-prow"><span class="kr-prow__k">Profesional</span><span class="kr-prow__v">${this._proName(this.state.proMain)}${this.state.sameExtra ? "" : ` <small>+ ${this._proName(this.state.proExtra)}</small>`}</span></div>
-            <div class="kr-prow"><span class="kr-prow__k">Duración aprox.</span><span class="kr-prow__v">${durTxt(calc.duration)}</span></div>
+            ${this._enlazado() ? `<div class="kr-prow"><span class="kr-prow__k">A la vez</span><span class="kr-prow__v">${this._enlazadoTxt(conf.enlazada && conf.enlazada.staffName)}</span></div>` : ''}
+            <div class="kr-prow"><span class="kr-prow__k">Duración aprox.</span><span class="kr-prow__v">${durTxt(calc.durationVista)}</span></div>
             <div class="kr-prow"><span class="kr-prow__k">Pago</span><span class="kr-prow__v">${payTxt}</span></div>
           </div>
           ${consecBlock}
