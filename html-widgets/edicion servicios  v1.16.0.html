@@ -9,10 +9,25 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
 /* ═══════════════════════════════════════════════════
-       KAMISUITE — Edición Servicios Widget v1.15.11
+       KAMISUITE — Edición Servicios Widget v1.16.0
        Dark theme. CMS-ONLY TOTAL. Solo ServiceCatalog.
 
        CHANGELOG:
+       v1.16.0: 🔗 SERVICIO ENLAZADO (A LA VEZ).
+         Selector «Servicio enlazado (a la vez)» bajo «Staff asignado».
+         Guarda `servicioEnlazado` (setupUid, Texto) en ServiceCatalog: al
+         reservar este servicio se crea a la vez otra cita del servicio
+         elegido, en la columna de su profesional y con su propio cobro
+         (recepcionProLogic v1.0.62, widgetPublicoLogic v0.14.0). Caso
+         Hair-Times: spa capilar + spa masaje de EMY.
+           · Lista todos los servicios menos el propio, con sus
+             profesionales; «— Ninguno —» quita el enlace.
+           · Se carga al editar, vacío al crear, viaja en el guardado
+             (comun) y en el alta, y se refresca en la lista local.
+           · Si el enlazado está desactivado, no es de Recepción o no tiene
+             profesional, se guarda igual y el aviso de después de guardar
+             lo dice (en esos casos el servicio se reserva solo).
+         Backend pareja: serviciosEdicionLogic v1.15.0. Sin CSS nuevo.
        v1.15.11: 🟢 SMART PRICING EN VERDE FLÚOR.
          Jal: que se vea más fácilmente. Solo CSS del bloque «Smart pricing»
          (clase nueva .sp-block): título y ayuda en verde flúor (#39ff14) y
@@ -856,7 +871,7 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
 <body>
   <div class="header">
     <span class="header-brand">KAMISUITE · Edición Servicios</span>
-    <span class="header-version"> v1.15.11</span>
+    <span class="header-version"> v1.16.0</span>
   </div>
 
   <div class="toolbar" id="toolbar" style="display:none;">
@@ -1037,6 +1052,15 @@ textarea.form-input { resize: vertical; min-height: 70px; line-height: 1.4; font
             <div class="form-group">
               <label class="form-label">Staff asignado</label>
               <div class="staff-grid" id="fStaffGrid"></div>
+            </div>
+
+            <!-- v1.16.0 — Servicio enlazado: otra cita a la vez, con su profesional y su cobro -->
+            <div class="form-group">
+              <label class="form-label">Servicio enlazado (a la vez)</label>
+              <select class="form-select" id="fServicioEnlazado">
+                <option value="">— Ninguno —</option>
+              </select>
+              <p class="form-hint">Al reservar este servicio se crea a la vez una cita del servicio elegido, en la columna de su profesional. Cada una se cobra por separado.</p>
             </div>
 
             <div class="form-group">
@@ -1246,6 +1270,7 @@ let fImagePreviewUrl = '';
 let pendingImageCatalogId = null;
 let pendingToggle = null;
 let avisoBono = '';   // v1.15.5 — aviso de plazos, se muestra tras guardar
+let avisoEnlace = '';   // v1.16.0 — aviso del servicio enlazado, se muestra tras guardar
 
 function setImagePreview(url, placeholder) {
   fImagePreviewUrl = url || '';
@@ -1328,6 +1353,7 @@ const el = {
   fDescuentoPromo: document.getElementById('fDescuentoPromo'),
   swSmartPricing: document.getElementById('swSmartPricing'),   // v1.15.10
   lblSmartPricing: document.getElementById('lblSmartPricing'), // v1.15.10
+  fServicioEnlazado: document.getElementById('fServicioEnlazado'), // v1.16.0
   swCobroPeso: document.getElementById('swCobroPeso'),
   lblCobroFijo: document.getElementById('lblCobroFijo'),
   lblCobroPeso: document.getElementById('lblCobroPeso'),
@@ -2347,6 +2373,45 @@ function collectComplementos() {
   return out;
 }
 
+// v1.16.0 — Rellena el selector del servicio enlazado con todos los
+// servicios menos el propio. Valor = setupUid. Si el guardado ya no existe
+// en el catálogo, se conserva como opción para que no se pierda en silencio.
+function fillEnlazadoSelect(selectedUid, ownUid) {
+  const sel = el.fServicioEnlazado;
+  if (!sel) return;
+  const lista = allServicios
+    .filter(x => x && x.setupUid && x.setupUid !== ownUid)
+    .slice()
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'es'));
+  let html = '<option value="">— Ninguno —</option>';
+  for (const x of lista) {
+    const nombres = Array.isArray(x.staffNombres) ? x.staffNombres.filter(Boolean) : [];
+    const quien = nombres.length ? nombres.join(', ') : 'sin profesional';
+    const oculto = (x.active === false) ? ' (oculto)' : '';
+    html += `<option value="${esc(x.setupUid)}">${esc(x.name || '(sin nombre)')} · ${esc(quien)}${oculto}</option>`;
+  }
+  if (selectedUid && !lista.some(x => x.setupUid === selectedUid)) {
+    html += `<option value="${esc(selectedUid)}">(servicio no encontrado)</option>`;
+  }
+  sel.innerHTML = html;
+  sel.value = selectedUid || '';
+}
+
+// v1.16.0 — Aviso si el enlazado elegido no podrá crearse (mismo criterio
+// que el motor: activo, uso Recepción o Ambos y con profesional asignado).
+function avisoServicioEnlazado(uid) {
+  if (!uid) return '';
+  const e = allServicios.find(x => x.setupUid === uid);
+  if (!e) return 'El servicio enlazado ya no está en el catálogo: mientras sea así, este servicio se reservará solo.';
+  const motivos = [];
+  if (e.active === false) motivos.push('está desactivado');
+  if (!(e.uso === 'kamisuite' || e.uso === 'ambos')) motivos.push('su uso no incluye Recepción');
+  if (!(Array.isArray(e.idStaff) && e.idStaff.length)) motivos.push('no tiene profesional asignado');
+  return motivos.length
+    ? `Ojo: el servicio enlazado «${e.name}» ${motivos.join(', ')}. Mientras sea así, este servicio se reservará solo, sin la cita a la vez.`
+    : '';
+}
+
 function openEditModal(catalogId) {
   const s = allServicios.find(x => x.id === catalogId);
   if (!s) return;
@@ -2368,6 +2433,7 @@ function openEditModal(catalogId) {
   fillFamilySelect(s.family || ''); // v1.14.5 — autoexpansiva
   fillGroupSelect(s.group || '');
   renderStaffGrid(Array.isArray(s.idStaff) ? s.idStaff : []);
+  fillEnlazadoSelect(s.servicioEnlazado || '', s.setupUid || ''); // v1.16.0
   renderVariantes(s.variantes || []);
   renderFases(s.mapeoFases || [], s._catalogId || s.id);
   el.fMinProceso.value = (typeof s.minProcesoCatalog === 'number' && s.minProcesoCatalog > 0) ? s.minProcesoCatalog : '';
@@ -2416,6 +2482,7 @@ function openNuevoModal() {
   fillFamilySelect(''); // v1.14.5 — autoexpansiva
   fillGroupSelect('');
   renderStaffGrid([]);
+  fillEnlazadoSelect('', ''); // v1.16.0
   renderVariantes([]);
   renderFases([], null);
   complementosExpanded = false;
@@ -2510,6 +2577,7 @@ function buildPayloadComun() {
   const dpRaw = el.fDescuentoPromo ? el.fDescuentoPromo.value : '';
   const descuentoPromo = (dpRaw === '' || dpRaw === null) ? null : (parseInt(dpRaw, 10));
   const smartPricing = getSwitchValue(el.swSmartPricing); // v1.15.10
+  const servicioEnlazado = el.fServicioEnlazado ? el.fServicioEnlazado.value : ''; // v1.16.0
 
   const cobroporPeso = getSwitchValue(el.swCobroPeso);
   const pgRaw = el.fPrecioGramo ? el.fPrecioGramo.value : '';
@@ -2566,6 +2634,7 @@ function buildPayloadComun() {
     descuentoActivo,
     descuentoPromo: (isNaN(descuentoPromo) ? null : descuentoPromo),
     smartPricing, // v1.15.10
+    servicioEnlazado, // v1.16.0
     cobroporPeso,
     precioGramo,
     bonoActivo,
@@ -2610,6 +2679,7 @@ function saveModal() {
   } else if (_max > 0 && _usos > 0 && _cad > 0 && _cad < _usos * _max) {
     avisoBono = 'Ojo con la caducidad: con ' + _usos + ' sesiones y ' + _max + ' días de plazo cada una, la última no se abre hasta el día ' + ((_usos - 1) * _max) + ' y necesitaría hasta el ' + (_usos * _max) + '. Con ' + _cad + ' días de caducidad se queda con menos margen del previsto.';
   }
+  avisoEnlace = avisoServicioEnlazado(comun.servicioEnlazado); // v1.16.0
   el.btnSave.disabled = true;
   el.btnSave.textContent = modoCrear ? 'Creando...' : 'Guardando...';
   if (modoCrear) {
@@ -2637,6 +2707,7 @@ function saveModal() {
       descuentoActivo: comun.descuentoActivo,
       descuentoPromo: comun.descuentoPromo,
       smartPricing: comun.smartPricing, // v1.15.10
+      servicioEnlazado: comun.servicioEnlazado, // v1.16.0
       cobroporPeso: comun.cobroporPeso,
       precioGramo: comun.precioGramo,
       bonoActivo: comun.bonoActivo,
@@ -2735,7 +2806,10 @@ function onCatalogCreated(r) {
   el.btnSave.disabled = false;
   el.btnSave.textContent = 'Crear servicio';
   if (r.success) {
-    showToast(`✓ Servicio "${r.servicio.label}" creado`, 'success');
+    // v1.16.0 — con el aviso del servicio enlazado, si lo hay
+    if (avisoEnlace) showToast(`Servicio "${r.servicio.label}" creado. ${avisoEnlace}`, 'warn');
+    else showToast(`✓ Servicio "${r.servicio.label}" creado`, 'success');
+    avisoEnlace = '';
     closeModal();
     sendToParent({ type: 'ready' });
   } else showToast('Error: ' + (r.error || 'No se pudo crear'), 'error');
@@ -2919,8 +2993,11 @@ window.addEventListener('message', (event) => {
     // y ninguna otra señal. La confirmación al usuario no puede depender de
     // que el refresco interno de la lista funcione.
     try {
-      if (avisoBono) {
-        showToast('Servicio actualizado correctamente. ' + avisoBono, 'warn');
+      // v1.16.0 — junto al de plazos, el del servicio enlazado
+      const avisosGuardado = [avisoBono, avisoEnlace].filter(Boolean).join(' ');
+      avisoEnlace = '';
+      if (avisosGuardado) {
+        showToast('Servicio actualizado correctamente. ' + avisosGuardado, 'warn');
         avisoBono = '';
       } else {
         showToast('✓ Servicio actualizado correctamente', 'success');
@@ -2959,6 +3036,7 @@ window.addEventListener('message', (event) => {
         if (sv.descuentoActivo !== undefined) x.descuentoActivo = sv.descuentoActivo;
         if (sv.descuentoPromo !== undefined) x.descuentoPromo = sv.descuentoPromo;
         if (sv.smartPricing !== undefined) x.smartPricing = sv.smartPricing; // v1.15.10
+        if (sv.servicioEnlazado !== undefined) x.servicioEnlazado = sv.servicioEnlazado; // v1.16.0
         if (sv.cobroporPeso !== undefined) x.cobroporPeso = sv.cobroporPeso;
         if (sv.precioGramo !== undefined) x.precioGramo = sv.precioGramo;
         if (sv.bonoActivo !== undefined) x.bonoActivo = sv.bonoActivo;
