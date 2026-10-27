@@ -1,8 +1,23 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.48
-// FECHA: 19 de agosto de 2026
+// VERSION: 1.0.49
+// FECHA: 27 de octubre de 2026
+//
+// v1.0.49: CIF/NIF y razón social del cliente.
+//          Pareja: recepcionLogic.web v2.2.0 y widget v1.1.117.
+//
+//          · handleCrearCliente y handleEditarContacto pasan además
+//            `cif` y `razonSocial` al backend. En la edición llegan
+//            undefined cuando el widget no los toca, y el backend no los
+//            escribe.
+//          · NEW import leerDatosFiscales + handler 'leerDatosFiscales'
+//            → responde 'datosFiscales' { origen, contactId, data }.
+//            `origen` lo pone el widget (editar / factura / tienda) y se
+//            devuelve tal cual para que sepa qué formulario rellenar.
+//          · La caché de clientes NO lleva datos fiscales: se piden uno a
+//            uno, solo cuando hacen falta.
+//          · Nada más cambia.
 //
 // v1.0.48: Marca de PRODUCTO ACTIVO en el buscador de clientes.
 //          Segunda insignia, junto a la de ficha técnica de v1.0.47.
@@ -574,6 +589,8 @@ import { listarProductos, venderProductosDesdeAgenda } from 'backend/tiendaProdu
 
 // Clientes: reutiliza el backend que ya usa la agenda legacy (CRM en memoria).
 import { cargarTodosContactos, crearContacto, editarContacto } from 'backend/recepcionLogic.web';
+// v1.0.49 — CIF/NIF y razón social del cliente (recepcionLogic v2.2.0).
+import { leerDatosFiscales } from 'backend/recepcionLogic.web';
 // v1.0.47 — marca de ficha técnica en el buscador de clientes.
 import { listarContactosConFicha } from 'backend/clientRecordsLogic.web';
 // v1.0.48 — marca de producto activo (bono / PRIME / tarjeta).
@@ -660,7 +677,7 @@ import {
   desactivarFichaClienteRecord
 } from 'backend/clientRecordsLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.48]';
+const TAG = '[RecepcionProCMS v1.0.49]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1379,7 +1396,8 @@ async function handleCrearCliente(msg) {
   try {
     const result = await crearContacto({
       nombre: msg.nombre, apellido: msg.apellido,
-      telefono: msg.telefono, email: msg.email
+      telefono: msg.telefono, email: msg.email,
+      cif: msg.cif, razonSocial: msg.razonSocial   // v1.0.49
     });
     if (result.ok && result.cliente) cacheContactos.push(result.cliente);
     sendResponse('clienteCreado', { data: result });
@@ -1399,7 +1417,9 @@ async function handleEditarContacto(msg) {
       nombre: msg.nombre,
       apellido: msg.apellido,
       email: msg.email,
-      telefono: msg.telefono
+      telefono: msg.telefono,
+      cif: msg.cif,                 // v1.0.49 — undefined = no se toca
+      razonSocial: msg.razonSocial  // v1.0.49 — undefined = no se toca
     });
     if (result.ok && result.cliente) {
       const idx = cacheContactos.findIndex(c => c.contactId === msg.contactId);
@@ -1409,6 +1429,20 @@ async function handleEditarContacto(msg) {
   } catch (e) {
     console.error(`${TAG} ❌ editarContacto:`, e);
     sendResponse('contactoEditado', { data: { ok: false, error: { message: e?.message || 'Error' } } });
+  }
+}
+
+// v1.0.49 — CIF/NIF y razón social de un contacto, para rellenar
+// «Editar cliente» y los formularios de factura del widget.
+async function handleLeerDatosFiscales(msg) {
+  const contactId = msg.contactId || '';
+  const origen = msg.origen || '';
+  try {
+    const result = await leerDatosFiscales({ contactId });
+    sendResponse('datosFiscales', { origen, contactId, data: result });
+  } catch (e) {
+    console.error(`${TAG} ❌ leerDatosFiscales:`, e);
+    sendResponse('datosFiscales', { origen, contactId, data: { ok: false, error: { message: e?.message || 'Error' } } });
   }
 }
 
@@ -2123,6 +2157,7 @@ $w.onReady(function () {
         case 'buscarCliente':    handleBuscarCliente(msg); break;
         case 'crearCliente':     handleCrearCliente(msg); break;
         case 'editarContacto':   handleEditarContacto(msg); break;
+        case 'leerDatosFiscales': handleLeerDatosFiscales(msg); break;   // v1.0.49
         case 'clientesReady':    if (cacheReady) sendResponse('clientesReady', { total: cacheContactos.length }); break;
         // v1.0.31 — ESPECIALES (venta manual PRIME/Bonos/Tarjetas)
         case 'espBuscarCliente':  handleEspBuscarCliente(msg); break;
