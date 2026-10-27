@@ -3,11 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KAMISUITE · CRM Contactos y Clientes v1.8.3</title>
+<title>KAMISUITE · CRM Contactos y Clientes v1.8.4</title>
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ══════════════════════════════════════════════════════
-   KAMISUITE — CRM Clientes v1.8.3 CSS
+   KAMISUITE — CRM Clientes v1.8.4 CSS
+   v1.8.4 — CIF/NIF y razón social. Sin CSS nuevo: filas .field-row y
+            modal con las clases de los modales existentes.
    v1.8.3 — Marca de PRODUCTO ACTIVO en la lista de duplicados.
             Clase nueva: .dup-prod-pill.
    v1.8.2 — Marca de FICHA TÉCNICA en la lista de duplicados.
@@ -516,6 +518,25 @@ html, body {
             <button class="field-edit" onclick="editarFechaNacimiento()" title="Editar fecha de nacimiento">✏</button>
           </div>
 
+          <!-- v1.8.4 — CIF/NIF y razón social (campos personalizados del contacto) -->
+          <div class="field-row">
+            <div class="field-icon">🧾</div>
+            <div class="field-content">
+              <div class="field-label">CIF / NIF</div>
+              <div class="field-value" id="fieldCif">—</div>
+            </div>
+            <button class="field-edit" onclick="editarDatosFiscales()" title="Editar datos fiscales">✏</button>
+          </div>
+
+          <div class="field-row">
+            <div class="field-icon">🏢</div>
+            <div class="field-content">
+              <div class="field-label">Razón social</div>
+              <div class="field-value" id="fieldRazonSocial">—</div>
+            </div>
+            <button class="field-edit" onclick="editarDatosFiscales()" title="Editar datos fiscales">✏</button>
+          </div>
+
           <div class="field-row">
             <div class="field-icon">🗓</div>
             <div class="field-content">
@@ -875,6 +896,8 @@ html, body {
       <option value="Mujer">Mujer</option>
       <option value="Indefinido">Indefinido</option>
     </select>
+    <input class="modal-input" id="modalNuevoCif" placeholder="CIF / NIF (opcional)">
+    <input class="modal-input" id="modalNuevoRazonSocial" placeholder="Razón social (opcional)">
     <div class="modal-actions">
       <button class="btn-cancel" onclick="cerrarModalNuevoContacto()">Cancelar</button>
       <button class="btn-primary" id="btnGuardarNuevoContacto" onclick="guardarNuevoContacto()">Crear</button>
@@ -961,6 +984,20 @@ html, body {
       <button class="btn-cancel" onclick="cerrarModalFechaNacimiento()">Cancelar</button>
       <button class="btn-sm" style="margin-right:auto" onclick="limpiarFechaNacimiento()">Quitar fecha</button>
       <button class="btn-primary" onclick="guardarFechaNacimiento()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- v1.8.4 — Modal datos fiscales (CIF/NIF y razón social) -->
+<div class="modal-overlay" id="modalDatosFiscales">
+  <div class="modal">
+    <div class="modal-title">🧾 Editar datos fiscales</div>
+    <div class="modal-sub">Para las facturas a nombre de este cliente. Vale para autónomos y empresas.</div>
+    <input class="modal-input" id="modalCifInput" placeholder="CIF / NIF">
+    <input class="modal-input" id="modalRazonSocialInput" placeholder="Razón social">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="cerrarModalDatosFiscales()">Cancelar</button>
+      <button class="btn-primary" onclick="guardarDatosFiscales()">Guardar</button>
     </div>
   </div>
 </div>
@@ -1052,6 +1089,21 @@ html, body {
 <script>
 // ══════════════════════════════════════════════════════
 // KAMISUITE — Ficha Cliente Widget v1.7.2
+// ══════════════════════════════════════════════════════
+// v1.8.4 — CIF/NIF y razón social del cliente.
+//   Pareja: page code CRM Desktop v1.9.7 + fichaClienteLogic v1.9.16.
+//   Campos personalizados del contacto 'custom.cif' y
+//   'custom.razon-social', los mismos que Recepción PRO y facturación.
+//   · Datos personales: dos filas nuevas bajo Fecha de nacimiento,
+//     «CIF / NIF» y «Razón social», con el mismo marcado .field-row. El
+//     lápiz de cualquiera de las dos abre el modal «Editar datos
+//     fiscales» con los dos campos. Guarda con 'guardarDatosFiscales'
+//     { contactId, cif, razonSocial } y pinta el valor al momento, como
+//     Sexo y Fecha de nacimiento.
+//   · Nuevo contacto: dos campos opcionales más, CIF / NIF y Razón
+//     social. Viajan en 'crearContacto' como `cif` y `razonSocial`.
+//   · Los valores llegan en `profile.cif` y `profile.razonSocial`.
+//   · Sin CSS nuevo. Nada más cambia.
 // ══════════════════════════════════════════════════════
 // v1.8.3 — Marca de PRODUCTO ACTIVO en la lista de duplicados.
 //   · Insignia junto a la de ficha cuando el contacto tiene bono
@@ -1160,7 +1212,7 @@ html, body {
 // v1.4.0 — Mensajería multi-canal
 // ══════════════════════════════════════════════════════
 
-const TAG = '[FichaCliente][Widget][1.8.3]';
+const TAG = '[FichaCliente][Widget][1.8.4]';
 
 let state = {
   contactId: null,
@@ -1387,6 +1439,8 @@ function seleccionarCliente(id, n) {
   document.getElementById('fieldSexo').textContent = '—';
   document.getElementById('fieldUltimaVisita').textContent = '—';
   document.getElementById('fieldFechaNacimiento').textContent = '—';
+  document.getElementById('fieldCif').textContent = '—';            // v1.8.4
+  document.getElementById('fieldRazonSocial').textContent = '—';    // v1.8.4
   setTarjetaPrimeVisual({ tiene: false });
   document.getElementById('fieldInsigniaWrap').innerHTML =
     '<span class="insignia-pill empty">✓ Sin insignia</span>';
@@ -1530,6 +1584,10 @@ function renderDatosPersonales(pr) {
   // v1.7.2 — Fecha nacimiento (nativa Wix Contacts)
   const fn = pr.fechaNacimiento || '';
   document.getElementById('fieldFechaNacimiento').textContent = fn ? formatearFechaCorta(fn) : '—';
+
+  // v1.8.4 — CIF/NIF y razón social
+  document.getElementById('fieldCif').textContent = pr.cif || '—';
+  document.getElementById('fieldRazonSocial').textContent = pr.razonSocial || '—';
 
   // v1.7.2 — Tarjeta PRIME: estado leído del backend
   setTarjetaPrimeVisual(pr.prime || { tiene: false });
@@ -1677,6 +1735,25 @@ function guardarFechaNacimiento() {
   sendToPage('guardarFechaNacimiento', { contactId: state.contactId, valor: v });
   if (state.profile) state.profile.fechaNacimiento = v;
   document.getElementById('fieldFechaNacimiento').textContent = v ? formatearFechaCorta(v) : '—';
+}
+
+// v1.8.4 — CIF/NIF y razón social (campos personalizados del contacto)
+function editarDatosFiscales() {
+  if (!state.contactId) { showToast('Selecciona un cliente', 'error'); return; }
+  document.getElementById('modalCifInput').value = state.profile?.cif || '';
+  document.getElementById('modalRazonSocialInput').value = state.profile?.razonSocial || '';
+  document.getElementById('modalDatosFiscales').classList.add('visible');
+}
+function cerrarModalDatosFiscales() { document.getElementById('modalDatosFiscales').classList.remove('visible'); }
+function guardarDatosFiscales() {
+  const cif = (document.getElementById('modalCifInput').value || '').trim();
+  const razonSocial = (document.getElementById('modalRazonSocialInput').value || '').trim();
+  cerrarModalDatosFiscales();
+  setLoading(true);
+  sendToPage('guardarDatosFiscales', { contactId: state.contactId, cif, razonSocial });
+  if (state.profile) { state.profile.cif = cif; state.profile.razonSocial = razonSocial; }
+  document.getElementById('fieldCif').textContent = cif || '—';
+  document.getElementById('fieldRazonSocial').textContent = razonSocial || '—';
 }
 
 // v1.7.2 — Bonos y Promociones (3 sub-tarjetas)
@@ -2497,7 +2574,8 @@ function resetModalNuevoContacto() {
   const ids = [
     'modalNuevoNombre', 'modalNuevoApellido',
     'modalNuevoEmail', 'modalNuevoTelefono',
-    'modalNuevoFechaNacimiento'
+    'modalNuevoFechaNacimiento',
+    'modalNuevoCif', 'modalNuevoRazonSocial'   // v1.8.4
   ];
   ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   const sel = document.getElementById('modalNuevoSexo');
@@ -2530,6 +2608,9 @@ function guardarNuevoContacto() {
   const telefono  = (document.getElementById('modalNuevoTelefono').value || '').trim();
   const fecha     = (document.getElementById('modalNuevoFechaNacimiento').value || '').trim();
   const sexo      = (document.getElementById('modalNuevoSexo').value || '').trim();
+  // v1.8.4 — datos fiscales opcionales
+  const cif         = (document.getElementById('modalNuevoCif').value || '').trim();
+  const razonSocial = (document.getElementById('modalNuevoRazonSocial').value || '').trim();
 
   // Validación mínima: NOMBRE + (email O teléfono)
   if (!nombre) {
@@ -2552,6 +2633,8 @@ function guardarNuevoContacto() {
   const payload = { nombre, apellido, email, telefono };
   if (fecha) payload.fechaNacimiento = fecha;
   if (sexo)  payload.sexo = sexo;
+  if (cif)         payload.cif = cif;                  // v1.8.4
+  if (razonSocial) payload.razonSocial = razonSocial;  // v1.8.4
   if (state.nuevoContactoDuplicadoConfirmado) payload.allowDuplicates = true;
 
   sendToPage('crearContacto', payload);
