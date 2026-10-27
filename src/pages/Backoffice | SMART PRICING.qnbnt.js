@@ -1,8 +1,13 @@
 /* ═══════════════════════════════════════════════════════════════
-   pagecode_smart_pricing.js  v1.0.2
+   pagecode_smart_pricing.js  v1.0.3
    KAMISUITE — Page code de la página de gestión de Smart Pricing
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.3 · 27 Oct 2026 · Umbrales de alerta y óptima
+     - 'spAnalizar' trae `umbrales` { alerta, optima } (widget v1.0.6) y se
+       pasa tal cual a analizarYProponer (smartPricingLogic v1.0.7), que
+       los valida y los usa para que AKIRA no proponga en la zona óptima.
+       Si no llegan, el backend usa sus valores por defecto.
    v1.0.2 · 22 Oct 2026 · Interruptores DÍAS / HORAS
      - 'spAnalizar' trae `interruptores` { dias, horas } y se pasa tal cual
        a analizarYProponer (smartPricingLogic v1.0.4), que decide qué tipos
@@ -29,13 +34,13 @@
        'error'. Mismo remedio que AKIRA aplicó a su 504 (20-ago-2026).
 
    ELEMENTO EN LA PÁGINA: componente HTML con ID #htmlSmartPricing
-   BACKEND: smartPricingLogic.web.js v1.0.4
+   BACKEND: smartPricingLogic.web.js v1.0.7
    ═══════════════════════════════════════════════════════════════ */
 
 import { currentMember } from 'wix-members-frontend';
 import { getEstadoSmartPricing, analizarYProponer, elegirPropuesta } from 'backend/smartPricingLogic.web';
 
-const TAG = '[SmartPricingPage][v1.0.2]';
+const TAG = '[SmartPricingPage][v1.0.3]';
 const WIDGET_ID = '#htmlSmartPricing';
 const POLL_MS = 3000;
 const POLL_MAX = 40;   // 40 × 3 s = 2 minutos
@@ -117,7 +122,8 @@ $w.onReady(async function () {
         try {
           const mesesExcluidos = Array.isArray(msg.mesesExcluidos) ? msg.mesesExcluidos : [];
           const interruptores = (msg.interruptores && typeof msg.interruptores === 'object') ? msg.interruptores : null;
-          const r = await analizarYProponer({ semanas: msg.semanas, mesesExcluidos, interruptores, solicitudId });
+          const umbrales = (msg.umbrales && typeof msg.umbrales === 'object') ? msg.umbrales : null;   // v1.0.3
+          const r = await analizarYProponer({ semanas: msg.semanas, mesesExcluidos, interruptores, umbrales, solicitudId });
           const estado = await leerEstado();
           sendToWidget({
             type: 'spAnalisisListo',
