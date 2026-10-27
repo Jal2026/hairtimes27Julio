@@ -3,13 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>KAMISUITE · CRM Móvil v1.1.2</title>
+<title>KAMISUITE · CRM Móvil v1.1.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* =====================================================
    KAMISUITE — Ficha Cliente CRM Móvil
-   VERSION: 1.1.2
-   FECHA: 6 de julio de 2026
+   VERSION: 1.1.3
+   FECHA: 27 de octubre de 2026
+
+   v1.1.3 — CIF/NIF y razón social del cliente (paridad desktop v1.8.4).
+     Pareja: page code CRM Mobile v1.9.7 + fichaClienteLogic v1.9.16.
+     Campos personalizados 'custom.cif' y 'custom.razon-social'.
+     · Dos filas nuevas bajo Fecha de nacimiento («CIF / NIF» y «Razón
+       social»). «Editar» abre el modal «Datos fiscales» con los dos
+       campos y guarda con 'guardarDatosFiscales'.
+     · Nuevo contacto: CIF / NIF y Razón social opcionales, viajan en
+       'crearContacto'.
+     · Necesita el page code CRM Mobile v1.9.7, que además corrige el
+       alta con teléfono repetido (el modal se quedaba en «Creando…»).
+     Sin CSS nuevo: .detail-row, .modal, .modal-input, .btn.
 
    v1.1.2 — HOTFIX modal Nuevo contacto (paridad desktop v1.7.4):
      · 'contactoCreado' invoca seleccionarCliente(id, nombre) para
@@ -304,6 +316,9 @@ button{touch-action:manipulation}
         <div class="detail-row"><div class="detail-icon">✉</div><div><div class="detail-label">Email</div><div class="detail-value" id="fieldEmail">—</div></div></div>
         <div class="detail-row"><div class="detail-icon">⚧</div><div><div class="detail-label">Sexo</div><div class="detail-value" id="fieldSexo">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarSexo()">Editar</button></div>
         <div class="detail-row"><div class="detail-icon">🎂</div><div><div class="detail-label">Fecha de nacimiento</div><div class="detail-value" id="fieldFechaNacimiento">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarFechaNacimiento()">Editar</button></div>
+        <!-- v1.1.3 — CIF/NIF y razón social -->
+        <div class="detail-row"><div class="detail-icon">🧾</div><div><div class="detail-label">CIF / NIF</div><div class="detail-value" id="fieldCif">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarDatosFiscales()">Editar</button></div>
+        <div class="detail-row"><div class="detail-icon">🏢</div><div><div class="detail-label">Razón social</div><div class="detail-value" id="fieldRazonSocial">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarDatosFiscales()">Editar</button></div>
         <div class="detail-row"><div class="detail-icon">🗓</div><div><div class="detail-label">Última visita manual</div><div class="detail-value" id="fieldUltimaVisita">—</div></div><button class="btn ghost" style="margin-left:auto" onclick="editarUltimaVisita()">Editar</button></div>
         <div class="detail-row"><div class="detail-icon">💎</div><div><div class="detail-label">Tarjeta PRIME</div><span class="prime-pill inactivo" id="primePill">✓ Sin tarjeta</span></div></div>
         <div class="detail-row"><div class="detail-icon">🏅</div><div><div class="detail-label">Insignia</div><div id="fieldInsigniaWrap"><span class="insignia-pill empty">Sin insignia</span></div></div></div>
@@ -431,6 +446,8 @@ button{touch-action:manipulation}
       <option value="Mujer">Mujer</option>
       <option value="Indefinido">Indefinido</option>
     </select>
+    <input class="modal-input" id="modalNuevoCif" placeholder="CIF / NIF (opcional)">
+    <input class="modal-input" id="modalNuevoRazonSocial" placeholder="Razón social (opcional)">
     <div class="modal-actions">
       <button class="btn ghost" onclick="cerrarModalNuevoContacto()">Cancelar</button>
       <button class="btn primary" id="btnGuardarNuevoContacto" onclick="guardarNuevoContacto()">Crear</button>
@@ -499,6 +516,17 @@ button{touch-action:manipulation}
   </div>
 </div>
 
+<!-- MODAL DATOS FISCALES (v1.1.3) -->
+<div class="modal-overlay" id="modalDatosFiscales">
+  <div class="modal">
+    <div class="modal-title">🧾 Datos fiscales</div>
+    <div class="modal-sub">Para las facturas a nombre de este cliente. Vale para autónomos y empresas.</div>
+    <input class="modal-input" id="modalCifInput" placeholder="CIF / NIF">
+    <input class="modal-input" id="modalRazonSocialInput" placeholder="Razón social">
+    <div class="modal-actions"><button class="btn ghost" onclick="cerrarModalDatosFiscales()">Cancelar</button><button class="btn primary" onclick="guardarDatosFiscales()">Guardar</button></div>
+  </div>
+</div>
+
 <!-- MODAL CUPÓN -->
 <div class="modal-overlay" id="modalCupon">
   <div class="modal">
@@ -533,7 +561,7 @@ button{touch-action:manipulation}
 // KAMISUITE — Ficha Cliente CRM Móvil v1.0.0
 // Mismo protocolo postMessage que el widget desktop v1.7.x.
 // =====================================================
-const TAG = '[FichaCliente][WidgetMobile][1.1.2]';
+const TAG = '[FichaCliente][WidgetMobile][1.1.3]';
 let state = {
   contactId:null, cliente:null, profile:null, notasHistorial:[], ventasTienda:[], productosVistos:new Set(), proximasCitas:[], careVisits:[], canalMensaje:'correo', cupones:[], cuponEditandoId:null, cuponEliminandoId:null, cuponDuplicandoDe:null, cuponSearchDebounce:null, cuponTipoActual:'percent',
   // v1.1.1 — flag para el reintento "Crear igualmente" tras aviso duplicado
@@ -591,7 +619,7 @@ function onSearchInput(v){clearTimeout(searchDebounce);if(v.length<2){document.g
 function renderSearchResults(cs){const el=document.getElementById('searchResults');el.innerHTML=cs.length?cs.map(c=>`<div class="result-item" onclick="seleccionarCliente('${esc(c.contactId)}','${esc(c.nombreCompleto)}')"><div class="result-name">${esc(c.nombreCompleto||'—')}</div><div class="result-sub">${esc(c.telefono||'')}${c.email?' · '+esc(c.email):''}</div></div>`).join(''):'<div class="result-item"><div class="result-name">Sin resultados</div></div>';el.classList.add('visible')}
 function seleccionarCliente(id,n){document.getElementById('searchInput').value=n;document.getElementById('searchResults').classList.remove('visible');state.contactId=id;state.ventasTienda=[];state.notasHistorial=[];state.proximasCitas=[];state.productosVistos=new Set();resetPanelsForLoading();setLoading(true);sendToPage('clienteSeleccionado',{contactId:id})}
 document.addEventListener('click',e=>{if(!e.target.closest('.search-card'))document.getElementById('searchResults').classList.remove('visible')});
-function resetPanelsForLoading(){document.getElementById('historialBody').innerHTML=empty('📋','Cargando historial...');document.getElementById('productosGrid').innerHTML='';document.getElementById('proximasCitasBody').innerHTML=empty('📅','Cargando citas...');document.getElementById('notasHistorialBody').innerHTML=empty('🗒','Cargando notas...');document.getElementById('expedienteBody').innerHTML=empty('💚','Cargando expediente...');['infoNotasPublicas','infoNotasColor','infoNotasTratamientos','infoNotasClienteSalon'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});document.getElementById('fieldFechaNacimiento').textContent='—';setTarjetaPrimeVisual({tiene:false});const be=document.getElementById('bonosEmpty');const bb=document.getElementById('bonosBody');if(be)be.style.display='block';if(bb){bb.style.display='none';bb.innerHTML=''}document.getElementById('badgeProximas').textContent='0';document.getElementById('badgeHistorial').textContent='0';document.getElementById('badgeProductos').textContent='0'}
+function resetPanelsForLoading(){document.getElementById('historialBody').innerHTML=empty('📋','Cargando historial...');document.getElementById('productosGrid').innerHTML='';document.getElementById('proximasCitasBody').innerHTML=empty('📅','Cargando citas...');document.getElementById('notasHistorialBody').innerHTML=empty('🗒','Cargando notas...');document.getElementById('expedienteBody').innerHTML=empty('💚','Cargando expediente...');['infoNotasPublicas','infoNotasColor','infoNotasTratamientos','infoNotasClienteSalon'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});document.getElementById('fieldFechaNacimiento').textContent='—';document.getElementById('fieldCif').textContent='—';document.getElementById('fieldRazonSocial').textContent='—';setTarjetaPrimeVisual({tiene:false});const be=document.getElementById('bonosEmpty');const bb=document.getElementById('bonosBody');if(be)be.style.display='block';if(bb){bb.style.display='none';bb.innerHTML=''}document.getElementById('badgeProximas').textContent='0';document.getElementById('badgeHistorial').textContent='0';document.getElementById('badgeProductos').textContent='0'}
 function empty(icon,text){return `<div class="empty-state"><div class="empty-icon">${icon}</div><div>${esc(text)}</div></div>`}
 
 function renderContactData(cl,pr,w){if(!cl)return;setLoading(false);state.cliente=cl;state.profile=pr||{};document.getElementById('noClient').style.display='none';document.getElementById('clientCard').style.display='block';document.getElementById('btnMensaje').disabled=false;document.querySelectorAll('.tab.cliente-required').forEach(t=>t.classList.remove('no-cliente'));switchTab('resumen',document.querySelector('[data-tab=resumen]'));
@@ -605,7 +633,7 @@ function renderContactData(cl,pr,w){if(!cl)return;setLoading(false);state.client
   state.notasHistorial=(cl.notasSalonHistorial||'').split(' | ').map(n=>n.trim()).filter(Boolean);renderNotasHistorial();
 }
 function renderResumen(cl,pr){const notaSalon=pr?.notasSalon||'';const ultima=pr?.ultimaVisita?formatearFechaCorta(pr.ultimaVisita):'Sin visitas registradas';document.getElementById('resumenBody').innerHTML=`<div class="panel"><div class="panel-title">${esc(cl.nombreCompleto||'Cliente')}</div><div class="card-list"><div class="item-card"><div class="item-title">Contacto</div><div class="item-sub">📞 ${esc(cl.telefono||'—')}<br>✉ ${esc(cl.email||'—')}</div></div><div class="item-card"><div class="item-title">Última visita</div><div class="item-sub">${esc(ultima)}</div></div><div class="item-card"><div class="item-title">Nota rápida del salón</div><div class="item-sub">${notaSalon?esc(notaSalon):'Sin nota interna del salón.'}</div></div></div><div class="actions"><button class="btn ghost" onclick="editarCampo('nombre')">Editar contacto</button><button class="btn primary" onclick="abrirModalNota()">+ Nota interna</button></div></div>`}
-function renderDatosPersonales(pr){document.getElementById('fieldSexo').textContent=pr.sexo||'—';const uv=pr.ultimaVisitaCustom||'';document.getElementById('fieldUltimaVisita').textContent=uv?formatearFechaCorta(uv):'—';const fn=pr.fechaNacimiento||'';document.getElementById('fieldFechaNacimiento').textContent=fn?formatearFechaCorta(fn):'—';setTarjetaPrimeVisual(pr.prime||{tiene:false});renderInsignia(pr.badges||[])}
+function renderDatosPersonales(pr){document.getElementById('fieldSexo').textContent=pr.sexo||'—';const uv=pr.ultimaVisitaCustom||'';document.getElementById('fieldUltimaVisita').textContent=uv?formatearFechaCorta(uv):'—';const fn=pr.fechaNacimiento||'';document.getElementById('fieldFechaNacimiento').textContent=fn?formatearFechaCorta(fn):'—';document.getElementById('fieldCif').textContent=pr.cif||'—';document.getElementById('fieldRazonSocial').textContent=pr.razonSocial||'—';setTarjetaPrimeVisual(pr.prime||{tiene:false});renderInsignia(pr.badges||[])}
 function setTarjetaPrimeVisual(prime){const el=document.getElementById('primePill');if(!el)return;const tiene=!!(prime?.tiene);if(tiene){const exp=prime?.membresia?.expirationDate||'';const expShort=exp?formatearFechaCorta(exp):'';el.className='prime-pill activo';el.textContent=expShort?`✓ Activa hasta ${expShort}`:'✓ Activa'}else{el.className='prime-pill inactivo';el.textContent='✓ Sin tarjeta'}}
 function setClubToggleVisual(_activo){/* v1.1.0 shim vacío por compatibilidad */}
 function renderInsignia(badges){const wrap=document.getElementById('fieldInsigniaWrap');if(!badges?.length){wrap.innerHTML='<span class="insignia-pill empty">Sin insignia</span>';return}wrap.innerHTML=badges.map(b=>`<span class="insignia-pill" style="background:${esc(b.backgroundColor||'#33cfc5')};color:${esc(b.textColor||'#fff')};border-color:${esc(b.backgroundColor||'#33cfc5')}">${esc(b.title||'—')}</span>`).join(' ')}
@@ -655,6 +683,10 @@ function editarFechaNacimiento(){if(!state.contactId){showToast('Selecciona un c
 function cerrarModalFechaNacimiento(){document.getElementById('modalFechaNacimiento').classList.remove('visible')}
 function limpiarFechaNacimiento(){document.getElementById('modalFechaNacimientoInput').value='';guardarFechaNacimiento()}
 function guardarFechaNacimiento(){const v=document.getElementById('modalFechaNacimientoInput').value||'';cerrarModalFechaNacimiento();setLoading(true);sendToPage('guardarFechaNacimiento',{contactId:state.contactId,valor:v});if(state.profile)state.profile.fechaNacimiento=v;document.getElementById('fieldFechaNacimiento').textContent=v?formatearFechaCorta(v):'—'}
+// v1.1.3 — CIF/NIF y razón social (campos personalizados del contacto)
+function editarDatosFiscales(){if(!state.contactId){showToast('Selecciona un cliente','error');return}document.getElementById('modalCifInput').value=state.profile?.cif||'';document.getElementById('modalRazonSocialInput').value=state.profile?.razonSocial||'';document.getElementById('modalDatosFiscales').classList.add('visible')}
+function cerrarModalDatosFiscales(){document.getElementById('modalDatosFiscales').classList.remove('visible')}
+function guardarDatosFiscales(){const cif=(document.getElementById('modalCifInput').value||'').trim();const razonSocial=(document.getElementById('modalRazonSocialInput').value||'').trim();cerrarModalDatosFiscales();setLoading(true);sendToPage('guardarDatosFiscales',{contactId:state.contactId,cif,razonSocial});if(state.profile){state.profile.cif=cif;state.profile.razonSocial=razonSocial}document.getElementById('fieldCif').textContent=cif||'—';document.getElementById('fieldRazonSocial').textContent=razonSocial||'—'}
 
 // v1.1.0 — Sub-tarjetas Bonos y Promociones (PRIME + Bonos + Tarjetas)
 function renderBonosPromosTab(pr){const empty=document.getElementById('bonosEmpty');const body=document.getElementById('bonosBody');if(!empty||!body)return;if(!pr||(!pr.prime&&!pr.bonos&&!pr.tarjetas)){empty.style.display='block';body.style.display='none';body.innerHTML='';return}empty.style.display='none';body.style.display='flex';body.innerHTML=renderKbPrimeCard(pr.prime||{})+renderKbBonosCard(pr.bonos||{})+renderKbTarjetasCard(pr.tarjetas||{})}
@@ -697,7 +729,7 @@ function confirmarDesactivarCupon(){const id=state.cuponEliminandoId;if(!id)retu
 // ═════════════════════════════════════════════════════════════
 function abrirModalNuevoContacto(){resetModalNuevoContacto();document.getElementById('modalNuevoContacto').classList.add('visible');setTimeout(()=>{const el=document.getElementById('modalNuevoNombre');if(el)el.focus()},60)}
 function cerrarModalNuevoContacto(){document.getElementById('modalNuevoContacto').classList.remove('visible');resetModalNuevoContacto()}
-function resetModalNuevoContacto(){['modalNuevoNombre','modalNuevoApellido','modalNuevoEmail','modalNuevoTelefono','modalNuevoFechaNacimiento'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});const sel=document.getElementById('modalNuevoSexo');if(sel)sel.value='';const w=document.getElementById('modalNuevoContactoWarn');if(w){w.style.display='none';w.innerHTML=''}const btn=document.getElementById('btnGuardarNuevoContacto');if(btn){btn.disabled=false;btn.textContent='Crear'}state.nuevoContactoDuplicadoConfirmado=false}
+function resetModalNuevoContacto(){['modalNuevoNombre','modalNuevoApellido','modalNuevoEmail','modalNuevoTelefono','modalNuevoFechaNacimiento','modalNuevoCif','modalNuevoRazonSocial'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=''});const sel=document.getElementById('modalNuevoSexo');if(sel)sel.value='';const w=document.getElementById('modalNuevoContactoWarn');if(w){w.style.display='none';w.innerHTML=''}const btn=document.getElementById('btnGuardarNuevoContacto');if(btn){btn.disabled=false;btn.textContent='Crear'}state.nuevoContactoDuplicadoConfirmado=false}
 function mostrarWarnNuevoContacto(msg){const w=document.getElementById('modalNuevoContactoWarn');if(!w)return;w.innerHTML=`<div class="warn-bar">${esc(msg)}</div>`;w.style.display='block'}
 function ocultarWarnNuevoContacto(){const w=document.getElementById('modalNuevoContactoWarn');if(!w)return;w.style.display='none';w.innerHTML=''}
 function guardarNuevoContacto(){
@@ -707,6 +739,8 @@ function guardarNuevoContacto(){
   const telefono=(document.getElementById('modalNuevoTelefono').value||'').trim();
   const fecha=(document.getElementById('modalNuevoFechaNacimiento').value||'').trim();
   const sexo=(document.getElementById('modalNuevoSexo').value||'').trim();
+  const cif=(document.getElementById('modalNuevoCif').value||'').trim();            // v1.1.3
+  const razonSocial=(document.getElementById('modalNuevoRazonSocial').value||'').trim(); // v1.1.3
   if(!nombre){mostrarWarnNuevoContacto('El nombre es obligatorio.');return}
   if(!email&&!telefono){mostrarWarnNuevoContacto('Indica al menos un email o un teléfono.');return}
   const btn=document.getElementById('btnGuardarNuevoContacto');
@@ -715,6 +749,8 @@ function guardarNuevoContacto(){
   const payload={nombre,apellido,email,telefono};
   if(fecha)payload.fechaNacimiento=fecha;
   if(sexo)payload.sexo=sexo;
+  if(cif)payload.cif=cif;                         // v1.1.3
+  if(razonSocial)payload.razonSocial=razonSocial; // v1.1.3
   if(state.nuevoContactoDuplicadoConfirmado)payload.allowDuplicates=true;
   sendToPage('crearContacto',payload);
 }
