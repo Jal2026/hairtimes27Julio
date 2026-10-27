@@ -1,6 +1,35 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.117  ·  CIF/NIF y razón social del cliente
+ *
+ *   Pareja: page code v1.0.49 + recepcionLogic v2.2.0 +
+ *   facturacionSalonLogic v1.0.9. Los dos datos van a campos
+ *   personalizados del contacto (custom.cif / custom.razon-social).
+ *
+ *   (A) CLIENTE NUEVO y EDITAR CLIENTE. Fila nueva bajo el email:
+ *       «CIF / NIF (opcional)» y «Razón social (opcional)», con las
+ *       clases ks-field-row / ks-field de Nombre y Apellido. Sin CSS nuevo.
+ *       · Nuevo: viajan en 'crearCliente' como `cif` y `razonSocial`.
+ *       · Editar: los campos abren desactivados («Cargando…») y se piden
+ *         con 'leerDatosFiscales' (origen 'editar'). Se activan con el
+ *         valor guardado. Si no se pueden leer, siguen desactivados y no
+ *         se envían: nunca se borra un CIF por no haberlo podido leer.
+ *         Solo se envían si cambian.
+ *   (B) FACTURA DE LA CITA. Al pulsar «📄 Factura» o «Convertir a
+ *       factura», el formulario se rellena con el CIF y la razón social de
+ *       la ficha (origen 'factura'), si el operador no ha empezado a
+ *       escribir. Antes salía siempre vacío y había que volver a teclearlo.
+ *   (C) TIENDA. Con el cliente ya cargado, el paso de cliente se rellena
+ *       igual (origen 'tienda'). Al dar de alta un cliente desde TIENDA, el
+ *       CIF y la razón social viajan ya en 'crearCliente'.
+ *   (D) MENSAJES. Al crear o editar un cliente ya no se muestra el texto
+ *       de Wix (en inglés): `_mensajeErrorContacto` traduce el `code` del
+ *       backend (email o teléfono de otro cliente, o error genérico). Si
+ *       la creación o la edición fallan, el botón vuelve a estar disponible.
+ *       Si el cliente se guarda pero el CIF no, un aviso lo dice.
+ *   Nada más cambia.
+ *
  * VERSION: 1.1.116  ·  Cita enlazada: marca en la agenda y en la cita
  *
  *   Pareja backend: recepcionProLogic v1.0.62. Un servicio con servicio
@@ -2116,7 +2145,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.116]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.117]';
 
   // ─── helpers ───
   function esc(s) {
@@ -4056,14 +4085,20 @@ button { font-family: inherit; cursor: pointer; }
           if (r.ok && r.cliente) {
             this._closeBlankForm();
             this._seleccionarCliente(r.cliente);
-            this._toast('Cliente creado');
+            // v1.1.117 — aviso si el cliente se creó pero el CIF no se guardó.
+            this._toast(r.datosFiscales && r.datosFiscales.ok === false
+              ? 'Cliente creado, pero no se han podido guardar el CIF/NIF y la razón social. Puedes añadirlos al emitir la factura.'
+              : 'Cliente creado');
             // v1.1.84 — si el alta venía del botón TIENDA, encadenar la venta.
             if (this._tiendaEsperandoCliente) {
               this._tiendaEsperandoCliente = false;
               this._abrirVentaTienda();
             }
           } else {
-            this._toast('Error: ' + (r.error?.message || 'no se pudo crear'));
+            // v1.1.117 — mensaje propio, nunca el texto de Wix.
+            this._toast(this._mensajeErrorContacto(r.error));
+            const bCr = this.shadowRoot.getElementById('bsave');
+            if (bCr) { bCr.textContent = 'Crear'; bCr.disabled = false; }
             if (this._tiendaEsperandoCliente) {
               this._tiendaEsperandoCliente = false;
               const bTd = this.shadowRoot.getElementById('tdOk');
@@ -4085,12 +4120,21 @@ button { font-family: inherit; cursor: pointer; }
             };
             this._closeBlankForm();
             this._renderClienteSelected();
-            this._toast('Cliente actualizado ✓');
+            // v1.1.117 — aviso si el cliente se guardó pero el CIF no.
+            this._toast(data.datosFiscales && data.datosFiscales.ok === false
+              ? 'Cliente actualizado, pero no se han podido guardar el CIF/NIF y la razón social.'
+              : 'Cliente actualizado ✓');
           } else {
-            this._toast('Error al editar: ' + (data.error?.message || 'desconocido'));
+            // v1.1.117 — mensaje propio, nunca el texto de Wix, y el botón
+            // vuelve a estar disponible para corregir y reintentar.
+            this._toast(this._mensajeErrorContacto(data.error));
+            const bEd = this.shadowRoot.getElementById('bsave');
+            if (bEd) { bEd.textContent = 'Guardar'; bEd.disabled = false; }
           }
           break;
         }
+        // v1.1.117 — CIF/NIF y razón social del contacto.
+        case 'datosFiscales': this._onDatosFiscales(p); break;
         case 'error': this._toast(p.message || 'Error'); break;
         case 'caja-data':
           this._cajaData = p.data || {};
@@ -4861,6 +4905,7 @@ button { font-family: inherit; cursor: pointer; }
         <div class="ks-field-row"><label class="ks-field"><span>Nombre</span><input id="cfNombre" autofocus></label><label class="ks-field"><span>Apellido</span><input id="cfApellido"></label></div>
         <label class="ks-field"><span>Teléfono</span><div style="display:flex;gap:8px;align-items:stretch;">${this._renderSelectorPrefijo('+34', 'cfTelPre')}<input id="cfTel" style="flex:1;" placeholder="Número sin prefijo"></div></label>
         <label class="ks-field"><span>Email (opcional)</span><input id="cfEmail"></label>
+        <div class="ks-field-row"><label class="ks-field"><span>CIF / NIF (opcional)</span><input id="cfCif"></label><label class="ks-field"><span>Razón social (opcional)</span><input id="cfRazon"></label></div>
         <div class="ks-blank-foot"><button class="ks-detail-cancel" id="bcancel">Cancelar</button><button class="ks-detail-add" id="bsave">Crear</button></div>`;
       scrim.appendChild(form); root.appendChild(scrim);
       form.querySelector('#bx').addEventListener('click', () => this._closeBlankForm());
@@ -4871,7 +4916,12 @@ button { font-family: inherit; cursor: pointer; }
         const prefijo = form.querySelector('#cfTelPre').value;
         const numero = form.querySelector('#cfTel').value.trim();
         const telefono = numero ? `${prefijo} ${numero}` : '';
-        this._sendToPage('crearCliente', { nombre, apellido: form.querySelector('#cfApellido').value.trim(), telefono, email: form.querySelector('#cfEmail').value.trim() });
+        this._sendToPage('crearCliente', {
+          nombre, apellido: form.querySelector('#cfApellido').value.trim(), telefono, email: form.querySelector('#cfEmail').value.trim(),
+          // v1.1.117 — datos fiscales (opcionales)
+          cif: form.querySelector('#cfCif').value.trim(),
+          razonSocial: form.querySelector('#cfRazon').value.trim()
+        });
         const b = form.querySelector('#bsave'); b.textContent = 'Creando…'; b.disabled = true;
       });
     }
@@ -4897,8 +4947,13 @@ button { font-family: inherit; cursor: pointer; }
         <div class="ks-field-row"><label class="ks-field"><span>Nombre</span><input id="cfNombre" autofocus value="${esc(firstName)}"></label><label class="ks-field"><span>Apellido</span><input id="cfApellido" value="${esc(lastName)}"></label></div>
         <label class="ks-field"><span>Teléfono</span><div style="display:flex;gap:8px;align-items:stretch;">${this._renderSelectorPrefijo(prefijo, 'cfTelPre')}<input id="cfTel" style="flex:1;" placeholder="Número sin prefijo" value="${esc(numero)}"></div></label>
         <label class="ks-field"><span>Email (opcional)</span><input id="cfEmail" value="${esc(c.email || '')}"></label>
+        <div class="ks-field-row"><label class="ks-field"><span>CIF / NIF (opcional)</span><input id="cfCif" disabled placeholder="Cargando…"></label><label class="ks-field"><span>Razón social (opcional)</span><input id="cfRazon" disabled placeholder="Cargando…"></label></div>
         <div class="ks-blank-foot"><button class="ks-detail-cancel" id="bcancel">Cancelar</button><button class="ks-detail-add" id="bsave">Guardar</button></div>`;
       scrim.appendChild(form); root.appendChild(scrim);
+      // v1.1.117 — pedir CIF y razón social guardados. Los campos se
+      // activan al llegar 'datosFiscales' (ver _onDatosFiscales).
+      this._editFiscal = { contactId: c.contactId, cargado: false, cif: '', razonSocial: '' };
+      this._sendToPage('leerDatosFiscales', { contactId: c.contactId, origen: 'editar' });
       form.querySelector('#bx').addEventListener('click', () => this._closeBlankForm());
       form.querySelector('#bcancel').addEventListener('click', () => this._closeBlankForm());
       form.querySelector('#bsave').addEventListener('click', () => {
@@ -4907,18 +4962,91 @@ button { font-family: inherit; cursor: pointer; }
         const pre = form.querySelector('#cfTelPre').value;
         const num = form.querySelector('#cfTel').value.trim();
         const telefono = num ? `${pre} ${num}` : '';
-        this._sendToPage('editarContacto', {
+        const payloadEd = {
           contactId: c.contactId,
           nombre,
           apellido: form.querySelector('#cfApellido').value.trim(),
           telefono,
           email: form.querySelector('#cfEmail').value.trim()
-        });
+        };
+        // v1.1.117 — CIF / razón social solo si se leyeron bien y cambian.
+        const ef = this._editFiscal;
+        if (ef && ef.cargado && ef.contactId === c.contactId) {
+          const cifNuevo = form.querySelector('#cfCif').value.trim();
+          const razonNueva = form.querySelector('#cfRazon').value.trim();
+          if (cifNuevo !== ef.cif) payloadEd.cif = cifNuevo;
+          if (razonNueva !== ef.razonSocial) payloadEd.razonSocial = razonNueva;
+        }
+        this._sendToPage('editarContacto', payloadEd);
         const b = form.querySelector('#bsave'); b.textContent = 'Guardando…'; b.disabled = true;
       });
     }
 
     _closeBlankForm() { const s = this.shadowRoot.getElementById('blankScrim'); if (s) s.remove(); }
+
+    // v1.1.117 — Mensaje propio para errores al crear o editar un cliente.
+    // `err.code` lo pone recepcionLogic v2.2.0. Nunca se muestra el texto
+    // de Wix.
+    _mensajeErrorContacto(err) {
+      const code = err && err.code;
+      if (code === 'DUPLICATE_EMAIL') return 'Ese email ya lo tiene otro cliente. Búscalo en el buscador o pon otro email.';
+      if (code === 'DUPLICATE_PHONE') return 'Ese teléfono ya lo tiene otro cliente. Búscalo en el buscador o pon otro teléfono.';
+      if (code === 'DUPLICATE') return 'Ese email o teléfono ya lo tiene otro cliente. Búscalo en el buscador.';
+      return 'No se han podido guardar los datos del cliente. Revisa los datos e inténtalo de nuevo.';
+    }
+
+    // v1.1.117 — Respuesta de 'leerDatosFiscales'. `origen` dice qué
+    // formulario rellenar: 'editar' (Editar cliente), 'factura' (factura de
+    // la cita) o 'tienda' (paso de cliente de TIENDA).
+    _onDatosFiscales(p) {
+      const d = p.data || {};
+      const ok = !!d.ok;
+      const cif = ok ? String(d.cif || '') : '';
+      const razon = ok ? String(d.razonSocial || '') : '';
+      const root = this.shadowRoot;
+
+      if (p.origen === 'editar') {
+        const st = this._editFiscal;
+        if (!st || st.contactId !== p.contactId) return;
+        const iCif = root.getElementById('cfCif');
+        const iRaz = root.getElementById('cfRazon');
+        if (!iCif || !iRaz) return;                 // el modal ya se cerró
+        if (!ok) {
+          // Siguen desactivados y no se enviarán: no se toca lo guardado.
+          iCif.placeholder = 'No disponible';
+          iRaz.placeholder = 'No disponible';
+          return;
+        }
+        st.cargado = true;
+        st.cif = cif;
+        st.razonSocial = razon;
+        iCif.value = cif; iRaz.value = razon;
+        iCif.placeholder = ''; iRaz.placeholder = '';
+        iCif.disabled = false; iRaz.disabled = false;
+        return;
+      }
+
+      if (p.origen === 'factura') {
+        const r = this._modalReserva;
+        if (!ok || !r || r.contactId !== p.contactId || !this._facturaForm || this._facturaGenerando) return;
+        // Solo si el operador no ha empezado a escribir.
+        if ((this._facturaFormVatId || '').trim() || (this._facturaFormLegalName || '').trim()) return;
+        if (!cif && !razon) return;
+        this._facturaFormVatId = cif;
+        this._facturaFormLegalName = razon;
+        this._renderFacturaSlot();
+        return;
+      }
+
+      if (p.origen === 'tienda') {
+        const cli = this._cliente;
+        if (!ok || !cli || cli.contactId !== p.contactId) return;
+        const iV = root.getElementById('tdVatId');
+        const iL = root.getElementById('tdLegal');
+        if (iV && !iV.value.trim() && cif) iV.value = cif;
+        if (iL && !iL.value.trim() && razon) iL.value = razon;
+      }
+    }
 
     // ═══════════════════════════════════════════════════
     // CLIENTE PROVISIONAL — v1.1.12
@@ -7251,6 +7379,8 @@ button { font-family: inherit; cursor: pointer; }
             this._facturaFormVatId = '';
             this._facturaFormLegalName = '';
             this._renderFacturaSlot();
+            // v1.1.117 — rellenar con el CIF y la razón social de la ficha.
+            if (r.contactId) this._sendToPage('leerDatosFiscales', { contactId: r.contactId, origen: 'factura' });
           });
         }
         return;
@@ -7319,6 +7449,8 @@ button { font-family: inherit; cursor: pointer; }
         this._facturaFormVatId = '';
         this._facturaFormLegalName = '';
         this._renderFacturaSlot();
+        // v1.1.117 — rellenar con el CIF y la razón social de la ficha.
+        if (r.contactId) this._sendToPage('leerDatosFiscales', { contactId: r.contactId, origen: 'factura' });
       });
     }
 
@@ -8090,6 +8222,8 @@ button { font-family: inherit; cursor: pointer; }
         </div>`);
       box.querySelector('#tdX').addEventListener('click', () => this._closeSubModal());
       box.querySelector('#tdCancel').addEventListener('click', () => this._closeSubModal());
+      // v1.1.117 — cliente ya cargado: rellenar CIF y razón social de su ficha.
+      if (yaIdentificado) this._sendToPage('leerDatosFiscales', { contactId: cli.contactId, origen: 'tienda' });
       box.querySelector('#tdOk').addEventListener('click', () => {
         // Los datos fiscales se guardan siempre: viajan al paso de factura
         // y se persisten en la ficha del cliente al emitirla.
@@ -8107,7 +8241,11 @@ button { font-family: inherit; cursor: pointer; }
         box.querySelector('#tdOk').disabled = true;
         // Bandera: al llegar 'clienteCreado' se abre la venta directamente.
         this._tiendaEsperandoCliente = true;
-        this._sendToPage('crearCliente', { nombre, apellido, telefono, email });
+        // v1.1.117 — el CIF y la razón social se guardan ya en el alta.
+        this._sendToPage('crearCliente', {
+          nombre, apellido, telefono, email,
+          cif: this._tiendaVatId, razonSocial: this._tiendaLegalName
+        });
       });
     }
 
