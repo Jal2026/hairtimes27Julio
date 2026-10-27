@@ -1,8 +1,30 @@
 // =====================================================
 // KAMISUITE - Backend Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.15
-// FECHA: 19 de agosto de 2026
+// VERSION: 1.9.16
+// FECHA: 27 de octubre de 2026
+//
+// v1.9.16 — CIF/NIF Y RAZÓN SOCIAL EN EL CRM.
+//   Mismos campos personalizados que Recepción PRO (recepcionLogic
+//   v2.2.0) y facturación (facturacionSalonLogic v1.0.9):
+//   'custom.cif' y 'custom.razon-social'. Sirven para autónomos y
+//   empresas. El campo de Wix Facturas (invoices.vatId) no se usa.
+//   · getFichaCliente: `profile.cif` y `profile.razonSocial`. Si
+//     'custom.cif' está vacío se lee el otro campo "CIF" del panel
+//     ('custom.cif-empresa').
+//   · extraerPatchCamposCRM: devuelve también `cif` y `razonSocial`.
+//   · actualizarContactoCRM acepta `cif` y `razonSocial` (undefined = no
+//     se tocan). Claves LITERALES: no pasan por resolverKeyCampoCRM
+//     porque en Hair-Times hay dos campos con el nombre visible "CIF" y
+//     el resolver, que también compara por nombre visible, podría
+//     escribir en el que no es. Vaciar el CIF vacía también
+//     'custom.cif-empresa' si tiene valor.
+//   · crearContactoCRM acepta `cif` y `razonSocial`. Van en una
+//     escritura APARTE después del alta (guardarDatosFiscalesCRM, mismo
+//     patrón READ-MERGE-UPDATE que recepcionLogic v2.2.0): si Wix la
+//     rechaza, el contacto queda creado igual y la respuesta lo dice en
+//     `datosFiscales: { ok:false }`.
+//   Nada más cambia.
 //
 // v1.9.15 — LA AUDITORÍA DE BORRADO DEVUELVE CONTENIDO, NO SOLO CIFRAS.
 //   Cambia UNA función interna (auditarBorradoInterno) y el shape de
@@ -299,7 +321,7 @@ import { members } from 'wix-members.v2';
 import { accounts } from 'wix-loyalty.v2';
 import { mediaManager } from 'wix-media-backend';
 
-const VERSION = '1.9.15';
+const VERSION = '1.9.16';
 const TAG = `[FichaCliente][${VERSION}]`;
 
 // Colecciones CMS
@@ -371,6 +393,13 @@ const FIELD_NOTAS_CLIENTE   = 'notas_fonyemjtcfteotgxzkaamjbuwmyuz';
 const FIELD_ULTIMA_VISITA   = 'ultima_visita';
 const FIELD_CLUB_KALONICE   = 'club_kalonice';
 const FIELD_SEXO            = 'sexo';
+// v1.9.16 — Datos fiscales. Claves leídas en Hair-Times el 27-oct-2026,
+// las mismas que usan recepcionLogic v2.2.0 y facturacionSalonLogic
+// v1.0.9. FIELD_CIF_RESPALDO es el otro campo "CIF" del panel: solo se
+// lee si FIELD_CIF está vacío.
+const FIELD_CIF             = 'custom.cif';
+const FIELD_CIF_RESPALDO    = 'custom.cif-empresa';
+const FIELD_RAZON_SOCIAL    = 'custom.razon-social';
 
 const CRM_FIELD_DEFS = {
   notasPublicas: {
@@ -788,6 +817,53 @@ function parseNotasClienteSalonHistorico(raw) {
     .reverse();
 }
 
+// v1.9.16 — CIF y razón social de un contacto (wix-crm-backend devuelve
+// info.extendedFields como objeto plano { clave: valor }).
+function leerDatosFiscalesCRM(ef) {
+  const e = ef && typeof ef === 'object' ? ef : {};
+  return {
+    cif: String(e[FIELD_CIF] || e[FIELD_CIF_RESPALDO] || '').trim(),
+    razonSocial: String(e[FIELD_RAZON_SOCIAL] || '').trim()
+  };
+}
+
+// v1.9.16 — Guarda CIF y/o razón social en una escritura APARTE.
+// Copia del patrón de recepcionLogic v2.2.0 (guardarDatosFiscales):
+// getContact → revision → updateContact({ contactId, revision },
+// { extendedFields }, { suppressAuth }). undefined = no se toca.
+// Devuelve { ok, sinCambios?, error? }.
+async function guardarDatosFiscalesCRM(contactId, datos) {
+  const ext = {};
+  if (datos.cif !== undefined) ext[FIELD_CIF] = String(datos.cif || '').trim();
+  if (datos.razonSocial !== undefined) ext[FIELD_RAZON_SOCIAL] = String(datos.razonSocial || '').trim();
+  if (!Object.keys(ext).length) return { ok: true, sinCambios: true };
+
+  try {
+    const elevatedGet = elevate(contacts.getContact);
+    const current = await elevatedGet(contactId);
+    if (!current || !current.revision) {
+      throw new Error('Contacto no encontrado o sin revision');
+    }
+    const actual = current?.info?.extendedFields || {};
+    Object.keys(ext).forEach(k => {
+      if (String(actual[k] || '').trim() === ext[k]) delete ext[k];
+    });
+    if (!Object.keys(ext).length) return { ok: true, sinCambios: true };
+
+    const elevatedUpdate = elevate(contacts.updateContact);
+    await elevatedUpdate(
+      { contactId, revision: current.revision },
+      { extendedFields: ext },
+      { suppressAuth: true }
+    );
+    console.log(`${TAG} Datos fiscales guardados: ${contactId} | ${Object.keys(ext).join(',')}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(`${TAG} Error guardando datos fiscales de ${contactId}:`, e);
+    return { ok: false, error: safeErr(e) };
+  }
+}
+
 function extraerPatchCamposCRM(contactRaw) {
   const ef = contactRaw?.info?.extendedFields || {};
   const ultimaVisitaRaw = leerCampoCRM(ef, 'ultimaVisita').value;
@@ -816,7 +892,9 @@ function extraerPatchCamposCRM(contactRaw) {
     ultimaVisitaCustom,
     clubKalonice: { activo: normalizarClubActivo(leerCampoCRM(ef, 'clubKalonice').value) },
     sexo: String(leerCampoCRM(ef, 'sexo').value || ''),
-    fechaNacimiento: extraerFechaNacimientoDeContacto(contactRaw)
+    fechaNacimiento: extraerFechaNacimientoDeContacto(contactRaw),
+    // v1.9.16 — datos fiscales
+    ...leerDatosFiscalesCRM(ef)
   };
 }
 
@@ -1597,6 +1675,8 @@ export const getFichaCliente = webMethod(Permissions.Anyone, async (payload) => 
     const notasColor       = anotaciones.notasColor;
     const notasTratamient  = anotaciones.notasTratamientos;
     const sexo             = String(leerCampoCRM(ef, 'sexo').value || '');
+    // v1.9.16 — CIF/NIF y razón social
+    const datosFiscales    = leerDatosFiscalesCRM(ef);
     const clubActivo       = normalizarClubActivo(leerCampoCRM(ef, 'clubKalonice').value);
     const ultimaVisitaRaw  = leerCampoCRM(ef, 'ultimaVisita').value;
 
@@ -1713,6 +1793,9 @@ export const getFichaCliente = webMethod(Permissions.Anyone, async (payload) => 
         clubKalonice: { activo: clubActivo }, // legacy, ya no lo pinta el widget
         sexo,
         fechaNacimiento: cliente.fechaNacimiento || '',
+        // v1.9.16 — CIF/NIF y razón social
+        cif:         datosFiscales.cif,
+        razonSocial: datosFiscales.razonSocial,
         badges,
         memberId: memberIdFinal,
 
@@ -1803,7 +1886,9 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
       ultimaVisita,
       clubKalonice,
       sexo,
-      fechaNacimiento // v1.9.8 — NATIVO Wix Contacts (contact.info.birthdate)
+      fechaNacimiento, // v1.9.8 — NATIVO Wix Contacts (contact.info.birthdate)
+      cif,             // v1.9.16 — 'custom.cif' (undefined = no se toca)
+      razonSocial      // v1.9.16 — 'custom.razon-social' (undefined = no se toca)
     } = payload || {};
 
     console.log(`${TAG} actualizarContactoCRM: ${contactId}`);
@@ -1883,6 +1968,21 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
 
     if (sexo !== undefined) {
       await setCampoCRM('sexo', String(sexo || ''));
+    }
+
+    // v1.9.16 — Datos fiscales con claves LITERALES (ver cabecera: no pasan
+    // por resolverKeyCampoCRM).
+    if (cif !== undefined) {
+      const vCif = String(cif || '').trim();
+      ext[FIELD_CIF] = vCif;
+      // Vaciar el CIF vacía también el campo de respaldo si tiene valor;
+      // si no, al releer el contacto el CIF reaparecería.
+      if (!vCif && String(currentEf[FIELD_CIF_RESPALDO] || '').trim()) {
+        ext[FIELD_CIF_RESPALDO] = '';
+      }
+    }
+    if (razonSocial !== undefined) {
+      ext[FIELD_RAZON_SOCIAL] = String(razonSocial || '').trim();
     }
     if (clubKalonice !== undefined) {
       await setCampoCRM('clubKalonice', !!clubKalonice);
@@ -2422,7 +2522,9 @@ export const crearContactoCRM = webMethod(Permissions.Anyone, async (payload) =>
       email,
       fechaNacimiento, // opcional — nativo Wix (contactInfo.birthdate)
       sexo,            // opcional — extendedFields['custom.sexo']
-      allowDuplicates  // opcional — por defecto false; el widget lo activa tras aviso
+      allowDuplicates, // opcional — por defecto false; el widget lo activa tras aviso
+      cif,             // v1.9.16 — opcional, escritura aparte tras el alta
+      razonSocial      // v1.9.16 — opcional, escritura aparte tras el alta
     } = payload || {};
 
     console.log(`${TAG} crearContactoCRM: nombre="${nombre||''}" tel="${telefono||''}" email="${email||''}"`);
@@ -2508,10 +2610,23 @@ export const crearContactoCRM = webMethod(Permissions.Anyone, async (payload) =>
 
     console.log(`${TAG} crearContactoCRM OK: ${newId} | nombre="${nName}" apellido="${nApe}"`);
 
+    // v1.9.16 — CIF / razón social en escritura aparte: si fallan, el
+    // contacto ya está creado.
+    let datosFiscales = null;
+    const nCif   = String(cif || '').trim();
+    const nRazon = String(razonSocial || '').trim();
+    if (nCif || nRazon) {
+      datosFiscales = await guardarDatosFiscalesCRM(newId, {
+        cif: nCif || undefined,
+        razonSocial: nRazon || undefined
+      });
+    }
+
     return {
       ok: true,
       version: VERSION,
       contactId: newId,
+      datosFiscales,
       cliente: formatearContacto(createdContact)
     };
 
