@@ -3,11 +3,32 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KAMISUITE · CRM Contactos y Clientes v1.7.4</title>
+<title>KAMISUITE · CRM Contactos y Clientes v1.8.3</title>
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* ══════════════════════════════════════════════════════
-   KAMISUITE — CRM Clientes v1.7.4 CSS
+   KAMISUITE — CRM Clientes v1.8.3 CSS
+   v1.8.3 — Marca de PRODUCTO ACTIVO en la lista de duplicados.
+            Clase nueva: .dup-prod-pill.
+   v1.8.2 — Marca de FICHA TÉCNICA en la lista de duplicados.
+            Clase nueva: .dup-ficha-pill.
+   v1.8.1 — El modal de borrado enseña CONTENIDO, no contadores.
+            Clases nuevas: .borrar-grave, .borrar-grave-num,
+            .borrar-texto.
+   v1.8.0 — Borrado de contacto + pestaña Duplicados:
+            · Botón "Eliminar contacto" al final del bloque de datos
+              personales, en la ficha del cliente.
+            · Pestaña "Duplicados" junto a Cupones. Sin la clase
+              .cliente-required, igual que Cupones: no necesita cliente
+              seleccionado para funcionar.
+            · Modal de borrado con auditoría previa. Nunca borra sin
+              haber preguntado antes al backend qué desaparece.
+            · Reutiliza .modal-overlay, .modal, .modal-title,
+              .modal-sub, .modal-actions, .btn-cancel, .warn-bar,
+              .section-header, .history-table, .empty-state y .toast
+              ya existentes. Clases nuevas: .btn-borrar-contacto,
+              .btn-danger, .borrar-block, .borrar-line, .dup-group,
+              .dup-badge, .dup-row, .btn-dup-del.
    v1.7.4 — HOTFIX modal Nuevo contacto:
      · Nunca se pinta texto crudo Wix en pantalla — mensajes
        del backend se traducen a español fijo dentro del modal.
@@ -292,6 +313,56 @@ html, body {
 .cupones-filter-select { padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-family: 'Bai Jamjuree', sans-serif; font-size: 11.5px; color: var(--text); cursor: pointer; }
 .btn-nuevo { padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--orange); background: var(--orange); color: #fff; font-family: 'Bai Jamjuree', sans-serif; font-size: 11.5px; font-weight: 700; cursor: pointer; transition: background .15s; }
 .btn-nuevo:hover { background: #d06a1a; }
+
+/* ══ v1.8.0 — Borrado de contacto ══ */
+.btn-borrar-contacto { width: 100%; margin-top: 10px; padding: 7px; border-radius: var(--radius-sm); border: 1px solid #fecaca; background: var(--red-lt); color: var(--red); font-family: 'Bai Jamjuree', sans-serif; font-size: 11px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all .15s; }
+.btn-borrar-contacto:hover { background: var(--red); color: #fff; border-color: var(--red); }
+.btn-danger { padding: 7px 16px; border-radius: var(--radius-sm); border: none; background: var(--red); color: #fff; font-family: 'Bai Jamjuree', sans-serif; font-size: 12px; font-weight: 700; cursor: pointer; transition: background .15s; }
+.btn-danger:hover { background: #b91c1c; }
+.btn-danger:disabled { opacity: .5; cursor: default; }
+.borrar-block { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 10px; background: var(--surface2); }
+.borrar-block-title { font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--text3); margin-bottom: 7px; }
+.borrar-line { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--text); padding: 2px 0; }
+.borrar-line span:last-child { color: var(--text2); font-weight: 600; }
+.borrar-block.bloqueo { background: var(--red-lt); border-color: #fecaca; }
+.borrar-block.bloqueo .borrar-block-title { color: var(--red); }
+.borrar-block.aviso { background: var(--amber-lt); border-color: #fde68a; }
+.borrar-block.aviso .borrar-block-title { color: var(--amber); }
+.borrar-block.conserva { background: var(--green-lt); border-color: #a7f3d0; }
+.borrar-block.conserva .borrar-block-title { color: var(--green); }
+.borrar-item { font-size: 11.5px; color: var(--text); padding: 2px 0; }
+.borrar-nombre { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+.borrar-grave { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.borrar-grave-num { font-size: 17px; font-weight: 700; color: var(--text); line-height: 1; }
+.borrar-grave-txt { font-size: 11.5px; color: var(--text2); }
+.borrar-texto { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--orange); border-radius: var(--radius-sm); padding: 7px 9px; margin: 5px 0; font-size: 11.5px; color: var(--text); white-space: pre-wrap; word-break: break-word; max-height: 110px; overflow-y: auto; }
+.borrar-texto-label { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text3); margin-top: 8px; }
+.borrar-block.ficha { background: var(--orange-lt); border-color: #fcd9b6; }
+.borrar-block.ficha .borrar-block-title { color: var(--orange); }
+
+/* ══ v1.8.0 — Pestaña Duplicados ══ */
+.dup-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.dup-summary { font-size: 11px; color: var(--text2); }
+.dup-group { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; }
+.dup-group-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface2); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.dup-badge { display: inline-flex; padding: 2px 8px; border-radius: 20px; font-size: 9.5px; font-weight: 700; letter-spacing: .05em; }
+.dup-badge.tel    { background: var(--red-lt);    color: var(--red);    }
+.dup-badge.email  { background: var(--blue-lt);   color: var(--blue);   }
+.dup-badge.nombre { background: var(--purple-lt); color: var(--purple); }
+.dup-valor { font-size: 12px; font-weight: 700; color: var(--text); }
+.dup-count { font-size: 10.5px; color: var(--text3); margin-left: auto; }
+.dup-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.dup-row:last-child { border-bottom: none; }
+.dup-row:hover { background: var(--surface2); }
+.dup-row-main { flex: 1; min-width: 0; }
+.dup-row-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.dup-row-sub { font-size: 10.5px; color: var(--text3); }
+.btn-dup-ver { padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text2); font-family: 'Bai Jamjuree', sans-serif; font-size: 10.5px; font-weight: 600; cursor: pointer; }
+.btn-dup-ver:hover { border-color: var(--orange); color: var(--orange); }
+.btn-dup-del { padding: 5px 10px; border-radius: var(--radius-sm); border: 1px solid #fecaca; background: var(--red-lt); color: var(--red); font-family: 'Bai Jamjuree', sans-serif; font-size: 10.5px; font-weight: 700; cursor: pointer; }
+.btn-dup-del:hover { background: var(--red); color: #fff; }
+.dup-ficha-pill { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: 20px; font-size: 9px; font-weight: 700; letter-spacing: .05em; background: var(--green-lt); color: var(--green); margin-left: 6px; vertical-align: middle; }
+.dup-prod-pill { display: inline-flex; align-items: center; gap: 3px; padding: 1px 7px; border-radius: 20px; font-size: 9px; font-weight: 700; letter-spacing: .05em; background: var(--purple-lt); color: var(--purple); margin-left: 4px; vertical-align: middle; }
 .cupon-tipo-pill { display: inline-flex; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; }
 .cupon-tipo-percent { background: var(--purple-lt); color: var(--purple); }
 .cupon-tipo-money   { background: var(--blue-lt);   color: var(--blue);   }
@@ -474,6 +545,11 @@ html, body {
               </div>
             </div>
           </div>
+
+          <!-- v1.8.0 — Borrado del contacto. Abre el modal, que empieza
+               preguntando al backend qué desaparecería. Nunca borra
+               directamente desde aquí. -->
+          <button class="btn-borrar-contacto" onclick="abrirModalBorrarContacto()">🗑 Eliminar contacto</button>
         </div>
       </div>
       <div class="stats-row" id="statsRow" style="display:none">
@@ -544,6 +620,9 @@ html, body {
         <div class="tab cliente-required" data-tab="expediente" onclick="switchTab('expediente',this)">💚 Expediente</div>
         <div class="tab cliente-required" data-tab="bonos" onclick="switchTab('bonos',this)">🎁 Bonos y Promociones</div>
         <div class="tab" data-tab="cupones" onclick="switchTab('cupones',this)">🎟 Cupones</div>
+        <!-- v1.8.0 — Sin .cliente-required a propósito: igual que Cupones,
+             esta pestaña funciona sin cliente seleccionado. -->
+        <div class="tab" data-tab="duplicados" onclick="switchTab('duplicados',this)">👥 Duplicados <span class="tab-badge" id="badgeDuplicados">0</span></div>
       </div>
       <div class="tab-content">
 
@@ -732,6 +811,27 @@ html, body {
           </div>
         </div>
 
+        <!-- ══ v1.8.0 — DUPLICADOS ══════════════════════════════════ -->
+        <div class="tab-panel" id="tab-duplicados">
+          <div class="section-header">
+            <div class="section-title">Contactos duplicados</div>
+            <button class="btn-nuevo" onclick="cargarDuplicados(true)">↻ Analizar</button>
+          </div>
+          <div class="dup-toolbar">
+            <label class="dup-summary" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="dupIncluirNombres" checked onchange="cargarDuplicados(true)">
+              Incluir coincidencias solo por nombre
+            </label>
+            <div class="dup-summary" id="dupResumen" style="margin-left:auto"></div>
+          </div>
+          <div id="dupBody">
+            <div class="empty-state">
+              <div class="empty-icon">👥</div>
+              <div class="empty-text">Pulsa Analizar para revisar todos los contactos.</div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -739,6 +839,25 @@ html, body {
 <div class="toast" id="toast"></div>
 
 <!-- MODALES intactos v1.7.1 + nuevo modal fecha nacimiento v1.7.2 -->
+<!-- ══ v1.8.0 — Modal de borrado de contacto ══════════════════════
+     Se abre SIEMPRE en estado "auditando": el contenido no se pinta
+     hasta que el backend responde qué desaparecería. El botón rojo
+     nace deshabilitado y solo se habilita si el backend dice que el
+     contacto es borrable. -->
+<div class="modal-overlay" id="modalBorrarContacto">
+  <div class="modal">
+    <div class="modal-title">🗑 Eliminar contacto</div>
+    <div class="borrar-nombre" id="borrarNombre">—</div>
+    <div class="modal-sub" id="borrarSub">Comprobando qué datos tiene este contacto...</div>
+    <div class="warn-bar" id="borrarWarn" style="display:none"></div>
+    <div id="borrarCuerpo"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="cerrarModalBorrarContacto()">Cancelar</button>
+      <button class="btn-danger" id="btnConfirmarBorrado" disabled onclick="confirmarBorradoContacto()">Eliminar definitivamente</button>
+    </div>
+  </div>
+</div>
+
 <!-- v1.7.3 — Modal alta de contacto desde CRM -->
 <div class="modal-overlay" id="modalNuevoContacto">
   <div class="modal">
@@ -934,6 +1053,61 @@ html, body {
 // ══════════════════════════════════════════════════════
 // KAMISUITE — Ficha Cliente Widget v1.7.2
 // ══════════════════════════════════════════════════════
+// v1.8.3 — Marca de PRODUCTO ACTIVO en la lista de duplicados.
+//   · Insignia junto a la de ficha cuando el contacto tiene bono
+//     activo, PRIME activa o tarjeta en vigor (crmToolsLogic v1.1.2).
+//   · Es el dato que decide: un duplicado con producto activo NO se
+//     puede borrar, y el modal lo bloqueará. Verlo en la lista evita
+//     abrirlo para descubrirlo.
+//   · El texto del tooltip llega hecho del backend en `productoTexto`.
+// ══════════════════════════════════════════════════════
+// v1.8.2 — Marca de FICHA TÉCNICA en la lista de duplicados.
+//   · Cada contacto que tenga anotaciones lleva una insignia junto al
+//     nombre. Viene de `tieneFicha`, que devuelve crmToolsLogic v1.1.1.
+//   · Motivo: el salón está metiendo la ficha técnica en uno solo de
+//     los duplicados, y sin la marca hay que abrir uno por uno para
+//     saber en cuál está.
+//   · El resumen de la cabecera dice cuántos contactos con ficha hay
+//     entre los duplicados.
+//   · Sin cambios en el page code: los grupos ya viajaban enteros.
+// ══════════════════════════════════════════════════════
+// v1.8.1 — El modal de borrado enseña CONTENIDO, no contadores.
+//   · pintarAuditoriaBorrado se reescribe sobre `contenido`, la clave
+//     nueva que trae fichaClienteLogic v1.9.15 vía pagecode v1.9.5.
+//   · Orden por gravedad, fijado por Jal: COBROS, BONOS, FICHA DEL
+//     CLIENTE, CITAS. El bloque de la ficha va resaltado.
+//   · Las anotaciones de color, tratamientos y notas se pintan con su
+//     TEXTO a la vista, igual que las notas públicas y la nota que
+//     escribió el cliente. NO se busca ninguna palabra clave: si en
+//     una anotación pone "alérgica a X", lo lee el operador. Un
+//     detector de términos daría por limpia una ficha que dijera "no
+//     tolera el amoniaco", y ese fallo no es asumible.
+//   · Si el shape antiguo llegara sin `contenido` (backend sin
+//     actualizar), se cae al bloque de contadores de v1.8.0 en vez de
+//     romper el modal.
+// ══════════════════════════════════════════════════════
+// v1.8.0 — Borrado de contacto + pestaña Duplicados.
+//   · Botón "Eliminar contacto" al final del bloque de datos
+//     personales. Abre el modal, que NO borra: primero manda
+//     'auditarBorrado' y espera 'borradoAuditoria' para pintar qué
+//     desaparecería y si el contacto es borrable. El botón rojo nace
+//     deshabilitado y solo se habilita si el backend lo autoriza.
+//   · Pestaña "Duplicados" junto a Cupones, sin .cliente-required:
+//     funciona sin cliente seleccionado. Manda 'cargarDuplicados' y
+//     agrupa por teléfono, email y nombre. Cada contacto del grupo
+//     tiene "Ver ficha" y "Eliminar" — el borrado pasa por el mismo
+//     modal y la misma auditoría que el de la ficha.
+//   · El análisis de duplicados NO se relanza al volver a la pestaña:
+//     recorre todos los contactos y es lento. Se dispara la primera
+//     vez y con el botón Analizar.
+//   · Tras borrar, el grupo se recalcula EN LOCAL (state.duplicados),
+//     sin volver a pedir el análisis al backend. Si un grupo se queda
+//     con un solo contacto deja de ser duplicado y desaparece.
+//   · Si el contacto borrado era el que estaba abierto en la ficha,
+//     la pantalla vuelve al estado "sin cliente".
+//   · Ningún texto de error del backend se pinta: el widget usa sus
+//     propios mensajes fijos en español, igual que desde v1.7.4.
+// ══════════════════════════════════════════════════════
 // v1.7.4 — HOTFIX modal Nuevo contacto:
 //   · Case 'contactoCreado' invoca ahora seleccionarCliente(
 //     d.contactId, d.cliente?.nombreCompleto || ''), que dispara
@@ -986,7 +1160,7 @@ html, body {
 // v1.4.0 — Mensajería multi-canal
 // ══════════════════════════════════════════════════════
 
-const TAG = '[FichaCliente][Widget][1.7.4]';
+const TAG = '[FichaCliente][Widget][1.8.3]';
 
 let state = {
   contactId: null,
@@ -1005,7 +1179,13 @@ let state = {
   cuponSearchDebounce: null,
   tabPorDefectoSinCliente: 'cupones',
   // v1.7.3 — estado del modal "Nuevo contacto"
-  nuevoContactoDuplicadoConfirmado: false // true tras aviso, reintenta con allowDuplicates
+  nuevoContactoDuplicadoConfirmado: false, // true tras aviso, reintenta con allowDuplicates
+  // v1.8.0 — borrado de contacto y duplicados
+  borrandoContactId: null,   // contacto al que apunta el modal de borrado
+  borrandoNombre: '',
+  duplicados: [],            // grupos devueltos por el backend
+  duplicadosCargados: false, // evita relanzar el análisis al volver a la pestaña
+  duplicadosCargando: false
 };
 
 let searchDebounce = null;
@@ -1084,6 +1264,62 @@ window.addEventListener('message', ev => {
         const btn = document.getElementById('btnGuardarNuevoContacto');
         if (btn) { btn.disabled = false; btn.textContent = 'Crear'; }
       }
+      break;
+
+    // ══ v1.8.0 — BORRADO DE CONTACTO ══════════════════════════════
+
+    // Respuesta de la auditoría. Es lo único que decide si el botón
+    // rojo se habilita: el widget nunca lo decide por su cuenta.
+    case 'borradoAuditoria':
+      pintarAuditoriaBorrado(d);
+      break;
+
+    case 'contactoEliminado':
+      cerrarModalBorrarContacto();
+      showToast('Contacto eliminado.', 'ok');
+      onContactoEliminado(d.contactId);
+      if (d.truncado) {
+        showToast('Ojo: el contacto tenía muchos registros y puede quedar algún resto en el CMS.', 'error');
+      }
+      break;
+
+    // El backend rechazó el borrado en su segunda auditoría. Puede
+    // pasar aunque el modal dijera que sí: entre abrir y confirmar
+    // alguien pudo venderle un bono. Se repintan los bloqueos.
+    case 'borradoBloqueado':
+      pintarAuditoriaBorrado({
+        contactId: d.contactId,
+        borrable: false,
+        bloqueos: d.bloqueos || [],
+        avisos: [],
+        cascada: null,
+        conserva: null
+      });
+      showToast('No se puede eliminar este contacto.', 'error');
+      break;
+
+    case 'borradoError':
+      mostrarWarnBorrado('No se ha podido completar la operación. Inténtalo de nuevo.');
+      {
+        const btn = document.getElementById('btnConfirmarBorrado');
+        if (btn) { btn.disabled = true; btn.textContent = 'Eliminar definitivamente'; }
+      }
+      break;
+
+    // ══ v1.8.0 — DUPLICADOS ═══════════════════════════════════════
+
+    case 'duplicadosCargados':
+      state.duplicados = d.grupos || [];
+      state.duplicadosCargados = true;
+      state.duplicadosCargando = false;
+      renderDuplicados(d.totalContactos || 0, d.resumen || null, d.truncado === true);
+      break;
+
+    case 'duplicadosError':
+      state.duplicadosCargando = false;
+      document.getElementById('dupBody').innerHTML =
+        '<div class="empty-state"><div class="empty-icon">⚠</div><div class="empty-text">No se ha podido analizar los contactos. Vuelve a pulsar Analizar.</div></div>';
+      showToast('Error analizando duplicados.', 'error');
       break;
   }
 });
@@ -1831,6 +2067,9 @@ function switchTab(n, el) {
   const p = document.getElementById(`tab-${n}`);
   if (p) p.classList.add('active');
   if (n === 'cupones' && state.cupones.length === 0) cargarCupones();
+  // v1.8.0 — El análisis de duplicados recorre TODOS los contactos.
+  // Se lanza una sola vez; después solo con el botón Analizar.
+  if (n === 'duplicados' && !state.duplicadosCargados && !state.duplicadosCargando) cargarDuplicados(false);
 }
 
 function editarCampo(c) {
@@ -2317,6 +2556,375 @@ function guardarNuevoContacto() {
 
   sendToPage('crearContacto', payload);
 }
+
+// ══════════════════════════════════════════════════════
+// v1.8.0 — BORRADO DE CONTACTO
+// ══════════════════════════════════════════════════════
+// El modal NUNCA borra a ciegas. Al abrirse manda 'auditarBorrado' y
+// espera 'borradoAuditoria'. Hasta entonces el botón rojo está
+// deshabilitado, y solo se habilita si el backend responde borrable.
+// El backend vuelve a auditar por su cuenta al confirmar, así que
+// esto es comodidad para el operador, no la única defensa.
+
+// Traducción de códigos del backend a español. El backend nunca manda
+// texto: manda códigos. Los mensajes viven aquí.
+function textoBloqueoBorrado(b) {
+  const n = Number(b && b.cantidad) || 0;
+  switch (b && b.code) {
+    case 'ES_MIEMBRO':
+      return 'Tiene cuenta de acceso al Área de Cliente. Hay que retirarle el acceso antes de poder eliminarlo.';
+    case 'BONOS_ACTIVOS':
+      return n === 1 ? 'Tiene 1 bono activo sin agotar.' : `Tiene ${n} bonos activos sin agotar.`;
+    case 'PRIME_ACTIVA':
+      return 'Tiene una tarjeta PRIME activa.';
+    case 'TARJETAS_VIGOR':
+      return n === 1 ? 'Tiene 1 tarjeta emitida y en vigor.' : `Tiene ${n} tarjetas emitidas y en vigor.`;
+    default:
+      return 'Tiene registros que impiden eliminarlo.';
+  }
+}
+
+function textoAvisoBorrado(a) {
+  const n = Number(a && a.cantidad) || 0;
+  if (a && a.code === 'CITAS_FUTURAS') {
+    return n === 1 ? 'Tiene 1 cita futura en agenda, que se eliminará.' : `Tiene ${n} citas futuras en agenda, que se eliminarán.`;
+  }
+  return '';
+}
+
+// Abre el modal. Sin argumentos usa el cliente abierto en la ficha;
+// desde la pestaña de duplicados se le pasa el contacto concreto.
+function abrirModalBorrarContacto(contactId, nombre) {
+  const id  = contactId || state.contactId;
+  const nom = nombre || (contactId ? '' : (state.cliente && state.cliente.nombreCompleto) || '');
+
+  if (!id) { showToast('Selecciona antes un cliente.', 'error'); return; }
+
+  state.borrandoContactId = id;
+  state.borrandoNombre = nom;
+
+  document.getElementById('borrarNombre').textContent = nom || '—';
+  document.getElementById('borrarSub').textContent = 'Comprobando qué datos tiene este contacto...';
+  document.getElementById('borrarCuerpo').innerHTML = '';
+  document.getElementById('borrarWarn').style.display = 'none';
+
+  const btn = document.getElementById('btnConfirmarBorrado');
+  btn.disabled = true;
+  btn.textContent = 'Eliminar definitivamente';
+
+  document.getElementById('modalBorrarContacto').classList.add('visible');
+
+  sendToPage('auditarBorrado', { contactId: id });
+}
+
+function cerrarModalBorrarContacto() {
+  document.getElementById('modalBorrarContacto').classList.remove('visible');
+  state.borrandoContactId = null;
+  state.borrandoNombre = '';
+}
+
+function mostrarWarnBorrado(msg) {
+  const el = document.getElementById('borrarWarn');
+  el.textContent = msg;
+  el.style.display = 'flex';
+}
+
+function pintarAuditoriaBorrado(d) {
+  // Si el operador cerró el modal mientras se auditaba, no pintamos.
+  if (!state.borrandoContactId || d.contactId !== state.borrandoContactId) return;
+
+  const cuerpo = document.getElementById('borrarCuerpo');
+  const btn = document.getElementById('btnConfirmarBorrado');
+  const bloqueos = d.bloqueos || [];
+  const avisos = d.avisos || [];
+  let html = '';
+
+  if (!d.borrable) {
+    document.getElementById('borrarSub').textContent = 'Este contacto NO se puede eliminar.';
+    html += '<div class="borrar-block bloqueo"><div class="borrar-block-title">Motivos</div>' +
+      bloqueos.map(b => `<div class="borrar-item">· ${esc(textoBloqueoBorrado(b))}</div>`).join('') +
+      '</div>';
+    cuerpo.innerHTML = html;
+    btn.disabled = true;
+    return;
+  }
+
+  document.getElementById('borrarSub').textContent =
+    'Esta acción no se puede deshacer. Revisa lo que va a desaparecer.';
+
+  if (avisos.length) {
+    html += '<div class="borrar-block aviso"><div class="borrar-block-title">Atención</div>' +
+      avisos.map(a => {
+        const t = textoAvisoBorrado(a);
+        return t ? `<div class="borrar-item">· ${esc(t)}</div>` : '';
+      }).join('') +
+      '</div>';
+  }
+
+  // v1.8.1 — Desglose por gravedad. Si el backend no manda `contenido`
+  // (versión anterior desplegada), se usa el bloque de contadores.
+  html += d.contenido
+    ? bloquesContenidoBorrado(d.contenido)
+    : bloqueCascadaLegacy(d.cascada || {});
+
+  const cobros = Number(d.conserva && d.conserva.cobros) || 0;
+  html += '<div class="borrar-block conserva"><div class="borrar-block-title">Se conserva</div>';
+  html += `<div class="borrar-line"><span>Cobros registrados</span><span>${cobros}</span></div>`;
+  html += '<div class="borrar-item" style="margin-top:5px;color:var(--text2)">Facturas, tickets, cobros de externos y compras online no se tocan. Siguen a nombre del cliente.</div>';
+  html += '</div>';
+
+  cuerpo.innerHTML = html;
+  btn.disabled = false;
+}
+
+// v1.8.1 — Los cuatro bloques, en el orden de gravedad que fijó Jal:
+// cobros, bonos, ficha del cliente, citas.
+function bloquesContenidoBorrado(c) {
+  let html = '';
+
+  // ── 1. COBROS ───────────────────────────────────────────────────
+  const cob = c.cobros || {};
+  if (Number(cob.total) > 0) {
+    html += '<div class="borrar-block"><div class="borrar-block-title">1 · Cobros</div>';
+    html += `<div class="borrar-grave"><span class="borrar-grave-num">${cob.total}</span>` +
+            `<span class="borrar-grave-txt">cobros · ${formatearImporteBorrado(cob.importe)}</span></div>`;
+    html += '<div class="borrar-item" style="color:var(--text2)">No se borran, pero dejarán de estar enlazados a ninguna ficha: desde el cobro ya no se podrá abrir este cliente.</div>';
+    html += '</div>';
+  }
+
+  // ── 2. BONOS ────────────────────────────────────────────────────
+  const bon = c.bonos || {};
+  if (Number(bon.total) > 0) {
+    html += '<div class="borrar-block"><div class="borrar-block-title">2 · Bonos</div>';
+    html += `<div class="borrar-grave"><span class="borrar-grave-num">${bon.consumidosOCaducados || 0}</span>` +
+            `<span class="borrar-grave-txt">bonos ya consumidos o caducados, que se eliminan</span></div>`;
+    html += '<div class="borrar-item" style="color:var(--text2)">Se pierde la constancia de qué bonos compró y gastó este cliente.</div>';
+    html += '</div>';
+  }
+
+  // ── 3. FICHA DEL CLIENTE ────────────────────────────────────────
+  // Se pinta el TEXTO. Es lo único que permite al operador ver una
+  // advertencia escrita a mano antes de destruirla.
+  const f = c.ficha || {};
+  const bloquesTexto = [
+    ['Anotaciones de color',        f.color],
+    ['Anotaciones de tratamientos', f.tratamiento],
+    ['Notas internas del salón',    f.general]
+  ].filter(x => x[1] && Number(x[1].total) > 0);
+
+  const hayFicha = bloquesTexto.length > 0 || f.notasPublicas || f.notasCliente ||
+                   f.tieneExpediente || Number(f.careVisitas) > 0;
+
+  if (hayFicha) {
+    html += '<div class="borrar-block ficha"><div class="borrar-block-title">3 · Ficha del cliente</div>';
+    html += '<div class="borrar-item" style="color:var(--text2);margin-bottom:4px">Todo esto se elimina. Léelo antes de continuar.</div>';
+
+    bloquesTexto.forEach(([etiqueta, dato]) => {
+      const n = Number(dato.total) || 0;
+      html += `<div class="borrar-texto-label">${esc(etiqueta)} · ${n}</div>`;
+      if (dato.ultimo) {
+        html += `<div class="borrar-texto">${esc(dato.ultimo)}</div>`;
+      }
+    });
+
+    if (f.notasPublicas) {
+      html += '<div class="borrar-texto-label">Notas públicas (las ve el cliente)</div>';
+      html += `<div class="borrar-texto">${esc(f.notasPublicas)}</div>`;
+    }
+    if (f.notasCliente) {
+      html += '<div class="borrar-texto-label">Nota escrita por el cliente</div>';
+      html += `<div class="borrar-texto">${esc(f.notasCliente)}</div>`;
+    }
+    if (f.tieneExpediente || Number(f.careVisitas) > 0) {
+      const nv = Number(f.careVisitas) || 0;
+      html += `<div class="borrar-line" style="margin-top:6px"><span>Expediente de Cuidado y Salud</span>` +
+              `<span>${nv} ${nv === 1 ? 'visita' : 'visitas'}</span></div>`;
+    }
+    html += '</div>';
+  }
+
+  // ── 4. CITAS ────────────────────────────────────────────────────
+  const ci = c.citas || {};
+  if (Number(ci.total) > 0) {
+    html += '<div class="borrar-block"><div class="borrar-block-title">4 · Histórico de citas</div>';
+    html += `<div class="borrar-grave"><span class="borrar-grave-num">${ci.total}</span>` +
+            `<span class="borrar-grave-txt">citas${rangoFechasBorrado(ci.primera, ci.ultima)}</span></div>`;
+    html += '<div class="borrar-item" style="color:var(--text2)">Se pierde la fecha, los servicios y el profesional de cada visita.</div>';
+    if (Number(ci.futuras) > 0) {
+      html += `<div class="borrar-item">· ${ci.futuras === 1 ? '1 de ellas está en el futuro' : ci.futuras + ' de ellas están en el futuro'}.</div>`;
+    }
+    html += '</div>';
+  }
+
+  if (!html) {
+    html = '<div class="borrar-block"><div class="borrar-block-title">Se eliminará</div>' +
+           '<div class="borrar-line"><span>El contacto en la agenda</span><span>1</span></div>' +
+           '<div class="borrar-item" style="margin-top:5px;color:var(--text2)">Esta ficha no tiene cobros, bonos, anotaciones ni citas.</div></div>';
+  }
+
+  return html;
+}
+
+// Fallback: bloque de contadores de v1.8.0. Solo se usa si el backend
+// desplegado es anterior a fichaClienteLogic v1.9.15 y no manda
+// `contenido`. Evita que el modal salga vacío.
+function bloqueCascadaLegacy(c) {
+  const filas = [
+    ['Reservas del histórico', c.reservas],
+    ['Anotaciones de color, tratamientos y notas', c.anotaciones],
+    ['Visitas del expediente', c.careVisitas],
+    ['Bonos (agotados o caducados)', c.bonos],
+    ['Tarjetas (caducadas o canjeadas)', c.tarjetas],
+    ['Membresías PRIME', c.prime],
+    ['Ficha de cliente', c.clientProfile],
+    ['Ficha de Cuidado y Salud', c.careProfile]
+  ].filter(f => Number(f[1]) > 0);
+
+  return '<div class="borrar-block"><div class="borrar-block-title">Se eliminará</div>' +
+    '<div class="borrar-line"><span>El contacto en la agenda</span><span>1</span></div>' +
+    filas.map(f => `<div class="borrar-line"><span>${esc(f[0])}</span><span>${f[1]}</span></div>`).join('') +
+    '</div>';
+}
+
+function formatearImporteBorrado(v) {
+  const n = Number(v);
+  if (isNaN(n)) return '—';
+  return n.toFixed(2).replace('.', ',') + '€';
+}
+
+function rangoFechasBorrado(primera, ultima) {
+  const f1 = formatearFechaCorta(primera);
+  const f2 = formatearFechaCorta(ultima);
+  if (!primera || !ultima || f1 === '—' || f2 === '—') return '';
+  if (f1 === f2) return ` · ${f1}`;
+  return ` · de ${f1} a ${f2}`;
+}
+
+function confirmarBorradoContacto() {
+  if (!state.borrandoContactId) return;
+  const btn = document.getElementById('btnConfirmarBorrado');
+  btn.disabled = true;
+  btn.textContent = 'Eliminando...';
+  document.getElementById('borrarWarn').style.display = 'none';
+  sendToPage('eliminarContacto', { contactId: state.borrandoContactId });
+}
+
+// Limpieza tras un borrado confirmado. Dos frentes: la ficha abierta
+// y la lista de duplicados. Ninguno se recarga del backend.
+function onContactoEliminado(contactId) {
+  if (!contactId) return;
+
+  // 1) Si era el cliente que estaba abierto, la pantalla vuelve a
+  //    "sin cliente". Dejarlo pintado sería enseñar un fantasma.
+  if (state.contactId === contactId) {
+    state.contactId = null;
+    state.cliente = null;
+    state.profile = null;
+    state.ventasTienda = [];
+    state.notasHistorial = [];
+    state.proximasCitas = [];
+    state.careVisits = [];
+    state.productosVistos = new Set();
+
+    document.getElementById('clientHero').style.display = 'none';
+    document.getElementById('statsRow').style.display = 'none';
+    document.getElementById('lastVisitRow').style.display = 'none';
+    document.getElementById('loyaltyBlock').style.display = 'none';
+    document.getElementById('careBlock').style.display = 'none';
+    document.getElementById('notaBlock').style.display = 'none';
+    document.getElementById('noClient').style.display = 'flex';
+    document.getElementById('btnMensaje').disabled = true;
+    document.getElementById('searchInput').value = '';
+
+    document.querySelectorAll('.tab.cliente-required').forEach(t => t.classList.add('no-cliente'));
+
+    const tabDup = document.querySelector('[data-tab=duplicados]');
+    const activa = document.querySelector('.tab.active');
+    if (!activa || activa.classList.contains('cliente-required')) {
+      switchTab('duplicados', tabDup);
+    }
+  }
+
+  // 2) Recalcular los grupos de duplicados en local. Un grupo que se
+  //    queda con un solo contacto ya no es un duplicado.
+  if (state.duplicados.length) {
+    state.duplicados = state.duplicados
+      .map(g => ({ ...g, contactos: (g.contactos || []).filter(c => c.contactId !== contactId) }))
+      .map(g => ({ ...g, total: g.contactos.length }))
+      .filter(g => g.contactos.length > 1);
+    renderDuplicados(null, null, false);
+  }
+}
+
+// ══════════════════════════════════════════════════════
+// v1.8.0 — DUPLICADOS
+// ══════════════════════════════════════════════════════
+
+function cargarDuplicados(forzar) {
+  if (state.duplicadosCargando) return;
+  if (state.duplicadosCargados && !forzar) return;
+
+  state.duplicadosCargando = true;
+  const chk = document.getElementById('dupIncluirNombres');
+  document.getElementById('dupResumen').textContent = '';
+  document.getElementById('dupBody').innerHTML =
+    '<div class="empty-state"><div class="empty-icon">⏳</div><div class="empty-text">Analizando todos los contactos. Puede tardar un poco.</div></div>';
+
+  sendToPage('cargarDuplicados', { incluirNombres: !chk || chk.checked === true });
+}
+
+// totalContactos y resumen llegan del backend la primera vez. En los
+// repintados locales tras un borrado se pasan null y se conserva el
+// texto de resumen que ya estaba.
+function renderDuplicados(totalContactos, resumen, truncado) {
+  const body = document.getElementById('dupBody');
+  const grupos = state.duplicados || [];
+
+  document.getElementById('badgeDuplicados').textContent = String(grupos.length);
+
+  if (totalContactos !== null && totalContactos !== undefined) {
+    const r = resumen || { telefono: 0, email: 0, nombre: 0 };
+    const conFicha = Number(r.conFicha) || 0;
+    const conProd  = Number(r.conProducto) || 0;
+    document.getElementById('dupResumen').textContent =
+      `${totalContactos} contactos analizados · ${r.telefono} por teléfono · ${r.email} por email · ${r.nombre} por nombre` +
+      (conFicha ? ` · ${conFicha} con ficha técnica` : '') +
+      (conProd ? ` · ${conProd} con producto activo` : '') +
+      (truncado ? ' · análisis incompleto (demasiados contactos)' : '');
+  }
+
+  if (!grupos.length) {
+    body.innerHTML =
+      '<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-text">No se han encontrado contactos duplicados.</div></div>';
+    return;
+  }
+
+  const claseBadge = { TELEFONO: 'tel', EMAIL: 'email', NOMBRE: 'nombre' };
+  const textoBadge = { TELEFONO: 'TELÉFONO', EMAIL: 'EMAIL', NOMBRE: 'NOMBRE' };
+
+  body.innerHTML = grupos.map(g => {
+    const filas = (g.contactos || []).map(c => `
+      <div class="dup-row">
+        <div class="dup-row-main">
+          <div class="dup-row-name">${esc(c.nombreCompleto || '—')}${c.tieneFicha ? '<span class="dup-ficha-pill" title="Tiene ficha técnica: anotaciones de color, tratamientos o notas">📋 FICHA</span>' : ''}${c.tieneProducto ? `<span class="dup-prod-pill" title="${esc(c.productoTexto || 'Tiene producto activo')}">🎁 PRODUCTO</span>` : ''}</div>
+          <div class="dup-row-sub">${esc(c.telefono || 'sin teléfono')}${c.email ? ' · ' + esc(c.email) : ''}</div>
+        </div>
+        <button class="btn-dup-ver" onclick="seleccionarCliente('${esc(c.contactId)}','${esc(c.nombreCompleto || '')}')">Ver ficha</button>
+        <button class="btn-dup-del" onclick="abrirModalBorrarContacto('${esc(c.contactId)}','${esc(c.nombreCompleto || '')}')">🗑 Eliminar</button>
+      </div>`).join('');
+
+    return `
+      <div class="dup-group">
+        <div class="dup-group-head">
+          <span class="dup-badge ${claseBadge[g.criterio] || 'nombre'}">${textoBadge[g.criterio] || g.criterio}</span>
+          <span class="dup-valor">${esc(g.valor || '')}</span>
+          <span class="dup-count">${g.total} contactos</span>
+        </div>
+        ${filas}
+      </div>`;
+  }).join('');
+}
+
 </script>
 </body>
 </html>
