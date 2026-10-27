@@ -1,8 +1,8 @@
 // =====================================================
 // KAMISUITE - Backend: Smart Pricing
 // =====================================================
-// VERSION: 1.0.6
-// FECHA: 22 de octubre de 2026
+// VERSION: 1.0.7
+// FECHA: 27 de octubre de 2026
 // ARCHIVO: backend/smartPricingLogic.web.js
 //
 // QUÉ ES
@@ -77,6 +77,27 @@
 //  remedio que AKIRA aplicó al 504 de su primera pregunta (20-ago-2026).
 //
 // CHANGELOG:
+//   v1.0.7 (27-oct-2026) — Umbrales del dueño: alerta y óptima.
+//     El widget de gestión (v1.0.6) pinta el mapa en tres zonas con dos
+//     números del dueño: «Alerta por debajo de» y «Óptima desde». Jal:
+//     «que proponga también en la zona neutra». AKIRA puede proponer en
+//     alerta y en moderada; nunca en óptima.
+//     · analizarYProponer acepta `umbrales` { alerta, optima } (enteros,
+//       0 ≤ alerta < optima ≤ 100). Sin dato o no válido (page code
+//       anterior): UMBRALES_DEFECTO (20 y 55).
+//     · Se guardan en `propuestas.umbrales` (campo JSON existente, igual
+//       que los interruptores: ningún campo CMS nuevo). El widget arranca
+//       con los del último análisis.
+//     · getEstadoSmartPricing devuelve `umbralesDefecto` para el widget.
+//     · A la IA: las tres zonas con sus números, empezar por la alerta,
+//       se puede usar la moderada, nunca la óptima. Sustituye a «claramente
+//       por debajo de la media del salón», que impedía la zona moderada.
+//     · validarOpciones descarta toda franja que toque la zona óptima
+//       (tocaOptima, nueva): un día entero, por su media (columna «Día»);
+//       un tramo, por cada hora del tramo, y en 'horas', en todos los días
+//       abiertos. Lo hace JavaScript aunque la IA se equivoque.
+//     · Nada cambia en la reserva online, el recordatorio, el Área de
+//       Cliente ni Recepción: las versiones ya elegidas siguen igual.
 //   v1.0.6 (22-oct-2026) — Desde otros archivos, solo funciones async.
 //     Diagnóstico en Hair-Times (widgetPublicoLogic 0.13.1, 22-oct-2026):
 //     desde widgetPublicoLogic, las funciones NORMALES de este archivo
@@ -194,7 +215,7 @@ import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.0.6';
+const VERSION = '1.0.7';
 const TAG = `[SmartPricing][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -235,6 +256,8 @@ const SEMANAS_DEFECTO = 8;
 // v1.0.1 — Mínimo de días que deben quedar tras quitar meses: 4 semanas,
 // lo mismo que la opción más corta del selector.
 const DIAS_MINIMOS_ANALISIS = 28;
+// v1.0.7 — Umbrales con los que nace el widget si no hay análisis previo.
+const UMBRALES_DEFECTO = { alerta: 20, optima: 55 };
 
 // ── Filtro de profesionales: copia literal del motor de huecos ──
 const NOTA_RECURSO_INTERNO = 'RECURSO INTERNO';
@@ -399,6 +422,32 @@ function tiposDesdeInterruptores(intr) {
   if (intr.dias) return ['dia'];
   if (intr.horas) return ['horas'];
   return [];
+}
+
+// v1.0.7 — Umbrales del dueño. Mismo criterio que el widget v1.0.6.
+function leerUmbrales(raw) {
+  const a = Number(raw?.alerta), o = Number(raw?.optima);
+  if (Number.isInteger(a) && Number.isInteger(o) && a >= 0 && o <= 100 && a < o) return { alerta: a, optima: o };
+  return { ...UMBRALES_DEFECTO };
+}
+
+/**
+ * v1.0.7 — ¿La franja toca la zona óptima? Día entero: su media (columna
+ * «Día»). Tramo: cada hora que se solapa con el tramo; en 'horas', en
+ * todos los días. Las horas cerradas no cuentan.
+ */
+function tocaOptima(f, ocupacion, optima) {
+  for (const d of ocupacion.dias) {
+    if (f.tipo !== 'horas' && Number(d.dow) !== Number(f.dow)) continue;
+    if (f.tipo === 'dia') return d.pct != null && Number(d.pct) >= optima;
+    const dI = parseHHMM(f.desde), hI = parseHHMM(f.hasta);
+    for (const c of (d.celdas || [])) {
+      if (c.pct == null) continue;
+      const h = parseHHMM(c.hora);
+      if (h < hI && h + 60 > dI && Number(c.pct) >= optima) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -967,12 +1016,13 @@ async function leerPromosActivas() {
  * enteros 1–100, como mucho 3 opciones. Lo que no pasa se descarta.
  * v1.0.3 — tres tipos de franja (ver normalizarFranja).
  */
-function validarOpciones(opcionesIA, ocupacion, tipos = TIPOS_FRANJA) {
+function validarOpciones(opcionesIA, ocupacion, tipos = TIPOS_FRANJA, umb = null) {
   const abierto = {};   // `${dow}|${hora}` → true si hay capacidad
   for (const d of ocupacion.dias) {
     for (const c of d.celdas) if (c.capacidadMin > 0) abierto[`${d.dow}|${parseHHMM(c.hora)}`] = true;
   }
   const out = [];
+  let fueraOptima = 0;   // v1.0.7
   for (const op of (Array.isArray(opcionesIA) ? opcionesIA : []).slice(0, 3)) {
     const franjas = [];
     for (const fIA of (Array.isArray(op?.franjas) ? op.franjas : [])) {
@@ -995,6 +1045,8 @@ function validarOpciones(opcionesIA, ocupacion, tipos = TIPOS_FRANJA) {
         if (tocaAbierto) break;
       }
       if (!tocaAbierto) continue;
+      // v1.0.7 — Nunca en la zona óptima del dueño.
+      if (umb && tocaOptima(f, ocupacion, umb.optima)) { fueraOptima++; continue; }
       franjas.push(f);
     }
     if (!franjas.length) continue;
@@ -1004,17 +1056,18 @@ function validarOpciones(opcionesIA, ocupacion, tipos = TIPOS_FRANJA) {
       franjas
     });
   }
+  if (fueraOptima) console.log(`${TAG} 🟢 ${fueraOptima} franja(s) de la IA descartadas por tocar la zona óptima (≥ ${umb.optima} %)`);
   return out;
 }
 
-async function pedirPropuestasIA(ocupacion, tipos = TIPOS_FRANJA) {
+async function pedirPropuestasIA(ocupacion, tipos = TIPOS_FRANJA, umb = UMBRALES_DEFECTO) {
   const apiKey = await getSecret('KAMISUITE');
   if (!apiKey) throw new Error('Secreto KAMISUITE no accesible');
   const promos = await leerPromosActivas();
 
   // v1.0.4 — Solo los tipos que permiten los interruptores DÍAS / HORAS.
   const DESC_TIPO = {
-    dia: "- 'dia': un día de la semana entero, a cualquier hora. Úsalo cuando ese día en conjunto (su media) está claramente por debajo de la media del salón. Ejemplo: martes −10 %.",
+    dia: "- 'dia': un día de la semana entero, a cualquier hora. Úsalo cuando ese día en conjunto (su media) flojea. Ejemplo: martes −10 %.",
     dia_horas: "- 'dia_horas': un tramo de horas de un día concreto. Úsalo cuando el día en general va bien pero ese tramo flojea. Ejemplo: miércoles 14:00–16:00 −10 %.",
     horas: "- 'horas': un tramo de horas de cualquier día. Úsalo cuando el mismo tramo flojea en casi todos los días abiertos, en lugar de repetirlo día a día. Ejemplo: 14:00–16:00 −10 %."
   };
@@ -1033,7 +1086,10 @@ async function pedirPropuestasIA(ocupacion, tipos = TIPOS_FRANJA) {
     ...lineasTipos,
     'Reglas:',
     '- Propón EXACTAMENTE tres opciones de intensidad creciente: la primera prudente, la segunda equilibrada y la tercera más ambiciosa.',
-    '- Usa solo días y tramos con ocupación claramente por debajo de la media del salón. Nunca pongas oferta en días o tramos llenos.',
+    // v1.0.7 — Zonas del dueño en lugar de «por debajo de la media».
+    `- El dueño ha fijado tres zonas de ocupación: ALERTA por debajo de ${umb.alerta} %, MODERADA desde ${umb.alerta} % hasta por debajo de ${umb.optima} %, y ÓPTIMA desde ${umb.optima} %.`,
+    '- Empieza por los días y tramos en ALERTA; también puedes usar los de zona MODERADA.',
+    `- Nunca pongas oferta en zona ÓPTIMA. Un día entero es óptimo si su media llega a ${umb.optima} %; un tramo de horas lo es si alguna de sus horas llega a ${umb.optima} % (en un tramo de cualquier día, en cualquiera de los días abiertos). Esas ofertas se descartan.`,
     '- Nunca uses días ni tramos en los que el salón está cerrado.',
     '- Porcentajes enteros y moderados; el descuento se aplica al precio del servicio principal.',
     '- Los tramos de horas van en horas en punto (HH:00), con hasta > desde.',
@@ -1059,7 +1115,7 @@ async function pedirPropuestasIA(ocupacion, tipos = TIPOS_FRANJA) {
   const u = data.usage || {};
   console.log(`${TAG} 🤖 IA ${Date.now() - t0}ms · in ${u.input_tokens || 0} · out ${u.output_tokens || 0}`);
   if (!bloque) throw new Error('La IA no devolvió opciones');
-  return validarOpciones(bloque.input?.opciones, ocupacion, tipos);
+  return validarOpciones(bloque.input?.opciones, ocupacion, tipos, umb);
 }
 
 // =====================================================
@@ -1105,6 +1161,7 @@ export const getEstadoSmartPricing = webMethod(
         semanasDefecto: SEMANAS_DEFECTO,
         ayer: sumarDias(ymdMadrid(new Date()), -1),
         diasMinimos: DIAS_MINIMOS_ANALISIS,
+        umbralesDefecto: { ...UMBRALES_DEFECTO },   // v1.0.7
         vigente: filaVistaPublica(rVig.items?.[0]),
         ultimo: filaVistaPublica(rUlt.items?.[0])
       };
@@ -1122,13 +1179,14 @@ export const getEstadoSmartPricing = webMethod(
  */
 export const analizarYProponer = webMethod(
   Permissions.SiteMember,
-  async ({ semanas, mesesExcluidos = [], interruptores = null, solicitudId = '' } = {}) => {
+  async ({ semanas, mesesExcluidos = [], interruptores = null, umbrales = null, solicitudId = '' } = {}) => {
     const t0 = Date.now();
     let filaId = '';
     try {
       // v1.0.4 — Interruptores DÍAS / HORAS.
       const intr = leerInterruptores(interruptores);
       const tipos = tiposDesdeInterruptores(intr);
+      const umb = leerUmbrales(umbrales);   // v1.0.7
       if (!tipos.length) {
         return { ok: false, version: VERSION, error: { message: 'Enciende Días, Horas o los dos para que AKIRA pueda proponer.' } };
       }
@@ -1147,21 +1205,21 @@ export const analizarYProponer = webMethod(
         [F_VER.periodoDesde]: new Date(`${ocupacion.desde}T12:00:00Z`),
         [F_VER.periodoHasta]: new Date(`${ocupacion.hasta}T12:00:00Z`),
         [F_VER.ocupacion]: ocupacion,
-        [F_VER.propuestas]: { estado: 'calculando', solicitudId: String(solicitudId || ''), interruptores: intr },
+        [F_VER.propuestas]: { estado: 'calculando', solicitudId: String(solicitudId || ''), interruptores: intr, umbrales: umb },
         [F_VER.vigente]: false
       }, AUTH);
       filaId = insert._id;
-      console.log(`${TAG} 📊 Ocupación ${ocupacion.desde}→${ocupacion.hasta}${ocupacion.mesesExcluidos.length ? ` sin ${ocupacion.mesesExcluidos.join(',')}` : ''} (${ocupacion.diasAnalizados} días) media ${ocupacion.mediaPct}% (${ocupacion.citasLeidas} citas) · fila ${filaId} · ${Date.now() - t0}ms`);
+      console.log(`${TAG} 📊 Ocupación ${ocupacion.desde}→${ocupacion.hasta}${ocupacion.mesesExcluidos.length ? ` sin ${ocupacion.mesesExcluidos.join(',')}` : ''} (${ocupacion.diasAnalizados} días) media ${ocupacion.mediaPct}% (${ocupacion.citasLeidas} citas) · umbrales ${umb.alerta}/${umb.optima} · fila ${filaId} · ${Date.now() - t0}ms`);
 
       let propuestas;
       try {
-        const opciones = await pedirPropuestasIA(ocupacion, tipos);
+        const opciones = await pedirPropuestasIA(ocupacion, tipos, umb);
         propuestas = opciones.length
-          ? { estado: 'ok', solicitudId: String(solicitudId || ''), interruptores: intr, opciones }
-          : { estado: 'error', solicitudId: String(solicitudId || ''), interruptores: intr, mensaje: 'AKIRA no ha encontrado franjas flojas que proponer en este periodo.' };
+          ? { estado: 'ok', solicitudId: String(solicitudId || ''), interruptores: intr, umbrales: umb, opciones }
+          : { estado: 'error', solicitudId: String(solicitudId || ''), interruptores: intr, umbrales: umb, mensaje: 'AKIRA no ha encontrado franjas flojas que proponer en este periodo.' };
       } catch (iaErr) {
         console.error(`${TAG} ❌ IA:`, iaErr.message);
-        propuestas = { estado: 'error', solicitudId: String(solicitudId || ''), interruptores: intr, mensaje: 'AKIRA no ha podido preparar las propuestas. Vuelve a intentarlo en unos minutos.' };
+        propuestas = { estado: 'error', solicitudId: String(solicitudId || ''), interruptores: intr, umbrales: umb, mensaje: 'AKIRA no ha podido preparar las propuestas. Vuelve a intentarlo en unos minutos.' };
       }
 
       // READ-MERGE-UPDATE: wixData.update reemplaza el documento entero.
