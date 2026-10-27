@@ -1,10 +1,40 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.8
-// TAG: facturacion-salon-v1.0.8
+// VERSION: 1.0.9
+// TAG: facturacion-salon-v1.0.9
 // =============================================================
 // CHANGELOG:
+// v1.0.9 (2026-10-27) — CIF/NIF Y RAZÓN SOCIAL EN CAMPOS PERSONALIZADOS.
+//   Recepción PRO (recepcionLogic v2.2.0) guarda ahora el CIF/NIF y la
+//   razón social en la ficha del cliente, en dos campos personalizados:
+//   'custom.cif' y 'custom.razon-social'. Este módulo pasa a leer y
+//   escribir esos mismos campos. El campo de Wix Facturas
+//   ('invoices.vatId') deja de usarse.
+//
+//   Motivo, además del cambio de campo: lo anterior no funcionaba.
+//     · Escritura: `contacts.updateContact` de wix-crm.v2 se llamaba como
+//       (contactId, { info }) sin revision; la documentación de Wix exige
+//       (contactId, info, revision). El fallo quedaba en consola, así que
+//       ni el CIF ni la razón social llegaban a la ficha.
+//     · Lectura: wix-crm.v2 devuelve los campos dentro de
+//       `extendedFields.items` (objeto); se buscaban sueltos o como lista.
+//
+//   CAMBIO, contenido en `_resolverDatosReceptor` y dos helpers nuevos:
+//     · Lectura y escritura con wix-crm-backend (import aparte,
+//       `contactsV1`), el mismo patrón READ-MERGE-UPDATE que ya funciona en
+//       recepcionLogic y fichaClienteLogic: getContact → revision →
+//       updateContact({ contactId, revision }, { extendedFields },
+//       { suppressAuth }). Campos planos { clave: valor }.
+//     · CIF y razón social siguen en DOS escrituras separadas: un fallo no
+//       arrastra al otro y la emisión continúa igual que antes.
+//     · Si 'custom.cif' está vacío se lee el segundo campo "CIF" del panel
+//       ('custom.cif-empresa'). La razón social cae a `info.company` si su
+//       campo está vacío.
+//   Nada más cambia: numeración, series, IVA, líneas, PDF, Verifactu e
+//   idempotencia quedan idénticos. `_leerContacto` (wix-crm.v2) sigue
+//   igual para email y teléfono de las ventas de tienda.
+//
 // v1.0.8 (2026-08-27) — UN SOLO DOCUMENTO POR CITA: SERVICIOS + PRODUCTOS.
 //   PROBLEMA REPORTADO POR HAIR-TIMES (27-ago-2026): se vende un producto
 //   desde el modal de la cita y, al emitir la factura de esa cita, el
@@ -264,7 +294,8 @@
 //     → emite factura completa. Si vatId/legalName se pasan en el
 //       parámetro (input inline del modal), se persisten en el CRM
 //       del contacto antes de emitir. Si no se pasan, se leen del CRM
-//       (extendedFields['invoices.vatId']). Si faltan, error claro.
+//       (v1.0.9: campos 'custom.cif' y 'custom.razon-social'). Si
+//       faltan, error claro.
 //   obtenerDocumentoReserva({ reservaId })
 //     → consulta auxiliar para que el modal sepa si la reserva ya
 //       tiene documento emitido y muestre badge en vez de botones.
@@ -287,6 +318,9 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 import { contacts } from 'wix-crm.v2';
+// v1.0.9 — wix-crm-backend solo para leer y escribir los datos fiscales
+// del contacto (patrón probado en recepcionLogic y fichaClienteLogic).
+import { contacts as contactsV1 } from 'wix-crm-backend';
 import { elevate } from 'wix-auth';
 import { mediaManager } from 'wix-media-backend';
 import { jsPDF } from 'jspdf';
@@ -295,7 +329,7 @@ import { jsPDF } from 'jspdf';
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.8';
+const VERSION = '1.0.9';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -311,12 +345,12 @@ const PDF_FOLDER   = '/Invoices';               // carpeta Wix Media
 const DEFAULT_VAT_RATE       = 21;
 const DEFAULT_INVOICE_SERIES = 'F';
 const DEFAULT_TICKET_SERIES  = 'T';
-const FIELD_VAT_ID_CRM       = 'invoices.vatId';   // system field Wix Invoices
-// v1.0.5 — 'invoices.company' NO existe como extended field en Wix. La
-// razón social es propiedad nativa del contacto (info.company). La
-// constante se conserva solo para LEER fichas antiguas que pudieran
-// tenerlo; nunca se escribe en ella.
-const FIELD_LEGAL_NAME_CRM   = 'invoices.company'; // legacy — solo lectura
+// v1.0.9 — Datos fiscales en campos PERSONALIZADOS del contacto. Mismas
+// claves que recepcionLogic v2.2.0, leídas en Hair-Times el 27-oct-2026.
+// 'invoices.vatId' (Wix Facturas) e 'invoices.company' dejan de usarse.
+const FIELD_CIF_CRM          = 'custom.cif';
+const FIELD_CIF_CRM_RESPALDO = 'custom.cif-empresa';   // otro campo "CIF" del panel: solo lectura
+const FIELD_RAZON_SOCIAL_CRM = 'custom.razon-social';
 
 const MODO_TICKET  = 'ticket';
 const MODO_FACTURA = 'factura';
@@ -908,71 +942,91 @@ async function _subirPdf(buffer, fileName) {
 //   3. Si tampoco están en CRM → error claro (el frontend debe pedirlos).
 //
 // Devuelve { ok, vatId, legalName, error? }.
+// v1.0.9 — Lee el contacto con wix-crm-backend, que devuelve
+// info.extendedFields como objeto plano { clave: valor }.
+async function _leerContactoV1(contactId) {
+  if (!contactId) return null;
+  try {
+    const getContactElev = elevate(contactsV1.getContact);
+    return await getContactElev(contactId);
+  } catch (e) {
+    console.warn(`${TAG} Error leyendo contacto ${contactId}: ${e.message}`);
+    return null;
+  }
+}
+
+// v1.0.9 — Escribe UN campo personalizado del contacto. Patrón
+// READ-MERGE-UPDATE de wix-crm-backend (recepcionLogic v2.2.0 y
+// fichaClienteLogic.actualizarContactoCRM). No reescribe si ya tiene
+// ese valor. Devuelve { ok, sinCambios?, error? }.
+async function _guardarCampoContacto(contactId, key, valor) {
+  try {
+    const getContactElev = elevate(contactsV1.getContact);
+    const current = await getContactElev(contactId);
+    if (!current || !current.revision) {
+      return { ok: false, error: 'Contacto no encontrado o sin revision' };
+    }
+    const actual = String(current?.info?.extendedFields?.[key] || '').trim();
+    if (actual === valor) return { ok: true, sinCambios: true };
+
+    const updateContactElev = elevate(contactsV1.updateContact);
+    await updateContactElev(
+      { contactId, revision: current.revision },
+      { extendedFields: { [key]: valor } },
+      { suppressAuth: true }
+    );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
 async function _resolverDatosReceptor({ contactId, vatId, legalName }) {
   const vId = (vatId || '').trim();
   const lName = (legalName || '').trim();
 
-  // Caso 1: el operador acaba de añadirlos → persistir y devolver.
+  // Caso 1: el operador los trae en el formulario → persistir y devolver.
   if (vId) {
     if (contactId) {
-      // v1.0.5 — DOS escrituras SEPARADAS, a propósito:
-      //   · CIF/NIF  → extended field 'invoices.vatId' (campo de la app
-      //     Wix Invoices, visible en la ficha bajo "Facturas de Wix").
-      //   · Razón social → info.company, que es propiedad NATIVA del
-      //     contacto, no un extended field.
-      // Antes iban en la misma llamada y la razón social viajaba como
-      // extended field 'invoices.company', que no existe. Si Wix rechazaba
-      // esa clave, tumbaba la llamada entera y el CIF tampoco se guardaba.
-      // Separadas, un fallo no arrastra al otro.
-      const updateContactElev = elevate(contacts.updateContact);
-      try {
-        await updateContactElev(contactId, {
-          info: { extendedFields: { items: { [FIELD_VAT_ID_CRM]: vId } } }
-        });
-        console.log(`${TAG} ✅ vatId persistido en CRM ${contactId.substring(0, 8)}`);
-      } catch (e) {
-        console.warn(`${TAG} ⚠️ No se pudo persistir vatId en CRM: ${e.message}. Continuando con la emisión.`);
+      // v1.0.9 — campos personalizados, DOS escrituras separadas: un fallo
+      // no arrastra al otro. Si fallan, la emisión continúa.
+      const rCif = await _guardarCampoContacto(contactId, FIELD_CIF_CRM, vId);
+      if (rCif.ok) {
+        console.log(`${TAG} ✅ CIF ${rCif.sinCambios ? 'ya estaba' : 'guardado'} en la ficha ${contactId.substring(0, 8)}`);
+      } else {
+        console.warn(`${TAG} ⚠️ No se pudo guardar el CIF en la ficha: ${rCif.error}. Continuando con la emisión.`);
       }
       if (lName) {
-        try {
-          await updateContactElev(contactId, { info: { company: lName } });
-          console.log(`${TAG} ✅ Razón social persistida en info.company de ${contactId.substring(0, 8)}`);
-        } catch (e) {
-          console.warn(`${TAG} ⚠️ No se pudo persistir la razón social: ${e.message}. Continuando con la emisión.`);
+        const rRs = await _guardarCampoContacto(contactId, FIELD_RAZON_SOCIAL_CRM, lName);
+        if (rRs.ok) {
+          console.log(`${TAG} ✅ Razón social ${rRs.sinCambios ? 'ya estaba' : 'guardada'} en la ficha ${contactId.substring(0, 8)}`);
+        } else {
+          console.warn(`${TAG} ⚠️ No se pudo guardar la razón social en la ficha: ${rRs.error}. Continuando con la emisión.`);
         }
       }
     }
     return { ok: true, vatId: vId, legalName: lName };
   }
 
-  // Caso 2: leer del CRM
+  // Caso 2: leer de la ficha del cliente
   if (!contactId) {
     return { ok: false, error: 'Cliente sin contactId — no se puede emitir factura completa.' };
   }
-  const contact = await _leerContacto(contactId);
+  const contact = await _leerContactoV1(contactId);
   if (!contact) {
     return { ok: false, error: 'No se pudo leer el contacto CRM.' };
   }
   const ef = contact?.info?.extendedFields || {};
-  // Soporta tanto el formato plano (key→value) como items[].
-  let efVat = ef[FIELD_VAT_ID_CRM] || '';
-  let efLegal = ef[FIELD_LEGAL_NAME_CRM] || '';   // legacy, casi siempre vacío
-  if (!efVat && Array.isArray(ef.items)) {
-    for (const it of ef.items) {
-      if (it.key === FIELD_VAT_ID_CRM) efVat = it.value || '';
-      if (it.key === FIELD_LEGAL_NAME_CRM) efLegal = it.value || '';
-    }
-  }
-  // v1.0.5 — la razón social se lee del campo nativo. El extended field
-  // legacy queda como respaldo por si alguna ficha lo tuviera.
+  const efVat = String(ef[FIELD_CIF_CRM] || ef[FIELD_CIF_CRM_RESPALDO] || '').trim();
+  const efRazon = String(ef[FIELD_RAZON_SOCIAL_CRM] || '').trim();
   const companyNativo = String(contact?.info?.company || '').trim();
   if (!efVat) {
     return { ok: false, error: 'Cliente sin CIF/NIF en su ficha — añádelo antes de emitir factura completa.' };
   }
   return {
     ok: true,
-    vatId: String(efVat),
-    legalName: companyNativo || String(efLegal || '')
+    vatId: efVat,
+    legalName: efRazon || companyNativo
   };
 }
 
