@@ -1,10 +1,30 @@
 // =====================================================
 // KAMISUITE - Page Code Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.2
-// FECHA: 6 de julio de 2026
+// VERSION: 1.9.7
+// FECHA: 27 de octubre de 2026
 //
 // CHANGELOG:
+// v1.9.7 (27-Oct-2026) — CIF/NIF y razón social del cliente.
+//   - NEW: case 'guardarDatosFiscales' → actualizarContactoCRM con
+//     { contactId, cif, razonSocial } (fichaClienteLogic v1.9.16, campos
+//     'custom.cif' y 'custom.razon-social').
+//   - 'crearContacto': el payload ya viaja entero al backend, así que
+//     `cif` y `razonSocial` llegan sin tocar nada. Si el contacto se crea
+//     pero sus datos fiscales no se guardan, un aviso en español lo dice.
+//   - NEW helper mensajeErrorContacto: los cases que guardan datos del
+//     contacto (actualizarContacto y los de campos de la ficha) ya no
+//     mandan al widget el texto de Wix en inglés, sino un mensaje en
+//     español (email o teléfono de otro cliente, o error genérico).
+//   - Numeración alineada con el page code del CRM Desktop (1.9.7).
+//   - FIX alta de contacto (port literal del case 'crearContacto' del
+//     page code desktop v1.9.3): el backend responde DUPLICATE_PHONE y
+//     el widget móvil v1.1.2 espera 'contactoDuplicadoTelefono' y
+//     'contactoError', pero este page code seguía en la 1.9.2:
+//     comprobaba DUPLICATE_EMAIL, enviaba 'contactoDuplicadoEmail' /
+//     'fichaError' y el modal se quedaba en «Creando…». Además cargaba
+//     la ficha dos veces (el widget ya la pide al recibir
+//     'contactoCreado').
 // v1.9.2 (06-Jul-2026) — Alta de contactos desde el CRM
 //   - NEW: case 'crearContacto' → crearContactoCRM (nuevo webMethod
 //     del backend v1.9.10). Payload {nombre, apellido, telefono, email,
@@ -120,7 +140,7 @@ import {
   eliminarCupon
 } from 'backend/couponsLogic.web';
 
-const TAG = '[FichaCliente][PageCode][1.9.2]';
+const TAG = '[FichaCliente][PageCode][1.9.7]';
 
 let cachedClientes = [];
 let widgetReady    = false;
@@ -128,6 +148,21 @@ let widgetReady    = false;
 function sendToWidget(type, data) {
   try { $w('#htmlFichaCliente').postMessage({ type, ...data }); }
   catch (e) { console.error(`${TAG} sendToWidget:`, e.message); }
+}
+
+// v1.9.7 — Mensaje propio para errores al guardar datos del contacto.
+// Nunca se envía al widget el texto de Wix (en inglés). El detalle
+// queda en consola.
+function mensajeErrorContacto(err) {
+  let txt = String((err && err.message) || '');
+  try { txt += ' ' + JSON.stringify((err && err.details) || {}); } catch (_) { /* sin details */ }
+  console.warn(`${TAG} error al guardar contacto:`, txt);
+  if (txt.indexOf('DUPLICATE_CONTACT_EXISTS') !== -1) {
+    if (txt.indexOf('duplicateEmail') !== -1) return 'Ese email ya lo tiene otro cliente. Búscalo en el buscador o pon otro email.';
+    if (txt.indexOf('duplicatePhone') !== -1) return 'Ese teléfono ya lo tiene otro cliente. Búscalo en el buscador o pon otro teléfono.';
+    return 'Ese email o teléfono ya lo tiene otro cliente. Búscalo en el buscador.';
+  }
+  return 'No se han podido guardar los datos. Revisa los datos e inténtalo de nuevo.';
 }
 
 function buscarLocal(query) {
@@ -233,44 +268,44 @@ async function handleMessage(event) {
           sendToWidget('fichaOk', { message: 'Datos actualizados.' });
           sendToWidget('fichaContactData', { cliente: r.cliente, profile: null, warnings: [] });
         } else {
-          sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+          sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
         }
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
-    // v1.9.2 — Alta de nuevo contacto desde el CRM.
+    // v1.9.7 — Alta de nuevo contacto desde el CRM. Port literal del
+    // case del page code desktop v1.9.3 (+ aviso de datos fiscales v1.9.7).
     // Payload: {nombre, apellido, telefono, email, fechaNacimiento?,
-    //           sexo?, allowDuplicates?}
+    //           sexo?, cif?, razonSocial?, allowDuplicates?}
+    //   · NO se llama cargarDatosCliente aquí: el widget invoca su
+    //     seleccionarCliente(id, nombre) al recibir 'contactoCreado', lo
+    //     que dispara 'clienteSeleccionado' y carga la ficha una vez.
+    //   · Ningún texto de error del backend viaja al widget: se traduce a
+    //     'contactoDuplicadoTelefono' o 'contactoError', y el widget usa
+    //     sus propios textos fijos en español.
     case 'crearContacto':
       try {
         const r = await crearContactoCRM(data);
         if (r?.ok) {
-          // 1) Cache local para búsquedas inmediatas (mismo shape que
-          //    cargarTodosContactos).
           if (r.cliente) cachedClientes.push(r.cliente);
-          // 2) Notificar al widget para cierre de modal + toast.
           sendToWidget('contactoCreado', {
             contactId: r.contactId,
             cliente: r.cliente
           });
-          // 3) Abrir automáticamente la ficha del recién creado
-          //    (mismo flujo que clienteSeleccionado).
-          await cargarDatosCliente(r.contactId);
-        } else if (r?.error?.code === 'DUPLICATE_EMAIL') {
-          // El widget mostrará aviso y podrá reintentar con
-          // allowDuplicates:true si el operador confirma.
-          sendToWidget('contactoDuplicadoEmail', {
-            message: r.error.message || 'Ya existe un contacto con este email.'
-          });
+          // v1.9.7 — contacto creado, pero el CIF / razón social no.
+          if (r.datosFiscales && r.datosFiscales.ok === false) {
+            sendToWidget('fichaError', { message: 'Contacto creado, pero no se han podido guardar el CIF/NIF y la razón social.' });
+          }
+        } else if (r?.error?.code === 'DUPLICATE_PHONE') {
+          sendToWidget('contactoDuplicadoTelefono', {});
         } else {
-          sendToWidget('fichaError', {
-            message: r?.error?.message || 'No se pudo crear el contacto.'
-          });
+          sendToWidget('contactoError', {});
         }
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        console.error(`${TAG} crearContacto excepción:`, e && e.message);
+        sendToWidget('contactoError', {});
       }
       break;
 
@@ -367,9 +402,9 @@ async function handleMessage(event) {
           notasPublicas: data.valor || ''
         });
         if (r?.ok) sendToWidget('fichaOk', { message: 'Notas públicas guardadas.' });
-        else sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
@@ -380,9 +415,9 @@ async function handleMessage(event) {
           notasColor: data.valor || ''
         });
         if (r?.ok) sendToWidget('fichaOk', { message: 'Notas de Color guardadas.' });
-        else sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
@@ -393,9 +428,9 @@ async function handleMessage(event) {
           notasTratamientos: data.valor || ''
         });
         if (r?.ok) sendToWidget('fichaOk', { message: 'Notas de Tratamientos guardadas.' });
-        else sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
@@ -407,9 +442,9 @@ async function handleMessage(event) {
           ultimaVisita: data.valor || ''
         });
         if (r?.ok) sendToWidget('fichaOk', { message: 'Última visita guardada.' });
-        else sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
@@ -423,9 +458,9 @@ async function handleMessage(event) {
           fechaNacimiento: data.valor || ''
         });
         if (r?.ok) sendToWidget('fichaOk', { message: 'Fecha de nacimiento guardada.' });
-        else sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
@@ -437,9 +472,9 @@ async function handleMessage(event) {
           clubKalonice: !!data.activo
         });
         if (r?.ok) sendToWidget('fichaOk', { message: data.activo ? 'Socio Club KALONICE activado.' : 'Socio Club KALONICE desactivado.' });
-        else sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
@@ -450,9 +485,25 @@ async function handleMessage(event) {
           sexo: data.valor || ''
         });
         if (r?.ok) sendToWidget('fichaOk', { message: 'Sexo guardado.' });
-        else sendToWidget('fichaError', { message: r?.error?.message || 'Error.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
       } catch (e) {
-        sendToWidget('fichaError', { message: e.message });
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
+      }
+      break;
+
+    // v1.9.7 — CIF/NIF y razón social (fichaClienteLogic v1.9.16).
+    // Payload: { contactId, cif, razonSocial }. '' = vaciar.
+    case 'guardarDatosFiscales':
+      try {
+        const r = await actualizarContactoCRM({
+          contactId: data.contactId,
+          cif: data.cif || '',
+          razonSocial: data.razonSocial || ''
+        });
+        if (r?.ok) sendToWidget('fichaOk', { message: 'Datos fiscales guardados.' });
+        else sendToWidget('fichaError', { message: mensajeErrorContacto(r?.error) });
+      } catch (e) {
+        sendToWidget('fichaError', { message: mensajeErrorContacto(e) });
       }
       break;
 
