@@ -1,9 +1,37 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.63
+// VERSION: 1.0.64
 // FECHA: 4 de noviembre de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.64: 🕘 SERVICIO ENLAZADO — RECEPCIÓN MIRA EL HORARIO AL ELEGIR LA
+//          PROFESIONAL DE LA CITA ENLAZADA.
+//          Caso Hair-Times: masaje del Body Ritual con EMY y Angela
+//          asignadas. EMY trabaja los lunes de 10:00 a 16:15; una reserva
+//          de Recepción a las 16:45 le daba el masaje a EMY, porque
+//          resolverStaffEnlazado elegía a la primera asignada SIN CITAS a
+//          esa hora, sin mirar su horario. Mover después el bloque a la
+//          columna de Angela no cambia el titular de la cita (sigue siendo
+//          EMY) y el cobro va por titular: se cobraría en la caja de
+//          externos.
+//          EL CAMBIO, solo en resolverStaffEnlazado (rama de Recepción con
+//          varias asignadas):
+//            1. la primera asignada que trabaja a esa hora y no tiene cita;
+//            2. si ninguna está libre, la primera que trabaja a esa hora;
+//            3. si no trabaja ninguna, la primera asignada (como antes:
+//               Recepción decide).
+//          «Trabaja a esa hora» = su horario de StaffConfig cubre desde la
+//          hora de inicio hasta el final del servicio enlazado, con el
+//          margen de cierre del salón (SalonConfig.closingGraceMin). Es la
+//          misma lectura y la misma condición que la reserva online
+//          (widgetPublicoLogic.resolverStaffLibre): parseHHMM y
+//          leerHorarioStaffEnDia son copia literal de widgetPublicoLogic
+//          v0.14.0, como ya hacen smartPricingLogic y staffConfigLogic.
+//          Los bloqueos ya contaban como ocupación (fase que ocupa con el
+//          staffId de la fila). Sin cambios: la rama de la reserva web
+//          (staffIdPedido), el caso de una sola asignada y el resto del
+//          archivo.
 //
 // v1.0.63: 🔀 SEGREGACIÓN FISCAL — LA PROFESIONAL ASIGNADA PUEDE HACER EL
 //          SERVICIO, Y LA CAJA LA DECIDE QUIEN HACE LA CITA.
@@ -1509,7 +1537,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.63';
+const VERSION = '1.0.64';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1965,12 +1993,69 @@ async function deshacerReservaCreada(reservaId, sessionIds) {
   }
 }
 
+// v1.0.64 — HORARIO DEL PERSONAL. Copia literal de widgetPublicoLogic
+// v0.14.0 (parseHHMM + leerHorarioStaffEnDia), igual que hacen
+// smartPricingLogic y staffConfigLogic, para elegir la profesional de la
+// cita enlazada con la misma lectura de horario que la reserva online.
+function parseHHMM(s) {
+  const m = String(s || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = +m[1], mi = +m[2];
+  if (h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+  return h * 60 + mi;
+}
+
+// Lee horario {from,to} del staff para un dow concreto.
+// Devuelve null si está cerrado, no tiene horario configurado, o no parsea.
+function leerHorarioStaffEnDia(staffRow, dow) {
+  const raw = staffRow?.workingHoursSessionIds;
+  if (!raw) return null;
+  let items = [];
+  try {
+    if (typeof raw === 'string') {
+      const obj = JSON.parse(raw);
+      items = Array.isArray(obj?.items) ? obj.items : (Array.isArray(obj) ? obj : []);
+    } else if (raw && typeof raw === 'object') {
+      items = Array.isArray(raw.items) ? raw.items : (Array.isArray(raw) ? raw : []);
+    }
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ workingHours JSON inválido (${staffRow?.canonicalName || staffRow?._id}):`, e.message);
+    return null;
+  }
+  const day = items.find(it => Number(it?.dow) === dow);
+  if (!day || !day.open) return null;
+  const from = parseHHMM(day.from);
+  const to = parseHHMM(day.to);
+  if (from == null || to == null || from >= to) return null;
+  return { from, to };
+}
+
+// v1.0.64 — Margen de cierre del salón (SalonConfig.closingGraceMin).
+// Misma lectura y mismo fallback que widgetPublicoLogic.leerConfigMotor:
+// vacío, null o error → 0 (corte estricto en el `to` del horario).
+const CMS_CONFIG = 'SalonConfig';
+async function leerMargenCierreSalon() {
+  try {
+    const rCfg = await wixData.query(CMS_CONFIG)
+      .limit(1)
+      .find({ suppressAuth: true });
+    const cfg = rCfg.items?.[0];
+    if (!cfg) return 0;
+    const rawGrace = Number(cfg.closingGraceMin);
+    return (Number.isFinite(rawGrace) && rawGrace >= 0) ? rawGrace : 0;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ leerMargenCierreSalon falló (${e.message}) → margen 0`);
+    return 0;
+  }
+}
+
 // Profesional de la cita enlazada.
 //   · `staffIdPedido` (reserva web): se acepta si está activo y no es un
 //     recurso interno. Si no, error: la web ya prometió esa pareja.
 //   · Sin él (Recepción): entre los asignados al servicio enlazado, sin el
-//     profesional del principal, el primero libre a esa hora; si ninguno lo
-//     está, el primero (Recepción no valida disponibilidad).
+//     profesional del principal, el primero que trabaja a esa hora y está
+//     libre; si ninguno lo está, el primero que trabaja a esa hora; si no
+//     trabaja ninguno, el primero (Recepción decide). v1.0.64: horario.
 // Devuelve { staffId, staffName }, { error } o null (sin nadie asignado).
 async function resolverStaffEnlazado({ svcEnl, fecha, horaHHmm, staffIdPrincipal, staffIdPedido }) {
   const rStaff = await wixData.query(CMS_STAFF)
@@ -2003,10 +2088,10 @@ async function resolverStaffEnlazado({ svcEnl, fecha, horaHHmm, staffIdPrincipal
     return { staffId: idDe(candidatos[0]), staffName: nombreDe(candidatos[0]) };
   }
 
-  // Varios asignados: el primero sin cita a esa hora. Ocupación con el
-  // mismo criterio que el motor de huecos: fases que ocupan, con el
-  // profesional de la fase si lo tiene; las citas sin fases bloquean su
-  // duración total.
+  // Varios asignados: el primero que trabaja a esa hora y no tiene cita
+  // (v1.0.64: horario). Ocupación con el mismo criterio que el motor de
+  // huecos: fases que ocupan, con el profesional de la fase si lo tiene;
+  // las citas sin fases bloquean su duración total.
   try {
     const inicioMs = new Date(madridToUTC(fecha, horaHHmm)).getTime();
     const finMs = inicioMs + Math.max(1, toNum(svcEnl.duration)) * 60000;
@@ -2032,9 +2117,28 @@ async function resolverStaffEnlazado({ svcEnl, fecha, horaHHmm, staffIdPrincipal
         return inicioMs < new Date(f.end).getTime() && finMs > new Date(f.start).getTime();
       });
     });
-    const libre = candidatos.find(s => !ocupado(idDe(s)));
+    // v1.0.64 — ¿Trabaja a esa hora? Misma condición que la reserva online
+    // (resolverStaffLibre): su horario de ese día cubre desde el inicio
+    // hasta el final del enlazado, con el margen de cierre del salón.
+    const [yH, moH, dH] = String(fecha).split('-').map(Number);
+    const dow = new Date(yH, moH - 1, dH).getDay(); // 0..6
+    const iniMin = parseHHMM(horaHHmm);
+    const finMin = iniMin == null ? null : iniMin + Math.max(1, toNum(svcEnl.duration));
+    const graceMin = await leerMargenCierreSalon();
+    const trabaja = (s) => {
+      if (iniMin == null) return true;   // hora ilegible: no se descarta a nadie
+      const h = leerHorarioStaffEnDia(s, dow);
+      return !!h && iniMin >= h.from && finMin <= h.to + graceMin;
+    };
+
+    const libre = candidatos.find(s => trabaja(s) && !ocupado(idDe(s)));
     if (libre) return { staffId: idDe(libre), staffName: nombreDe(libre) };
-    console.warn(`${TAG} ⚠️ Enlazado "${svcEnl.label}": ningún asignado libre a ${fecha} ${horaHHmm} → se asigna a ${nombreDe(candidatos[0])} (Recepción decide).`);
+    const deTurno = candidatos.find(s => trabaja(s));
+    if (deTurno) {
+      console.warn(`${TAG} ⚠️ Enlazado "${svcEnl.label}": ninguna asignada libre a ${fecha} ${horaHHmm} → se asigna a ${nombreDe(deTurno)}, que trabaja a esa hora (Recepción decide).`);
+      return { staffId: idDe(deTurno), staffName: nombreDe(deTurno) };
+    }
+    console.warn(`${TAG} ⚠️ Enlazado "${svcEnl.label}": ninguna asignada trabaja a ${fecha} ${horaHHmm} → se asigna a ${nombreDe(candidatos[0])} (Recepción decide).`);
   } catch (eOc) {
     console.warn(`${TAG} ⚠️ Enlazado "${svcEnl.label}": no se pudo mirar la ocupación (${eOc.message}) → primer asignado.`);
   }
