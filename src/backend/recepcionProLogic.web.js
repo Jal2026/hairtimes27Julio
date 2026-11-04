@@ -1,9 +1,28 @@
 // =====================================================
 // KAMISUITE - Backend: Recepción PRO CMS-first
 // =====================================================
-// VERSION: 1.0.62
-// FECHA: 23 de octubre de 2026
+// VERSION: 1.0.63
+// FECHA: 4 de noviembre de 2026
 // ARCHIVO: backend/recepcionProLogic.web.js
+//
+// v1.0.63: 🔀 SEGREGACIÓN FISCAL — LA PROFESIONAL ASIGNADA PUEDE HACER EL
+//          SERVICIO, Y LA CAJA LA DECIDE QUIEN HACE LA CITA.
+//          Caso Hair-Times: al masaje del Body Ritual (servicio enlazado)
+//          se asigna, además de EMY (externa), a Angela (interna). Con una
+//          interna asignada, esServicioDeExterna lo clasifica como servicio
+//          del salón (v1.0.51: «un solo asignado interno basta»), y
+//          validarSegregacionFiscal rechazaba toda cita del masaje con EMY:
+//          «… es un servicio del salón y no puede añadirse a una cita de la
+//          profesional externa». Fallaba en Recepción (el enlazado se da a
+//          la primera asignada libre, EMY) y al confirmar en la web.
+//          EL CAMBIO, solo en validarSegregacionFiscal: si quien hace la
+//          cita está entre las profesionales asignadas al servicio en el
+//          catálogo, se permite. La caja la sigue decidiendo el titular,
+//          como ya hacía marcarPagadoReserva (v1.0.37): la cita de EMY va a
+//          la caja de externos y la de Angela a la del salón.
+//          Sin cambios: la clasificación del servicio, la comprobación de
+//          complementos dentro de una misma cita (sigue comparando por
+//          servicio), el fail-open sin titular y el resto del archivo.
 //
 // v1.0.62: 🔗 SERVICIO ENLAZADO — DOS CITAS EN PARALELO, COBRO SEPARADO.
 //          Caso Hair-Times: el spa capilar (Raquel, Ricardo o Angela) se
@@ -1490,7 +1509,7 @@ import wixData from 'wix-data';
 
 // v1.0.43 — la constante venía desfasada respecto a la cabecera (rezagada
 // en '1.0.41' mientras la cabecera ya documentaba v1.0.42). Se sincroniza.
-const VERSION = '1.0.62';
+const VERSION = '1.0.63';
 const TAG = `[RecepcionPRO][${VERSION}]`;
 const TIMEZONE = 'Europe/Madrid';
 
@@ -1828,6 +1847,18 @@ async function validarSegregacionFiscal(svc, staffId, contexto) {
   if (titularExterno === null) {
     if (svcExterno) {
       console.warn(`${TAG} ⚠️ [${contexto}] Servicio externo "${svc?.label}" sin poder verificar el titular (staffId=${staffId}). Se deja pasar.`);
+    }
+    return { ok: true };
+  }
+
+  // v1.0.63 — Si quien hace la cita está asignada al servicio en el
+  // catálogo, se permite: la caja la decide el titular, como en el cobro
+  // (marcarPagadoReserva v1.0.37). Ej.: masaje con EMY (externa) y Angela
+  // (interna) asignadas.
+  const asignadas = parseIdStaffCatalogo(svc?.idStaff).map(String);
+  if (staffId && asignadas.includes(String(staffId))) {
+    if (svcExterno !== titularExterno) {
+      console.log(`${TAG} 🔀 [${contexto}] "${svc?.label}" con profesional asignada ${titularExterno ? 'externa' : 'interna'} (staffId=${staffId}) → permitido; caja del titular.`);
     }
     return { ok: true };
   }
