@@ -1,11 +1,24 @@
 /* ============================================================================
  * kami-area-cliente.js
  * ----------------------------------------------------------------------------
- * VERSION: 1.2.2
- * FECHA:   21 de octubre de 2026
+ * VERSION: 1.2.3
+ * FECHA:   18 de noviembre de 2026
  *
  * Área de Cliente KAMISUITE — Custom Element con Shadow DOM.
  * Mismo patrón que <kami-reserva> del widget público. Tag: <kami-area-cliente>.
+ *
+ * v1.2.3 — UNIÓN DE LAS DOS RAMAS DEL ARCHIVO (18-nov-2026).
+ *   La 1.2.2 (Hair-Times: aviso de oferta al mover una cita) más la 1.2.1
+ *   (Salón Kami: condiciones de adquisición de los bonos), copiada literal
+ *   del repo de Salón Kami:
+ *   - Bajo la meta de cada bono, una línea de letra pequeña con las
+ *     condiciones que traiga (plazo por sesión y días entre sesiones) y la
+ *     fecha de compra. Lo que no aplica llega a 0 y no se pinta; con un
+ *     backend anterior a clienteAreaLogic 1.7.2 no llega nada y la línea
+ *     no sale.
+ *   - Una clase CSS nueva, .kb-item-cond (la de la 1.2.1).
+ *   Nada más cambia. Mismo archivo para Hair-Times y Salón Kami.
+ *   Pareja: clienteAreaLogic 1.7.2.
  *
  * v1.2.2 — Smart pricing: aviso al mover una cita con oferta.
  *   NUMERACIÓN: construido sobre la 1.2.0 del repo de Hair-Times. La 1.2.1
@@ -17,6 +30,19 @@
  *     (`ofertaActualPct` y `ofertas`), puenteados por el page code v1.3.8.
  *   - Reutiliza la clase `.hint` del propio selector: cero CSS nuevo.
  *   - Citas sin oferta: no cambia nada.
+ *
+ * v1.2.1 — Los bonos muestran sus CONDICIONES DE ADQUISICIÓN.
+ *   (Rama Salón Kami, 21-ago-2026. Incorporada aquí en la 1.2.3.)
+ *   Hasta ahora la tarjeta enseñaba servicio, usos restantes, caducidad y
+ *   código. El cliente no tenía forma de saber con qué condiciones había
+ *   comprado: ni el plazo para usar cada sesión ni la espera mínima entre
+ *   ellas. Se añade una línea de letra pequeña bajo la meta con las que
+ *   traiga cada bono, más la fecha de compra — que es el origen desde el
+ *   que se cuentan los plazos y sin la cual "21 días" no se puede situar
+ *   en el calendario.
+ *   Los datos vienen de clienteAreaLogic v1.6.7, del snapshot congelado en
+ *   el bono al emitirlo. Condición que no aplica llega a 0 y no se pinta;
+ *   con backend anterior no llega nada y la línea desaparece entera.
  *
  * v1.2.0 — Multi-tenant skins completos (7 pieles).
  *   - KR_SKINS embebido ahora tiene las 7 pieles del bundle canónico:
@@ -953,6 +979,9 @@ main.content{min-width:0;display:flex;flex-direction:column;gap:20px}
 .kb-item-main{flex:1;min-width:0}
 .kb-item-ttl{font-size:14.5px;font-weight:600;margin:0 0 3px;text-wrap:pretty}
 .kb-item-meta{font-size:12.5px;color:var(--kr-ink-soft)}
+/* v1.2.1 — Condiciones de adquisición del bono. Un escalón por debajo de
+   la meta: es letra pequeña, no dato principal. */
+.kb-item-cond{margin-top:3px;font-size:11.5px;line-height:1.4;color:var(--kr-ink-soft);opacity:.85}
 .kb-item-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;font-weight:600;color:var(--kr-ink);background:var(--kr-surface-2);border:1px solid var(--kr-line);border-radius:8px;padding:4px 9px;letter-spacing:.02em;flex:none}
 .kb-btn{min-width:180px;text-decoration:none;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
 .kb-btn:hover{text-decoration:none}
@@ -1367,11 +1396,32 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
         const exp = String(b.expirationDate || '');
         const expHumana = exp ? this._fechaHumana(exp) : '';
         const usos = tot > 0 ? `${rem} / ${tot} usos` : `${rem} usos`;
+
+        /* v1.2.1 — CONDICIONES DE ADQUISICIÓN.
+           El cliente veía usos y caducidad, pero no con qué condiciones
+           compró. Se listan las que traiga el bono; las que no aplican
+           llegan a 0 y no se pintan. La fecha de compra va porque es el
+           origen desde el que se cuenta el plazo por sesión: sin ella, "21
+           días" no se puede situar en el calendario. */
+        const maxD  = Number(b.maxIntervalDays) || 0;
+        const minD  = Number(b.minIntervalDays) || 0;
+        const alta  = String(b.issueDate || '');
+        const altaH = alta ? this._fechaHumana(alta) : '';
+        const cond = [
+          maxD  ? `Usa cada sesión antes de ${maxD} días` : '',
+          minD  ? `Deja al menos ${minD} días entre sesiones` : '',
+          altaH ? `Adquirido el ${altaH}` : ''
+        ].filter(Boolean);
+        const condHTML = cond.length
+          ? `<div class="kb-item-cond">${cond.map(c => esc(c)).join(' · ')}</div>`
+          : '';
+
         return `
           <div class="kb-item">
             <div class="kb-item-main">
               <div class="kb-item-ttl">${esc(serv || 'Bono')}</div>
               <div class="kb-item-meta">${esc(usos)}${expHumana ? ` · vence ${esc(expHumana)}` : ''}</div>
+              ${condHTML}
             </div>
             ${code ? `<code class="kb-item-code">${esc(code)}</code>` : ''}
           </div>`;
