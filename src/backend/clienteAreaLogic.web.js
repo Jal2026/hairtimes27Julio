@@ -1,7 +1,26 @@
 // =====================================================
 // KAMISUITE — Backend: Área de Cliente
 // =====================================================
-// VERSION: 1.7.0
+// VERSION: 1.7.2
+//
+// v1.7.2 — UNIÓN DE LAS DOS RAMAS DEL ARCHIVO (18-nov-2026).
+//   Había dos líneas: Hair-Times (1.6.8 → 1.7.1: smart pricing, cita
+//   enlazada y lugar = nombre del salón) y Salón Kami (1.6.7: condiciones
+//   de adquisición de los bonos). Esta versión es la 1.7.1 más el cambio
+//   de la 1.6.7, copiado literal del repo de Salón Kami:
+//     · Bonos: cada bono devuelve también minIntervalDays (días mínimos
+//       entre sesiones), maxIntervalDays (plazo máximo por sesión) e
+//       issueDate (fecha de compra), leídos del snapshot del propio bono
+//       (KamisuiteVouchers.bonusUseIntervalDays / bonusMaxIntervalDays /
+//       issueDate), nunca del catálogo. 0/vacío = no aplica.
+//   Aditivo: no cambia nada más. Mismo archivo para Hair-Times y Salón
+//   Kami. Pareja: kami-area-cliente 1.2.3, que pinta las condiciones.
+//
+// v1.7.1 — «Próximas citas»: el lugar de cada cita deja de ser el texto
+//   fijo 'KALONICE' (salía en Hair-Times y en cualquier salón). Ahora es el
+//   nombre comercial del salón, SalonConfig.brandName, que esta misma
+//   función ya lee más abajo (bloque 10.1). Si está vacío, el lugar va
+//   vacío. Nada más cambia.
 //
 // v1.7.0 — 🔗 CITA ENLAZADA (23-oct-2026). Un servicio con servicio
 //   enlazado crea dos citas a la misma hora, cada una con su profesional y
@@ -57,6 +76,19 @@
 //       consultar el catálogo. No-blocking: si falla, la cita ya está
 //       movida y conserva la oferta anterior; queda ⚠️ en el log.
 //   smartPricingLogic se importa de forma dinámica dentro de try/catch.
+//
+// v1.6.7 — BONOS: se devuelven también las CONDICIONES DE ADQUISICIÓN.
+//   (Rama Salón Kami, 21-ago-2026. Incorporada aquí en la 1.7.2.)
+//   El bloque de bonos entregaba código, servicio, sesiones y caducidad,
+//   pero el cliente no tenía forma de saber con qué condiciones compró:
+//   ni el plazo máximo para usar cada sesión ni la espera mínima entre
+//   ellas. Se añaden minIntervalDays, maxIntervalDays e issueDate (origen
+//   desde el que se cuentan los plazos).
+//   Se leen del SNAPSHOT congelado en el propio bono al emitirlo, nunca
+//   del catálogo: el servicio puede haberse reconfigurado después.
+//   0/vacío = esa condición no aplica. Los bonos emitidos antes de
+//   voucherPublicLogic v1.4.0 no tienen plazo máximo y devuelven 0.
+//   Aditivo: no cambia PRIME, tarjetas, reservas, perfil ni notas.
 //
 // v1.6.6 — Fecha de verificación del appId de Wix Stores.
 //   - Documentada en el comentario de APP_ID_WIX_STORES la fecha
@@ -200,7 +232,8 @@
 //         · Imagen de tarjeta desde `KamisuiteProductsConfig.primeImage`
 //           via `getProductosConfig` de productosKamisuiteLogic v1.0.1+.
 //     + data.bonos    = { tiene, items:[{id,code,serviceLabel,
-//                         remainingUses,totalUses,expirationDate}],
+//                         remainingUses,totalUses,expirationDate,
+//                         issueDate,minIntervalDays,maxIntervalDays}],
 //                         urlAdquirir }
 //         · Se lee de `KamisuiteVouchers` (contactId, status='ACTIVO')
 //           via `getProductosCustomCliente`.
@@ -469,7 +502,7 @@ import { cancelarReserva, reprogramarReserva } from 'backend/recepcionProLogic.w
 import { getHuecosDisponibles } from 'backend/widgetPublicoLogic.web';
 import wixData from 'wix-data';
 
-const VERSION = '1.7.0';
+const VERSION = '1.7.2';
 const TAG = `[ClienteArea][${VERSION}]`;
 
 // App ID constante de Wix Stores. Requerido en catalogReference.appId
@@ -1063,7 +1096,8 @@ function validarMemberContactId(memberContactId) {
 //     bonos: {                              // v1.6.0
 //       tiene: boolean,
 //       items: [{ id, code, serviceLabel, remainingUses, totalUses,
-//                 expirationDate:'YYYY-MM-DD' }],
+//                 expirationDate:'YYYY-MM-DD', issueDate:'YYYY-MM-DD',
+//                 minIntervalDays, maxIntervalDays }],
 //       urlAdquirir: 'https://…'
 //     },
 //     tarjetas: {                           // v1.6.0
@@ -1197,7 +1231,7 @@ export const getAreaCliente = webMethod(
             horaFin: fechaFin ? hhmmMadrid(fechaFin) : '',
             servicio: String(it.title || '').split(' — ')[0] || it.title || 'Servicio',
             profesional: it.staffName || '',
-            lugar: 'KALONICE',
+            lugar: '',   // v1.7.1 — se rellena con brandName tras leer SalonConfig (10.1)
             // Campos extra que el Custom Element no usa pero el page code sí:
             staffId: it.staffId || '',
             family: it.family || '',
@@ -1512,6 +1546,8 @@ export const getAreaCliente = webMethod(
         console.warn(`${TAG} ⚠️ SalonConfig/KamisuiteProductsConfig no disponibles: ${e.message}`);
       }
       const salon = { brandName, urlBooking };
+      // v1.7.1 — Lugar de las próximas citas: el nombre comercial del salón.
+      for (const c of proximas) c.lugar = brandName;
 
       // 11.1) PRIME — query directa a KamisuitePrimeMemberships.
       // Imagen: SIEMPRE se devuelve `primeImagenPublicUrl` (objeto de
@@ -1564,13 +1600,27 @@ export const getAreaCliente = webMethod(
           if (v.expirationDate && new Date(v.expirationDate).getTime() < nowMs) return false;
           return true;
         });
+        // v1.6.7 — CONDICIONES DE ADQUISICIÓN.
+        // Hasta ahora el Área de Cliente enseñaba el código, el servicio, las
+        // sesiones y la caducidad — pero NO las condiciones con las que se
+        // compró el bono. Se añaden los dos plazos, leídos del snapshot
+        // congelado en el propio bono al emitirlo (nunca del catálogo: el
+        // servicio puede haberse reconfigurado después de la compra).
+        // 0/vacío = esa condición no aplica a ese bono.
         bonos.items = activos.map(v => ({
           id: v._id || '',
           code: v.code || '',
           serviceLabel: v.serviceLabel || '',
           remainingUses: Number(v.remainingUses) || 0,
           totalUses: Number(v.totalUses) || 0,
-          expirationDate: v.expirationDate ? ymdMadrid(v.expirationDate) : ''
+          expirationDate: v.expirationDate ? ymdMadrid(v.expirationDate) : '',
+          // Días mínimos a dejar entre una sesión y la siguiente.
+          minIntervalDays: Number(v.bonusUseIntervalDays) || 0,
+          // Plazo máximo para usar cada sesión, contado desde la compra.
+          maxIntervalDays: Number(v.bonusMaxIntervalDays) || 0,
+          // Fecha de compra: es el origen desde el que se cuentan los plazos,
+          // así que sin ella el cliente no puede situarlos en el calendario.
+          issueDate: v.issueDate ? ymdMadrid(v.issueDate) : ''
         }));
         bonos.tiene = bonos.items.length > 0;
         console.log(
