@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>KAMISUITE · Monitor de Marca</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════
+   KAMISUITE · Widget Monitor de Marca v1.0.0
+   Light theme — Bai Jamjuree — accent dorado #c9a44a
+   (paleta clara del widget de Estadísticas)
+   ───────────────────────────────────────────────────────────
+   Consulta del comercial de una marca sobre el almacén de uso
+   en salón. SOLO LECTURA: no hay ningún control que escriba.
+   El widget no envía marcas ni filtros al backend: lo que ve el
+   comercial lo decide el servidor según su usuario.
+   Sin modales ni avisos flotantes: cada mensaje aparece junto
+   al botón que lo provoca o en la franja de estado superior.
+   Backend:   brandMonitorLogic.web.js v1.0.0
+   Page code: pagecode_monitorMarca.js v1.0.0 (#widgetMonitorMarca)
+   CHANGELOG
+   v1.0.0 · 19 Nov 2026 · versión inicial. Productos con estado,
+     consumo y días hasta el mínimo; pedido sugerido (copiar y
+     Excel); informe de consumo en Excel.
+   ═══════════════════════════════════════════════════════════ */
+:root{
+  --bg:#f5f6f8; --surface:#ffffff; --surface2:#f0f1f3; --surface3:#e8e9ec;
+  --border:rgba(0,0,0,.10); --border-hover:rgba(0,0,0,.20);
+  --text:#1a1b1e; --text-sec:rgba(0,0,0,.62); --muted:rgba(0,0,0,.45);
+  --gold:#c9a44a; --gold-dark:#8a6d1f; --gold-dim:rgba(201,164,74,.14);
+  --green:#2a9d54; --green-dim:rgba(42,157,84,.10);
+  --amber:#b45309; --amber-dim:#fef3c7;
+  --purple:#7c3aed; --purple-dim:#f3effe;
+  --red:#d32f2f; --red-dim:#fdecec;
+  --radius:10px; --radius-sm:6px;
+  --shadow:0 1px 3px rgba(0,0,0,.06);
+  --font:"Bai Jamjuree","Segoe UI",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.45;-webkit-font-smoothing:antialiased;overflow-x:hidden;font-size:13px}
+button,input,select{font-family:inherit;font-size:13px;color:inherit}
+button{cursor:pointer}
+.wrap{max-width:1200px;margin:0 auto;padding:18px}
+
+/* Cabecera */
+.hd{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow)}
+.kicker{font-size:10px;font-weight:700;letter-spacing:1.6px;color:var(--gold-dark)}
+.hd h1{font-size:20px;font-weight:700;margin-top:2px}
+.hd-sub{color:var(--text-sec);font-size:12px;margin-top:2px}
+.brands{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.hd-r{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.period{font-size:11px;color:var(--text-sec);background:var(--surface2);border-radius:20px;padding:4px 10px;white-space:nowrap}
+
+/* Botones */
+.btn{background:var(--gold);color:#fff;border:1px solid var(--gold);border-radius:var(--radius-sm);padding:8px 13px;font-weight:600;transition:.15s;white-space:nowrap}
+.btn:hover{background:var(--gold-dark);border-color:var(--gold-dark)}
+.btn.ghost{background:var(--surface);color:var(--text);border-color:var(--border)}
+.btn.ghost:hover{border-color:var(--border-hover);background:var(--surface2)}
+.btn:disabled{opacity:.55;cursor:default}
+
+/* Estado (carga / errores) */
+.status{display:none;align-items:center;gap:10px;margin-top:12px;padding:12px 14px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--border);color:var(--text-sec)}
+.status.on{display:flex}
+.status.err{background:var(--red-dim);border-color:transparent;color:var(--red);font-weight:600}
+.status.info{background:var(--surface);color:var(--text)}
+.spin{width:18px;height:18px;border:2px solid var(--surface3);border-top-color:var(--gold);border-radius:50%;animation:sp .8s linear infinite;flex-shrink:0}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* KPIs */
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:12px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:11px 12px;box-shadow:var(--shadow)}
+.k-lab{font-size:10px;font-weight:600;letter-spacing:.6px;color:var(--muted);text-transform:uppercase}
+.k-val{font-size:22px;font-weight:800;line-height:1.15;margin-top:3px}
+.k-sub{font-size:10px;color:var(--muted)}
+.kpi.red .k-val{color:var(--red)}
+.kpi.amber .k-val{color:var(--amber)}
+.kpi.purple .k-val{color:var(--purple)}
+.kpi.gold .k-val{color:var(--gold-dark)}
+
+/* Informe */
+.report{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:var(--radius);padding:12px 14px;box-shadow:var(--shadow)}
+.rep-t{font-weight:700;font-size:14px}
+.rep-s{font-size:12px;color:var(--text-sec)}
+.act{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.amsg{font-size:12px;font-weight:600;color:var(--text-sec)}
+.amsg.ok{color:var(--green)}
+.amsg.err{color:var(--red)}
+
+/* Pestañas */
+.tabs{display:flex;gap:4px;margin-top:16px;border-bottom:1px solid var(--border)}
+.tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;font-weight:600;color:var(--text-sec);margin-bottom:-1px}
+.tab.on{color:var(--text);border-bottom-color:var(--gold)}
+.badge{display:inline-block;min-width:20px;padding:1px 6px;border-radius:10px;background:var(--gold-dim);color:var(--gold-dark);font-size:11px;font-weight:700;margin-left:4px}
+.pane{display:none;padding-top:12px}
+.pane.on{display:block}
+
+/* Herramientas */
+.tools{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:8px}
+.tools input,.tools select{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;outline:none}
+.tools input:focus,.tools select:focus{border-color:var(--gold)}
+.count{font-size:11px;color:var(--muted);margin:10px 2px 6px}
+
+/* Filas de producto */
+.row{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border);border-radius:var(--radius);padding:11px 13px;margin-bottom:8px;box-shadow:var(--shadow)}
+.row.st-AGOTADO{border-left-color:var(--red)}
+.row.st-REPONER{border-left-color:var(--amber)}
+.row.st-PRONTO{border-left-color:var(--purple)}
+.r-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.r-name{font-weight:700;font-size:14px}
+.r-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:var(--text-sec)}
+.chip{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;padding:3px 8px;border-radius:20px;white-space:nowrap}
+.chip.brand{background:var(--gold-dim);color:var(--gold-dark)}
+.chip.out{background:var(--red-dim);color:var(--red)}
+.chip.warn{background:var(--amber-dim);color:var(--amber)}
+.chip.soon{background:var(--purple-dim);color:var(--purple)}
+.cnts{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:9px}
+.cnt{background:var(--surface2);border-radius:var(--radius-sm);padding:6px 8px}
+.c-l{font-size:9px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase}
+.c-v{font-size:15px;font-weight:800;line-height:1.2}
+.c-v.small{font-size:12px;font-weight:700;padding-top:2px}
+.empty{text-align:center;color:var(--muted);padding:26px 10px;background:var(--surface);border:1px dashed var(--border);border-radius:var(--radius)}
+
+/* Pedido */
+.ped-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.ped-sum{font-weight:700;font-size:14px}
+.ped-note{font-size:11px;color:var(--text-sec);margin:8px 0 12px;line-height:1.5}
+.ped-brand{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--gold-dark);margin:14px 2px 6px;text-transform:uppercase}
+.pl{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 13px;margin-bottom:6px;box-shadow:var(--shadow)}
+.pl-info{font-size:11px;color:var(--text-sec);text-align:right;white-space:nowrap}
+.pl-qty{text-align:center;min-width:62px;background:var(--gold-dim);border-radius:var(--radius-sm);padding:5px 8px}
+.pl-qty b{display:block;font-size:20px;font-weight:800;color:var(--gold-dark);line-height:1.1}
+.pl-qty span{font-size:9px;font-weight:700;letter-spacing:.5px;color:var(--gold-dark)}
+
+@media (max-width:860px){
+  .kpis{grid-template-columns:repeat(3,1fr)}
+  .tools{grid-template-columns:1fr 1fr}
+  .tools input{grid-column:1 / -1}
+}
+@media (max-width:560px){
+  .wrap{padding:10px}
+  .hd-r{align-items:flex-start}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .cnts{grid-template-columns:repeat(3,1fr)}
+  .pl{grid-template-columns:1fr auto}
+  .pl-info{grid-column:1 / -1;text-align:left;order:3}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hd">
+    <div class="hd-l">
+      <div class="kicker">KAMISUITE · MONITOR DE MARCA</div>
+      <h1 id="hCompany">Monitor de marca</h1>
+      <div class="hd-sub" id="hSub"></div>
+      <div class="brands" id="hBrands"></div>
+    </div>
+    <div class="hd-r">
+      <div class="period" id="hPeriod" hidden></div>
+      <button class="btn ghost" id="btnReload">↻ Recargar</button>
+    </div>
+  </header>
+
+  <div class="status on" id="status"><div class="spin"></div><span id="statusMsg">Cargando el almacén…</span></div>
+
+  <main id="main" hidden>
+    <div class="kpis" id="kpis"></div>
+
+    <div class="report">
+      <div>
+        <div class="rep-t">Informe de consumo</div>
+        <div class="rep-s" id="repSub"></div>
+      </div>
+      <div class="act">
+        <button class="btn" id="btnInforme">⬇ Descargar Excel</button>
+        <span class="amsg" id="msgInforme"></span>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab on" data-pane="pProd">Productos</button>
+      <button class="tab" data-pane="pPedido">Pedido sugerido <span class="badge" id="badgePedido">0</span></button>
+    </div>
+
+    <section class="pane on" id="pProd">
+      <div class="tools">
+        <input id="q" type="search" placeholder="Buscar producto, SKU o categoría" autocomplete="off">
+        <select id="fBrand"></select>
+        <select id="fState">
+          <option value="todos">Todos los estados</option>
+          <option value="AGOTADO">Agotados</option>
+          <option value="REPONER">Bajo mínimo</option>
+          <option value="PRONTO">Llegan al mínimo pronto</option>
+          <option value="pedido">En el pedido sugerido</option>
+        </select>
+        <select id="fSort">
+          <option value="prioridad">Reponer primero</option>
+          <option value="consumo">Más consumo</option>
+          <option value="dias">Menos días al mínimo</option>
+          <option value="nombre">Nombre</option>
+        </select>
+      </div>
+      <div class="count" id="count"></div>
+      <div id="list"></div>
+    </section>
+
+    <section class="pane" id="pPedido">
+      <div class="ped-bar">
+        <div class="ped-sum" id="pedSum"></div>
+        <div class="act">
+          <button class="btn" id="btnCopiar">⧉ Copiar pedido</button>
+          <button class="btn ghost" id="btnPedidoXls">⬇ Excel</button>
+          <span class="amsg" id="msgPedido"></span>
+        </div>
+      </div>
+      <div class="ped-note" id="pedNote"></div>
+      <div id="pedList"></div>
+    </section>
+  </main>
+
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   KAMISUITE · Widget Monitor de Marca v1.0.0
+   ═══════════════════════════════════════════════════════════ */
+const VERSION = '1.0.0';
+const TAG = `[MonitorMarcaWidget][${VERSION}]`;
+
+// ─── ESTADO ───
+let datos = null;           // payload completo de 'data'
+let productos = [];
+let respuesta = false;      // el page code ya ha contestado al 'ready'
+const exportando = { pedido: false, informe: false };
+
+const ORDEN_ESTADO = { AGOTADO: 0, REPONER: 1, PRONTO: 2, OK: 3 };
+
+// Mensajes de KAMISUITE para cada situación. Nunca se muestra el
+// texto técnico del error: va solo a la consola.
+const MSG_SIN_DATOS = {
+  SIN_SESION: 'No hay ninguna sesión iniciada. Inicia sesión con tu usuario y vuelve a abrir esta página.',
+  SIN_ACCESO: 'Tu usuario no tiene acceso al monitor de este salón. Pide al salón que te dé de alta con el email con el que inicias sesión.',
+  SIN_MARCAS: 'Tu usuario está dado de alta, pero no tiene marcas asignadas. Pide al salón que añada tus marcas.',
+  ERROR: 'No se ha podido cargar el almacén. Pulsa Recargar y, si sigue igual, avisa al salón.'
+};
+const MSG_EXCEL = {
+  PEDIDO_VACIO: 'Ahora mismo no hay nada que pedir.',
+  SIN_SESION: 'La sesión ha caducado. Vuelve a iniciar sesión.',
+  SIN_ACCESO: 'Tu usuario ya no tiene acceso a este monitor.',
+  SIN_MARCAS: 'Tu usuario no tiene marcas asignadas.',
+  ERROR: 'No se ha podido generar el Excel. Inténtalo de nuevo.'
+};
+
+// ─── PUENTE CON EL PAGE CODE ───
+function send(type, payload) {
+  try { window.parent.postMessage({ type, payload }, '*'); }
+  catch (e) { console.error(TAG, 'postMessage', e); }
+}
+
+// Bucle de reintento: sin él, el widget falla en móvil cuando el
+// page code aún no está montado al terminar de cargar el iframe.
+let readyTimer = setInterval(() => {
+  if (respuesta) { clearInterval(readyTimer); return; }
+  send('ready');
+}, 800);
+
+window.addEventListener('message', (e) => {
+  const msg = e.data || {};
+  if (!msg.type) return;
+  switch (msg.type) {
+    case 'data':        onData(msg.payload || {}); break;
+    case 'sin-datos':   onSinDatos(msg.payload || {}); break;
+    case 'excel':       onExcel(msg.payload || {}); break;
+    case 'excel-error': onExcelError(msg.payload || {}); break;
+  }
+});
+
+// ─── UTILIDADES ───
+const $ = id => document.getElementById(id);
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function n(v) { return String(Number(v) || 0).replace('.', ','); }
+function norm(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+function fecha(iso) {
+  const d = iso ? new Date(iso) : null;
+  return (d && !isNaN(d)) ? d.toLocaleDateString('es-ES') : '';
+}
+function periodoDias() { return (datos && datos.periodoDias) || 0; }
+
+function estadoCarga(texto) {
+  const st = $('status');
+  st.className = 'status on';
+  st.innerHTML = `<div class="spin"></div><span>${esc(texto)}</span>`;
+}
+function estadoError(texto) {
+  const st = $('status');
+  st.className = 'status on err';
+  st.innerHTML = `<span>${esc(texto)}</span>`;
+}
+function estadoOff() { $('status').className = 'status'; }
+
+function amsg(id, texto, cls) {
+  const el = $(id);
+  el.textContent = texto || '';
+  el.className = 'amsg' + (cls ? ' ' + cls : '');
+}
+
+// ═══ DATOS ═══
+function onData(p) {
+  respuesta = true;
+  clearInterval(readyTimer);
+  datos = p;
+  productos = Array.isArray(p.productos) ? p.productos : [];
+  estadoOff();
+  $('main').hidden = false;
+  amsg('msgInforme', '');
+  amsg('msgPedido', '');
+  pintarCabecera();
+  pintarKpis();
+  pintarFiltroMarcas();
+  render();
+  pintarPedido();
+}
+
+function onSinDatos(p) {
+  respuesta = true;
+  clearInterval(readyTimer);
+  datos = null;
+  productos = [];
+  $('main').hidden = true;
+  estadoError(MSG_SIN_DATOS[p.code] || MSG_SIN_DATOS.ERROR);
+}
+
+function pintarCabecera() {
+  const perfil = datos.perfil || {};
+  $('hCompany').textContent = perfil.company || 'Monitor de marca';
+  $('hSub').textContent = [datos.salonName, perfil.userName].filter(Boolean).join(' · ');
+  $('hBrands').innerHTML = (perfil.brands || []).map(b => `<span class="chip brand">${esc(b)}</span>`).join('');
+  const per = $('hPeriod');
+  per.hidden = false;
+  per.textContent = `Últimos ${periodoDias()} días · ${fecha(datos.desde)} – ${fecha(datos.hasta)}`;
+  $('repSub').textContent = `Consumo de los últimos ${periodoDias()} días por producto y por marca, con stock y estado de cada referencia.`;
+}
+
+function pintarKpis() {
+  const r = datos.resumen || {};
+  $('kpis').innerHTML = `
+    <div class="kpi"><div class="k-lab">Referencias</div><div class="k-val">${r.referencias || 0}</div><div class="k-sub">de tus marcas</div></div>
+    <div class="kpi"><div class="k-lab">Consumo</div><div class="k-val">${n(r.unidadesConsumidas)}</div><div class="k-sub">uds en ${periodoDias()} días</div></div>
+    <div class="kpi ${r.agotadas ? 'red' : ''}"><div class="k-lab">Agotadas</div><div class="k-val">${r.agotadas || 0}</div><div class="k-sub">sin existencias</div></div>
+    <div class="kpi ${r.bajoMinimo ? 'amber' : ''}"><div class="k-lab">Bajo mínimo</div><div class="k-val">${r.bajoMinimo || 0}</div><div class="k-sub">hay que reponer</div></div>
+    <div class="kpi ${r.pronto ? 'purple' : ''}"><div class="k-lab">Pronto</div><div class="k-val">${r.pronto || 0}</div><div class="k-sub">al mínimo en ${periodoDias()} días</div></div>
+    <div class="kpi gold"><div class="k-lab">Pedido sugerido</div><div class="k-val">${r.unidadesPedido || 0}</div><div class="k-sub">uds en ${r.lineasPedido || 0} referencias</div></div>`;
+  $('badgePedido').textContent = r.lineasPedido || 0;
+}
+
+// El desplegable de marcas se recalcula en cada carga desde los
+// productos recibidos (nunca se cachea).
+function pintarFiltroMarcas() {
+  const sel = $('fBrand');
+  const actual = sel.value;
+  const marcas = Array.from(new Set(productos.map(p => p.brand).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'es'));
+  sel.innerHTML = '<option value="">Todas las marcas</option>' +
+    marcas.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  sel.value = marcas.includes(actual) ? actual : '';
+}
+
+// ═══ LISTADO DE PRODUCTOS ═══
+function chipEstado(p) {
+  if (p.estado === 'AGOTADO') return '<span class="chip out">AGOTADO</span>';
+  if (p.estado === 'REPONER') return '<span class="chip warn">⚠ BAJO MÍNIMO</span>';
+  if (p.estado === 'PRONTO') {
+    const d = p.diasHastaMinimo;
+    return `<span class="chip soon">⏳ ${d > 0 ? '≈' + d + (d === 1 ? ' DÍA' : ' DÍAS') : 'MENOS DE 1 DÍA'}</span>`;
+  }
+  return '';
+}
+
+function diasTxt(p) {
+  if (p.estado === 'AGOTADO' || p.estado === 'REPONER') return 'Ya';
+  if (p.diasHastaMinimo === null || p.diasHastaMinimo === undefined) return 'Sin consumo';
+  return '≈ ' + p.diasHastaMinimo;
+}
+
+function filtrados() {
+  const q = norm($('q').value.trim());
+  const fb = $('fBrand').value;
+  const fs = $('fState').value;
+  const so = $('fSort').value;
+
+  let lista = productos.filter(p => {
+    if (fb && p.brand !== fb) return false;
+    if (fs === 'pedido' && !(p.pedido > 0)) return false;
+    if (fs !== 'todos' && fs !== 'pedido' && p.estado !== fs) return false;
+    if (q) {
+      const t = norm([p.productName, p.sku, p.category, p.brand].join(' '));
+      if (!t.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const porNombre = (a, b) => a.productName.localeCompare(b.productName, 'es');
+  const diasOrden = p => (p.diasHastaMinimo === null || p.diasHastaMinimo === undefined) ? Infinity : p.diasHastaMinimo;
+  const orden = {
+    prioridad: (a, b) => (ORDEN_ESTADO[a.estado] - ORDEN_ESTADO[b.estado]) || (diasOrden(a) - diasOrden(b)) || porNombre(a, b),
+    consumo:   (a, b) => (b.consumo - a.consumo) || porNombre(a, b),
+    dias:      (a, b) => (diasOrden(a) - diasOrden(b)) || porNombre(a, b),
+    nombre:    porNombre
+  };
+  return lista.sort(orden[so] || orden.prioridad);
+}
+
+function render() {
+  const lista = filtrados();
+  $('count').textContent = `${lista.length} de ${productos.length} referencias`;
+
+  if (!productos.length) {
+    $('list').innerHTML = '<div class="empty">No hay productos de tus marcas en el almacén de este salón.</div>';
+    return;
+  }
+  if (!lista.length) {
+    $('list').innerHTML = '<div class="empty">Ningún producto coincide con la búsqueda o los filtros.</div>';
+    return;
+  }
+
+  $('list').innerHTML = lista.map(p => `
+    <div class="row st-${esc(p.estado)}">
+      <div class="r-top">
+        <div class="r-name">${esc(p.productName)}</div>
+        ${chipEstado(p)}
+      </div>
+      <div class="r-meta">
+        <span class="chip brand">${esc(p.brand)}</span>
+        ${p.category ? `<span>${esc(p.category)}</span>` : ''}
+        ${p.sku ? `<span>· SKU ${esc(p.sku)}</span>` : ''}
+      </div>
+      <div class="cnts">
+        <div class="cnt"><div class="c-l">Cerrados</div><div class="c-v">${n(p.stockStored)}</div></div>
+        <div class="cnt"><div class="c-l">Abiertos</div><div class="c-v">${n(p.stockInUse)}</div></div>
+        <div class="cnt"><div class="c-l">Total</div><div class="c-v">${n(p.total)}</div></div>
+        <div class="cnt"><div class="c-l">Mínimo</div><div class="c-v">${n(p.minStock)}</div></div>
+        <div class="cnt"><div class="c-l">Consumo ${periodoDias()} d</div><div class="c-v">${n(p.consumo)}</div></div>
+        <div class="cnt"><div class="c-l">Días al mínimo</div><div class="c-v ${diasTxt(p).length > 4 ? 'small' : ''}">${esc(diasTxt(p))}</div></div>
+      </div>
+    </div>`).join('');
+}
+
+// ═══ PEDIDO SUGERIDO ═══
+function lineasPedido() {
+  return productos
+    .filter(p => p.pedido > 0)
+    .sort((a, b) => a.brand.localeCompare(b.brand, 'es') || a.productName.localeCompare(b.productName, 'es'));
+}
+
+function estadoPedidoTxt(p) {
+  if (p.estado === 'AGOTADO') return 'Agotado';
+  if (p.estado === 'REPONER') return 'Bajo mínimo';
+  if (p.estado === 'PRONTO') return p.diasHastaMinimo > 0 ? `Al mínimo en ≈${p.diasHastaMinimo} días` : 'Al mínimo en menos de 1 día';
+  return '';
+}
+
+function pintarPedido() {
+  const lineas = lineasPedido();
+  const uds = lineas.reduce((acc, p) => acc + p.pedido, 0);
+  $('pedSum').textContent = lineas.length
+    ? `${lineas.length} referencias · ${uds} unidades`
+    : 'Sin pedido sugerido';
+  $('btnCopiar').disabled = !lineas.length;
+  $('btnPedidoXls').disabled = !lineas.length;
+
+  $('pedNote').textContent =
+    `Incluye lo agotado, lo que está bajo mínimo y lo que, al ritmo de los últimos ${periodoDias()} días, llega al mínimo dentro de ese plazo. ` +
+    `Cantidad: hasta el stock máximo si el salón lo tiene configurado; si no, lo necesario para cubrir los próximos ${periodoDias()} días y terminar en el mínimo.`;
+
+  if (!lineas.length) {
+    $('pedList').innerHTML = '<div class="empty">Ahora mismo no hay nada que pedir: ningún producto de tus marcas está agotado, bajo mínimo ni a punto de llegar al mínimo.</div>';
+    return;
+  }
+
+  let html = '';
+  let marcaActual = null;
+  for (const p of lineas) {
+    if (p.brand !== marcaActual) {
+      marcaActual = p.brand;
+      html += `<div class="ped-brand">${esc(p.brand)}</div>`;
+    }
+    html += `
+      <div class="pl">
+        <div>
+          <div class="r-name">${esc(p.productName)}</div>
+          <div class="r-meta">
+            ${p.sku ? `<span>SKU ${esc(p.sku)}</span>` : ''}
+            ${p.category ? `<span>${p.sku ? '· ' : ''}${esc(p.category)}</span>` : ''}
+            ${chipEstado(p)}
+          </div>
+        </div>
+        <div class="pl-info">Stock ${n(p.total)} · Mín ${n(p.minStock)}<br>Consumo ${periodoDias()} d: ${n(p.consumo)}</div>
+        <div class="pl-qty"><b>${p.pedido}</b><span>UDS</span></div>
+      </div>`;
+  }
+  $('pedList').innerHTML = html;
+}
+
+// Texto del pedido para pegar en WhatsApp, email o el sistema de
+// pedidos de la marca.
+function textoPedido() {
+  const lineas = lineasPedido();
+  const perfil = (datos && datos.perfil) || {};
+  const out = ['PEDIDO SUGERIDO'];
+  if (datos.salonName) out.push(`Salón: ${datos.salonName}`);
+  out.push(`Fecha: ${fecha(datos.hasta)}`);
+  if ((perfil.brands || []).length) out.push(`Marcas: ${perfil.brands.join(', ')}`);
+
+  let marcaActual = null;
+  for (const p of lineas) {
+    if (p.brand !== marcaActual) {
+      marcaActual = p.brand;
+      out.push('', p.brand.toUpperCase());
+    }
+    out.push(`• ${p.productName}${p.sku ? ` (SKU ${p.sku})` : ''} — ${p.pedido} uds`);
+  }
+  const uds = lineas.reduce((acc, p) => acc + p.pedido, 0);
+  out.push('', `Total: ${lineas.length} referencias · ${uds} unidades`);
+  return out.join('\n');
+}
+
+// Informe por producto en TSV: plan B si el navegador no deja
+// descargar el Excel dentro de la página (se pega directo en Excel).
+function tsvInforme() {
+  const d = periodoDias();
+  const cab = ['Producto','Marca','Categoría','SKU','Unidad',`Consumo ${d} días`,'Media semanal','Cerrados','Abiertos','Total','Mínimo','Días hasta el mínimo','Cantidad sugerida'];
+  const filas = productos
+    .slice()
+    .sort((a, b) => (b.consumo - a.consumo) || a.productName.localeCompare(b.productName, 'es'))
+    .map(p => [
+      p.productName, p.brand, p.category, p.sku, p.unit, n(p.consumo), n(p.mediaSemanal),
+      p.stockStored, p.stockInUse, p.total, p.minStock,
+      (p.diasHastaMinimo === null || p.diasHastaMinimo === undefined) ? 'Sin consumo' : p.diasHastaMinimo,
+      p.pedido
+    ].join('\t'));
+  return [cab.join('\t')].concat(filas).join('\n');
+}
+
+// ═══ COPIAR ═══
+// Copia con fallback execCommand. Patrón del widget de Almacén v1.3.1
+// (copiarTexto / copiarFallback), con el aviso junto al botón.
+function copiarTexto(texto, onOk, onFail) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(texto).then(onOk).catch(() => copiarFallback(texto, onOk, onFail));
+  } else {
+    copiarFallback(texto, onOk, onFail);
+  }
+}
+function copiarFallback(texto, onOk, onFail) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = texto;
+    ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    if (ok === false) onFail(); else onOk();
+  } catch (e) {
+    console.warn(TAG, 'copia no permitida', e);
+    onFail();
+  }
+}
+
+function copiarPedido() {
+  if (!lineasPedido().length) return;
+  copiarTexto(
+    textoPedido(),
+    () => amsg('msgPedido', 'Pedido copiado. Pégalo donde lo necesites.', 'ok'),
+    () => amsg('msgPedido', 'El navegador no ha dejado copiar. Usa el botón Excel.', 'err')
+  );
+}
+
+// ═══ EXCEL ═══
+// El .xlsx lo genera el backend (paquete xlsx, mismo patrón que el
+// Almacén) y llega en base64. Aquí solo se decodifica y se descarga.
+function exportar(tipo) {
+  if (exportando[tipo]) return;
+  exportando[tipo] = true;
+  const btn = tipo === 'pedido' ? $('btnPedidoXls') : $('btnInforme');
+  const msgId = tipo === 'pedido' ? 'msgPedido' : 'msgInforme';
+  btn.disabled = true;
+  amsg(msgId, 'Generando Excel…');
+  send('exportar', { tipo });
+}
+
+function finExportar(tipo) {
+  exportando[tipo] = false;
+  if (tipo === 'pedido') $('btnPedidoXls').disabled = !lineasPedido().length;
+  else $('btnInforme').disabled = false;
+}
+
+function onExcel(p) {
+  const tipo = p.tipo === 'pedido' ? 'pedido' : 'informe';
+  const msgId = tipo === 'pedido' ? 'msgPedido' : 'msgInforme';
+  finExportar(tipo);
+  try {
+    const bin = atob(p.archivo);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: p.mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = p.nombreArchivo || (tipo === 'pedido' ? 'pedido.xlsx' : 'consumo.xlsx');
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1500);
+    amsg(msgId, `Descargado: ${p.nombreArchivo || ''}`, 'ok');
+  } catch (e) {
+    // Plan B: si la página no deja descargar, se copia al portapapeles.
+    console.warn(TAG, 'descarga bloqueada, copiando al portapapeles', e);
+    const texto = tipo === 'pedido' ? textoPedido() : tsvInforme();
+    copiarTexto(
+      texto,
+      () => amsg(msgId, tipo === 'pedido'
+        ? 'No se ha podido descargar: el pedido se ha copiado al portapapeles.'
+        : 'No se ha podido descargar: el informe se ha copiado, pégalo en una hoja de Excel.', 'ok'),
+      () => amsg(msgId, 'El navegador no ha dejado descargar ni copiar. Prueba desde otro navegador.', 'err')
+    );
+  }
+}
+
+function onExcelError(p) {
+  const tipo = p.tipo === 'pedido' ? 'pedido' : 'informe';
+  finExportar(tipo);
+  amsg(tipo === 'pedido' ? 'msgPedido' : 'msgInforme', MSG_EXCEL[p.code] || MSG_EXCEL.ERROR, 'err');
+}
+
+// ═══ EVENTOS ═══
+$('btnReload').onclick = () => {
+  estadoCarga('Actualizando…');
+  send('recargar');
+};
+$('btnInforme').onclick = () => exportar('informe');
+$('btnPedidoXls').onclick = () => exportar('pedido');
+$('btnCopiar').onclick = copiarPedido;
+['q', 'fBrand', 'fState', 'fSort'].forEach(id => { $(id).oninput = render; $(id).onchange = render; });
+
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    $(t.dataset.pane).classList.add('on');
+  };
+});
+
+// ═══ ARRANQUE ═══
+document.addEventListener('DOMContentLoaded', () => {
+  console.log(`${TAG} 🚀 Widget listo`);
+  send('ready');
+});
+</script>
+</body>
+</html>
