@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════════════
-   KAMISUITE · Widget Panel de Proveedor v1.0.3
+   KAMISUITE · Widget Panel de Proveedor v1.0.4
    (Monitor de consumo en salón)
    Light theme — Bai Jamjuree — accent dorado #c9a44a
    (paleta clara del widget de Estadísticas)
@@ -20,9 +20,20 @@
    comercial lo decide el servidor según su usuario.
    Sin modales ni avisos flotantes: cada mensaje aparece junto
    al botón que lo provoca o en la franja de estado superior.
-   Backend:   brandMonitorLogic.web.js v1.0.0
+   Backend:   brandMonitorLogic.web.js v1.0.1
    Page code: pagecode_monitorMarca.js v1.0.1 (#widgetMonitorMarca)
    CHANGELOG
+   v1.0.4 · 19 Nov 2026 · Umbrales SOLO del salón (backend v1.0.1).
+     · Fuera el estado «Pronto»: su indicador, su filtro, su chip y
+       su color. Los días al mínimo siguen como dato informativo.
+     · Cada producto muestra Mínimo y Máximo del salón («—» si no hay
+       máximo). Nota «Mínimo y máximo: los fija el salón» junto al
+       contador de referencias.
+     · Pedido: solo agotados y bajo mínimo. Cada línea enseña mínimo y
+       máximo; sin máximo indica «Sin máximo: mínimo + 1». Nota del
+       pedido y texto de pedido vacío reescritos con la regla nueva.
+     · Informe en portapapeles (plan B): columna Máximo.
+     · Se elimina estadoPedidoTxt(), que no se usaba.
    v1.0.3 · 19 Nov 2026 · Se deshace el cambio de cabecera de la
      v1.0.2: el título grande vuelve a ser la empresa (p. ej. Henkel)
      y la línea de debajo, salón · comercial, como en la v1.0.1.
@@ -89,14 +100,13 @@ button{cursor:pointer}
 
 /* KPIs */
 .sec-t{font-size:15px;font-weight:700;margin:16px 2px 0}
-.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:8px}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:8px}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:11px 12px;box-shadow:var(--shadow)}
 .k-lab{font-size:10px;font-weight:600;letter-spacing:.6px;color:var(--muted);text-transform:uppercase}
 .k-val{font-size:22px;font-weight:800;line-height:1.15;margin-top:3px}
 .k-sub{font-size:10px;color:var(--muted)}
 .kpi.red .k-val{color:var(--red)}
 .kpi.amber .k-val{color:var(--amber)}
-.kpi.purple .k-val{color:var(--purple)}
 .kpi.gold .k-val{color:var(--gold-dark)}
 
 /* Informe */
@@ -126,7 +136,6 @@ button{cursor:pointer}
 .row{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border);border-radius:var(--radius);padding:11px 13px;margin-bottom:8px;box-shadow:var(--shadow)}
 .row.st-AGOTADO{border-left-color:var(--red)}
 .row.st-REPONER{border-left-color:var(--amber)}
-.row.st-PRONTO{border-left-color:var(--purple)}
 .r-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .r-name{font-weight:700;font-size:14px}
 .r-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:var(--text-sec)}
@@ -134,8 +143,7 @@ button{cursor:pointer}
 .chip.brand{background:var(--gold-dim);color:var(--gold-dark)}
 .chip.out{background:var(--red-dim);color:var(--red)}
 .chip.warn{background:var(--amber-dim);color:var(--amber)}
-.chip.soon{background:var(--purple-dim);color:var(--purple)}
-.cnts{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-top:9px}
+.cnts{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:9px}
 .cnt{background:var(--surface2);border-radius:var(--radius-sm);padding:6px 8px}
 .c-l{font-size:9px;font-weight:600;letter-spacing:.5px;color:var(--muted);text-transform:uppercase}
 .c-v{font-size:15px;font-weight:800;line-height:1.2}
@@ -214,7 +222,6 @@ button{cursor:pointer}
           <option value="todos">Todos los estados</option>
           <option value="AGOTADO">Agotados</option>
           <option value="REPONER">Bajo mínimo</option>
-          <option value="PRONTO">Llegan al mínimo pronto</option>
           <option value="pedido">En el pedido sugerido</option>
         </select>
         <select id="fSort">
@@ -246,9 +253,9 @@ button{cursor:pointer}
 
 <script>
 /* ═══════════════════════════════════════════════════════════
-   KAMISUITE · Widget Panel de Proveedor v1.0.3
+   KAMISUITE · Widget Panel de Proveedor v1.0.4
    ═══════════════════════════════════════════════════════════ */
-const VERSION = '1.0.3';
+const VERSION = '1.0.4';
 const TAG = `[MonitorMarcaWidget][${VERSION}]`;
 
 // ─── ESTADO ───
@@ -257,7 +264,7 @@ let productos = [];
 let respuesta = false;      // el page code ya ha contestado al 'ready'
 const exportando = { pedido: false, informe: false };
 
-const ORDEN_ESTADO = { AGOTADO: 0, REPONER: 1, PRONTO: 2, OK: 3 };
+const ORDEN_ESTADO = { AGOTADO: 0, REPONER: 1, OK: 2 };
 
 // Mensajes de KAMISUITE para cada situación. Nunca se muestra el
 // texto técnico del error: va solo a la consola.
@@ -372,7 +379,6 @@ function pintarKpis() {
     <div class="kpi"><div class="k-lab">Consumo</div><div class="k-val">${n(r.unidadesConsumidas)}</div><div class="k-sub">uds en ${periodoDias()} días</div></div>
     <div class="kpi ${r.agotadas ? 'red' : ''}"><div class="k-lab">Agotadas</div><div class="k-val">${r.agotadas || 0}</div><div class="k-sub">sin existencias</div></div>
     <div class="kpi ${r.bajoMinimo ? 'amber' : ''}"><div class="k-lab">Bajo mínimo</div><div class="k-val">${r.bajoMinimo || 0}</div><div class="k-sub">hay que reponer</div></div>
-    <div class="kpi ${r.pronto ? 'purple' : ''}"><div class="k-lab">Pronto</div><div class="k-val">${r.pronto || 0}</div><div class="k-sub">al mínimo en ${periodoDias()} días</div></div>
     <div class="kpi gold"><div class="k-lab">Pedido sugerido</div><div class="k-val">${r.unidadesPedido || 0}</div><div class="k-sub">uds en ${r.lineasPedido || 0} referencias</div></div>`;
   $('badgePedido').textContent = r.lineasPedido || 0;
 }
@@ -393,10 +399,6 @@ function pintarFiltroMarcas() {
 function chipEstado(p) {
   if (p.estado === 'AGOTADO') return '<span class="chip out">AGOTADO</span>';
   if (p.estado === 'REPONER') return '<span class="chip warn">⚠ BAJO MÍNIMO</span>';
-  if (p.estado === 'PRONTO') {
-    const d = p.diasHastaMinimo;
-    return `<span class="chip soon">⏳ ${d > 0 ? '≈' + d + (d === 1 ? ' DÍA' : ' DÍAS') : 'MENOS DE 1 DÍA'}</span>`;
-  }
   return '';
 }
 
@@ -436,7 +438,7 @@ function filtrados() {
 
 function render() {
   const lista = filtrados();
-  $('count').textContent = `${lista.length} de ${productos.length} referencias`;
+  $('count').textContent = `${lista.length} de ${productos.length} referencias · Mínimo y máximo: los fija el salón`;
 
   if (!productos.length) {
     $('list').innerHTML = '<div class="empty">No hay productos de tus marcas en el almacén de este salón.</div>';
@@ -463,6 +465,7 @@ function render() {
         <div class="cnt"><div class="c-l">Abiertos</div><div class="c-v">${n(p.stockInUse)}</div></div>
         <div class="cnt"><div class="c-l">Total</div><div class="c-v">${n(p.total)}</div></div>
         <div class="cnt"><div class="c-l">Mínimo</div><div class="c-v">${n(p.minStock)}</div></div>
+        <div class="cnt"><div class="c-l">Máximo</div><div class="c-v">${p.maxStock > 0 ? n(p.maxStock) : '—'}</div></div>
         <div class="cnt"><div class="c-l">Consumo ${periodoDias()} d</div><div class="c-v">${n(p.consumo)}</div></div>
         <div class="cnt"><div class="c-l">Días al mínimo</div><div class="c-v ${diasTxt(p).length > 4 ? 'small' : ''}">${esc(diasTxt(p))}</div></div>
       </div>
@@ -476,13 +479,6 @@ function lineasPedido() {
     .sort((a, b) => a.brand.localeCompare(b.brand, 'es') || a.productName.localeCompare(b.productName, 'es'));
 }
 
-function estadoPedidoTxt(p) {
-  if (p.estado === 'AGOTADO') return 'Agotado';
-  if (p.estado === 'REPONER') return 'Bajo mínimo';
-  if (p.estado === 'PRONTO') return p.diasHastaMinimo > 0 ? `Al mínimo en ≈${p.diasHastaMinimo} días` : 'Al mínimo en menos de 1 día';
-  return '';
-}
-
 function pintarPedido() {
   const lineas = lineasPedido();
   const uds = lineas.reduce((acc, p) => acc + p.pedido, 0);
@@ -493,11 +489,11 @@ function pintarPedido() {
   $('btnPedidoXls').disabled = !lineas.length;
 
   $('pedNote').textContent =
-    `Incluye lo agotado, lo que está bajo mínimo y lo que, al ritmo de los últimos ${periodoDias()} días, llega al mínimo dentro de ese plazo. ` +
-    `Cantidad: hasta el stock máximo si el salón lo tiene configurado; si no, lo necesario para cubrir los próximos ${periodoDias()} días y terminar en el mínimo.`;
+    'Incluye lo agotado y lo que está bajo el stock mínimo que ha fijado el salón. ' +
+    'Cantidad: hasta el stock máximo del salón; si el producto no tiene máximo, lo justo para volver a superar el mínimo.';
 
   if (!lineas.length) {
-    $('pedList').innerHTML = '<div class="empty">Ahora mismo no hay nada que pedir: ningún producto de tus marcas está agotado, bajo mínimo ni a punto de llegar al mínimo.</div>';
+    $('pedList').innerHTML = '<div class="empty">Ahora mismo no hay nada que pedir: ningún producto de tus marcas está agotado ni bajo el mínimo del salón.</div>';
     return;
   }
 
@@ -518,7 +514,7 @@ function pintarPedido() {
             ${chipEstado(p)}
           </div>
         </div>
-        <div class="pl-info">Stock ${n(p.total)} · Mín ${n(p.minStock)}<br>Consumo ${periodoDias()} d: ${n(p.consumo)}</div>
+        <div class="pl-info">Stock ${n(p.total)} · Mín ${n(p.minStock)} · Máx ${p.maxStock > 0 ? n(p.maxStock) : '—'}<br>${p.tieneMaximo ? '' : 'Sin máximo: mínimo + 1<br>'}Consumo ${periodoDias()} d: ${n(p.consumo)}</div>
         <div class="pl-qty"><b>${p.pedido}</b><span>UDS</span></div>
       </div>`;
   }
@@ -552,13 +548,13 @@ function textoPedido() {
 // descargar el Excel dentro de la página (se pega directo en Excel).
 function tsvInforme() {
   const d = periodoDias();
-  const cab = ['Producto','Marca','Categoría','SKU','Unidad',`Consumo ${d} días`,'Media semanal','Cerrados','Abiertos','Total','Mínimo','Días hasta el mínimo','Cantidad sugerida'];
+  const cab = ['Producto','Marca','Categoría','SKU','Unidad',`Consumo ${d} días`,'Media semanal','Cerrados','Abiertos','Total','Mínimo','Máximo','Días hasta el mínimo','Cantidad sugerida'];
   const filas = productos
     .slice()
     .sort((a, b) => (b.consumo - a.consumo) || a.productName.localeCompare(b.productName, 'es'))
     .map(p => [
       p.productName, p.brand, p.category, p.sku, p.unit, n(p.consumo), n(p.mediaSemanal),
-      p.stockStored, p.stockInUse, p.total, p.minStock,
+      p.stockStored, p.stockInUse, p.total, p.minStock, p.maxStock > 0 ? p.maxStock : '',
       (p.diasHastaMinimo === null || p.diasHastaMinimo === undefined) ? 'Sin consumo' : p.diasHastaMinimo,
       p.pedido
     ].join('\t'));

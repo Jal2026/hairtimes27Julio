@@ -1,7 +1,7 @@
 // =====================================================
 // KAMISUITE — MONITOR DE MARCA (consulta del comercial)
 // Backend: brandMonitorLogic.web.js
-// VERSION: 1.0.0
+// VERSION: 1.0.1
 // FECHA:   19 de noviembre de 2026
 // =====================================================
 //
@@ -37,10 +37,17 @@
 // QUÉ DEVUELVE Y QUÉ NO
 // ---------------------
 // Devuelve por producto: nombre, marca, categoría, SKU, unidad, botes
-// cerrados, abiertos y total, mínimo, consumo del periodo, media
-// semanal, días hasta el mínimo, estado y cantidad sugerida.
+// cerrados, abiertos y total, mínimo y máximo, consumo del periodo,
+// media semanal, días hasta el mínimo, estado y cantidad sugerida.
 // NO devuelve: coste, PVP, proveedor, notas, imagen ni quién del
 // equipo ha consumido cada bote. Los productos inactivos no salen.
+//
+// UMBRALES: LOS FIJA EL SALÓN
+// ---------------------------
+// Las alertas y el pedido salen SOLO de los dos umbrales que el salón
+// configura en la ficha de cada producto del Almacén: stock mínimo
+// (minStock) y stock máximo (maxStock). Este panel no añade umbrales
+// propios.
 //
 // CÁLCULOS
 // --------
@@ -50,18 +57,16 @@
 //   caducidades y demás salidas no cuentan como consumo.
 // Bajo mínimo: misma regla que stockLogic v1.0.2 (adaptarProducto):
 //   solo si minStock > 0 y total <= minStock.
-// Días hasta el mínimo: (total − mínimo) / consumo diario, por defecto.
-//   0 si ya está agotado o bajo mínimo; null si no hay consumo en el
-//   periodo.
-// Estado: AGOTADO · REPONER (bajo mínimo) · PRONTO (al ritmo actual
-//   llega al mínimo dentro del periodo) · OK.
-// Cantidad sugerida (solo AGOTADO, REPONER y PRONTO):
-//   · si el producto tiene stock máximo configurado por encima del
-//     mínimo → hasta el máximo;
-//   · si no → lo necesario para cubrir el próximo periodo al ritmo
-//     actual y terminarlo en el mínimo (mínimo + consumo − total);
-//   · un producto agotado o bajo mínimo pide siempre al menos lo justo
-//     para quedar por encima del mínimo.
+// Días hasta el mínimo (solo informativo, no genera alerta):
+//   (total − mínimo) / consumo diario, por defecto. 0 si ya está
+//   agotado o bajo mínimo; null si no hay consumo en el periodo.
+// Estado: AGOTADO · REPONER (bajo mínimo) · OK.
+// Cantidad sugerida (solo AGOTADO y REPONER):
+//   · con máximo del salón (maxStock > minStock) → hasta el máximo
+//     (máximo − total);
+//   · sin máximo, o con un máximo que no supera al mínimo → lo justo
+//     para volver a superar el mínimo (mínimo + 1 − total). Se marca
+//     con tieneMaximo = false para que el widget lo indique.
 //
 // COLECCIONES
 // -----------
@@ -92,6 +97,16 @@
 // email. Multi-tenant por construcción.
 //
 // CHANGELOG
+// v1.0.1 (19 nov 2026): umbrales SOLO del salón.
+//         · Se retira el estado PRONTO (aviso a PERIODO_DIAS días) y su
+//           contador en el resumen: no era un umbral del salón. Los
+//           días hasta el mínimo se mantienen como dato informativo.
+//         · El pedido sugerido incluye solo AGOTADO y REPONER.
+//           Cantidad: hasta el máximo del salón; sin máximo válido,
+//           mínimo + 1 − total. Se retira el cálculo por consumo.
+//         · Nuevos campos por producto: maxStock y tieneMaximo.
+//         · Excel: columna Máximo en pedido e informe; columna Cálculo
+//           en el pedido; fuera la fila de «llegan al mínimo».
 // v1.0.0 (19 nov 2026): versión inicial. obtenerMonitorMarca y
 //         exportarMonitorMarca (pedido sugerido e informe de consumo).
 // =====================================================
@@ -101,7 +116,7 @@ import { currentMember } from 'wix-members-backend';
 import wixData from 'wix-data';
 import * as XLSX from 'xlsx';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const TAG = `[BrandMonitor][${VERSION}]`;
 
 const CMS_BRAND_USERS = 'KamisuiteBrandUsers';
@@ -121,7 +136,7 @@ const MS_DIA = 24 * 60 * 60 * 1000;
 const MOVE_TYPE_SALIDA = 'SALIDA';
 const REASON_CONSUMO = 'CONSUMO_SERVICIO';
 
-const ORDEN_ESTADO = { AGOTADO: 0, REPONER: 1, PRONTO: 2, OK: 3 };
+const ORDEN_ESTADO = { AGOTADO: 0, REPONER: 1, OK: 2 };
 
 // =====================================================
 // HELPERS
@@ -269,21 +284,18 @@ function adaptarProducto(row, consumo, marca) {
   if (outOfStock || needsRestock) diasHastaMinimo = 0;
   else if (diario > 0) diasHastaMinimo = Math.max(0, Math.floor((total - minStock) / diario));
 
-  const pronto = !outOfStock && !needsRestock
-    && diasHastaMinimo !== null && diasHastaMinimo <= PERIODO_DIAS;
-
   const estado = outOfStock ? 'AGOTADO'
     : needsRestock ? 'REPONER'
-    : pronto ? 'PRONTO'
     : 'OK';
 
+  // Umbrales del salón: hasta el máximo; sin máximo válido, lo justo
+  // para volver a superar el mínimo.
+  const tieneMaximo = maxStock > minStock;
   let pedido = 0;
   if (estado !== 'OK') {
-    const objetivo = (maxStock > minStock) ? maxStock : (minStock + Math.ceil(consumo));
-    pedido = Math.max(0, Math.ceil(objetivo - total));
-    if (pedido === 0 && (outOfStock || needsRestock)) {
-      pedido = Math.max(1, minStock + 1 - total);
-    }
+    pedido = tieneMaximo
+      ? Math.max(1, Math.ceil(maxStock - total))
+      : Math.max(1, Math.ceil(minStock + 1 - total));
   }
 
   return {
@@ -297,6 +309,8 @@ function adaptarProducto(row, consumo, marca) {
     stockInUse: inUse,
     total,
     minStock,
+    maxStock,
+    tieneMaximo,
     consumo: r1(consumo),
     mediaSemanal: r1(diario * 7),
     diasHastaMinimo,
@@ -313,7 +327,6 @@ function ordenarProductos(a, b) {
 function etiquetaEstado(p) {
   if (p.estado === 'AGOTADO') return 'AGOTADO';
   if (p.estado === 'REPONER') return 'BAJO MÍNIMO';
-  if (p.estado === 'PRONTO') return `LLEGA AL MÍNIMO EN ≈${p.diasHastaMinimo} DÍAS`;
   return 'OK';
 }
 
@@ -376,7 +389,6 @@ async function construirMonitor() {
     unidadesConsumidas: r1(productos.reduce((acc, p) => acc + p.consumo, 0)),
     agotadas: productos.filter(p => p.estado === 'AGOTADO').length,
     bajoMinimo: productos.filter(p => p.estado === 'REPONER').length,
-    pronto: productos.filter(p => p.estado === 'PRONTO').length,
     lineasPedido: lineasPedido.length,
     unidadesPedido: lineasPedido.reduce((acc, p) => acc + p.pedido, 0),
     porMarca
@@ -459,20 +471,25 @@ export const exportarMonitorMarca = webMethod(
           ['Marcas', marcasTxt],
           ['Consumo calculado sobre', periodoTxt],
           [],
-          ['Producto', 'Marca', 'Categoría', 'SKU', 'Unidad', 'Stock actual', 'Mínimo',
-            `Consumo ${res.periodoDias} días`, 'Estado', 'Cantidad sugerida'],
+          ['Producto', 'Marca', 'Categoría', 'SKU', 'Unidad', 'Stock actual', 'Mínimo', 'Máximo',
+            `Consumo ${res.periodoDias} días`, 'Estado', 'Cálculo', 'Cantidad sugerida'],
           ...lineas.map(p => [
             p.productName, p.brand, p.category, p.sku, p.unit,
-            p.total, p.minStock, p.consumo, etiquetaEstado(p), p.pedido
+            p.total, p.minStock, p.maxStock > 0 ? p.maxStock : '', p.consumo, etiquetaEstado(p),
+            p.tieneMaximo ? 'Hasta el máximo' : 'Sin máximo: mínimo + 1',
+            p.pedido
           ]),
           [],
-          ['TOTAL', `${lineas.length} referencias`, '', '', '', '', '', '', '',
-            lineas.reduce((acc, p) => acc + p.pedido, 0)]
+          ['TOTAL', `${lineas.length} referencias`, '', '', '', '', '', '', '', '', '',
+            lineas.reduce((acc, p) => acc + p.pedido, 0)],
+          [],
+          ['Mínimo y máximo: los fija el salón en la ficha de cada producto.']
         ];
         const ws = XLSX.utils.aoa_to_sheet(aoa);
         ws['!cols'] = [
           { wch: 40 }, { wch: 22 }, { wch: 18 }, { wch: 14 }, { wch: 10 },
-          { wch: 12 }, { wch: 9 }, { wch: 16 }, { wch: 34 }, { wch: 17 }
+          { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 16 }, { wch: 14 },
+          { wch: 24 }, { wch: 17 }
         ];
         XLSX.utils.book_append_sheet(wb, ws, 'Pedido');
         totalRegistros = lineas.length;
@@ -493,13 +510,14 @@ export const exportarMonitorMarca = webMethod(
           ['Unidades consumidas en el periodo', r.unidadesConsumidas],
           ['Referencias agotadas', r.agotadas],
           ['Referencias bajo mínimo', r.bajoMinimo],
-          [`Referencias que llegan al mínimo en ${res.periodoDias} días`, r.pronto],
           ['Líneas del pedido sugerido', r.lineasPedido],
           ['Unidades del pedido sugerido', r.unidadesPedido],
           [],
           ['CONSUMO POR MARCA', ''],
           ['Marca', 'Referencias', 'Unidades consumidas'],
-          ...r.porMarca.map(g => [g.brand, g.referencias, g.consumo])
+          ...r.porMarca.map(g => [g.brand, g.referencias, g.consumo]),
+          [],
+          ['Mínimo y máximo: los fija el salón en la ficha de cada producto.']
         ];
         const wsRes = XLSX.utils.aoa_to_sheet(resumenAoa);
         wsRes['!cols'] = [{ wch: 44 }, { wch: 30 }, { wch: 20 }];
@@ -520,6 +538,7 @@ export const exportarMonitorMarca = webMethod(
             'Abiertos': p.stockInUse,
             'Total': p.total,
             'Mínimo': p.minStock,
+            'Máximo': p.maxStock > 0 ? p.maxStock : '',
             'Días hasta el mínimo': p.diasHastaMinimo === null ? 'Sin consumo' : p.diasHastaMinimo,
             'Estado': etiquetaEstado(p),
             'Cantidad sugerida': p.pedido
@@ -528,7 +547,7 @@ export const exportarMonitorMarca = webMethod(
         wsProd['!cols'] = [
           { wch: 40 }, { wch: 22 }, { wch: 18 }, { wch: 14 }, { wch: 10 },
           { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 8 },
-          { wch: 9 }, { wch: 20 }, { wch: 34 }, { wch: 17 }
+          { wch: 9 }, { wch: 9 }, { wch: 20 }, { wch: 14 }, { wch: 17 }
         ];
 
         XLSX.utils.book_append_sheet(wb, wsRes, 'Resumen');
