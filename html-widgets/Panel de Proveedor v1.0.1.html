@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>KAMISUITE · Monitor de Marca</title>
+<title>KAMISUITE · Panel de Proveedor</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════════════
-   KAMISUITE · Widget Monitor de Marca v1.0.0
+   KAMISUITE · Widget Panel de Proveedor v1.0.1
+   (Monitor de consumo de productos)
    Light theme — Bai Jamjuree — accent dorado #c9a44a
    (paleta clara del widget de Estadísticas)
    ───────────────────────────────────────────────────────────
@@ -20,8 +21,13 @@
    Sin modales ni avisos flotantes: cada mensaje aparece junto
    al botón que lo provoca o en la franja de estado superior.
    Backend:   brandMonitorLogic.web.js v1.0.0
-   Page code: pagecode_monitorMarca.js v1.0.0 (#widgetMonitorMarca)
+   Page code: pagecode_monitorMarca.js v1.0.1 (#widgetMonitorMarca)
    CHANGELOG
+   v1.0.1 · 19 Nov 2026 · Nombre visible: «Panel de Proveedor».
+     Cabecera, título de la pestaña del navegador y avisos de acceso.
+     Nuevo título de sección «Monitor de consumo de productos» sobre
+     los indicadores. Sin cambios de lógica, mensajes al page code
+     ni IDs.
    v1.0.0 · 19 Nov 2026 · versión inicial. Productos con estado,
      consumo y días hasta el mínimo; pedido sugerido (copiar y
      Excel); informe de consumo en Excel.
@@ -70,7 +76,8 @@ button{cursor:pointer}
 @keyframes sp{to{transform:rotate(360deg)}}
 
 /* KPIs */
-.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:12px}
+.sec-t{font-size:15px;font-weight:700;margin:16px 2px 0}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:8px}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:11px 12px;box-shadow:var(--shadow)}
 .k-lab{font-size:10px;font-weight:600;letter-spacing:.6px;color:var(--muted);text-transform:uppercase}
 .k-val{font-size:22px;font-weight:800;line-height:1.15;margin-top:3px}
@@ -154,8 +161,8 @@ button{cursor:pointer}
 
   <header class="hd">
     <div class="hd-l">
-      <div class="kicker">KAMISUITE · MONITOR DE MARCA</div>
-      <h1 id="hCompany">Monitor de marca</h1>
+      <div class="kicker">KAMISUITE · PANEL DE PROVEEDOR</div>
+      <h1 id="hCompany">Panel de Proveedor</h1>
       <div class="hd-sub" id="hSub"></div>
       <div class="brands" id="hBrands"></div>
     </div>
@@ -168,6 +175,7 @@ button{cursor:pointer}
   <div class="status on" id="status"><div class="spin"></div><span id="statusMsg">Cargando el almacén…</span></div>
 
   <main id="main" hidden>
+    <div class="sec-t">Monitor de consumo de productos</div>
     <div class="kpis" id="kpis"></div>
 
     <div class="report">
@@ -226,9 +234,9 @@ button{cursor:pointer}
 
 <script>
 /* ═══════════════════════════════════════════════════════════
-   KAMISUITE · Widget Monitor de Marca v1.0.0
+   KAMISUITE · Widget Panel de Proveedor v1.0.1
    ═══════════════════════════════════════════════════════════ */
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const TAG = `[MonitorMarcaWidget][${VERSION}]`;
 
 // ─── ESTADO ───
@@ -243,14 +251,14 @@ const ORDEN_ESTADO = { AGOTADO: 0, REPONER: 1, PRONTO: 2, OK: 3 };
 // texto técnico del error: va solo a la consola.
 const MSG_SIN_DATOS = {
   SIN_SESION: 'No hay ninguna sesión iniciada. Inicia sesión con tu usuario y vuelve a abrir esta página.',
-  SIN_ACCESO: 'Tu usuario no tiene acceso al monitor de este salón. Pide al salón que te dé de alta con el email con el que inicias sesión.',
+  SIN_ACCESO: 'Tu usuario no tiene acceso al Panel de Proveedor de este salón. Pide al salón que te dé de alta con el email con el que inicias sesión.',
   SIN_MARCAS: 'Tu usuario está dado de alta, pero no tiene marcas asignadas. Pide al salón que añada tus marcas.',
   ERROR: 'No se ha podido cargar el almacén. Pulsa Recargar y, si sigue igual, avisa al salón.'
 };
 const MSG_EXCEL = {
   PEDIDO_VACIO: 'Ahora mismo no hay nada que pedir.',
   SIN_SESION: 'La sesión ha caducado. Vuelve a iniciar sesión.',
-  SIN_ACCESO: 'Tu usuario ya no tiene acceso a este monitor.',
+  SIN_ACCESO: 'Tu usuario ya no tiene acceso al Panel de Proveedor.',
   SIN_MARCAS: 'Tu usuario no tiene marcas asignadas.',
   ERROR: 'No se ha podido generar el Excel. Inténtalo de nuevo.'
 };
@@ -336,7 +344,7 @@ function onSinDatos(p) {
 
 function pintarCabecera() {
   const perfil = datos.perfil || {};
-  $('hCompany').textContent = perfil.company || 'Monitor de marca';
+  $('hCompany').textContent = perfil.company || 'Panel de Proveedor';
   $('hSub').textContent = [datos.salonName, perfil.userName].filter(Boolean).join(' · ');
   $('hBrands').innerHTML = (perfil.brands || []).map(b => `<span class="chip brand">${esc(b)}</span>`).join('');
   const per = $('hPeriod');
