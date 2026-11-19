@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 /* ═══════════════════════════════════════════════════════════
-   KAMISUITE · Widget Panel de Proveedor v1.0.2
+   KAMISUITE · Widget Panel de Proveedor v1.0.3
    (Monitor de consumo en salón)
    Light theme — Bai Jamjuree — accent dorado #c9a44a
    (paleta clara del widget de Estadísticas)
@@ -23,6 +23,13 @@
    Backend:   brandMonitorLogic.web.js v1.0.0
    Page code: pagecode_monitorMarca.js v1.0.1 (#widgetMonitorMarca)
    CHANGELOG
+   v1.0.3 · 19 Nov 2026 · Se deshace el cambio de cabecera de la
+     v1.0.2: el título grande vuelve a ser la empresa (p. ej. Henkel)
+     y la línea de debajo, salón · comercial, como en la v1.0.1.
+     El título que se repetía era el texto de reserva del título
+     grande («Panel de Proveedor», visible antes de cargar): pasa a
+     «Monitor de consumo en salón». El título de sección sobre los
+     indicadores vuelve, con el texto «Monitor de consumo en salón».
    v1.0.2 · 19 Nov 2026 · Título sin repetir: la cabecera queda
      «KAMISUITE · PANEL DE PROVEEDOR» + título fijo «Monitor de
      consumo en salón». La empresa pasa a la línea de debajo, delante
@@ -81,7 +88,8 @@ button{cursor:pointer}
 @keyframes sp{to{transform:rotate(360deg)}}
 
 /* KPIs */
-.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:12px}
+.sec-t{font-size:15px;font-weight:700;margin:16px 2px 0}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-top:8px}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:11px 12px;box-shadow:var(--shadow)}
 .k-lab{font-size:10px;font-weight:600;letter-spacing:.6px;color:var(--muted);text-transform:uppercase}
 .k-val{font-size:22px;font-weight:800;line-height:1.15;margin-top:3px}
@@ -166,7 +174,7 @@ button{cursor:pointer}
   <header class="hd">
     <div class="hd-l">
       <div class="kicker">KAMISUITE · PANEL DE PROVEEDOR</div>
-      <h1>Monitor de consumo en salón</h1>
+      <h1 id="hCompany">Monitor de consumo en salón</h1>
       <div class="hd-sub" id="hSub"></div>
       <div class="brands" id="hBrands"></div>
     </div>
@@ -179,6 +187,7 @@ button{cursor:pointer}
   <div class="status on" id="status"><div class="spin"></div><span id="statusMsg">Cargando el almacén…</span></div>
 
   <main id="main" hidden>
+    <div class="sec-t">Monitor de consumo en salón</div>
     <div class="kpis" id="kpis"></div>
 
     <div class="report">
@@ -237,9 +246,9 @@ button{cursor:pointer}
 
 <script>
 /* ═══════════════════════════════════════════════════════════
-   KAMISUITE · Widget Panel de Proveedor v1.0.2
+   KAMISUITE · Widget Panel de Proveedor v1.0.3
    ═══════════════════════════════════════════════════════════ */
-const VERSION = '1.0.2';
+const VERSION = '1.0.3';
 const TAG = `[MonitorMarcaWidget][${VERSION}]`;
 
 // ─── ESTADO ───
@@ -347,7 +356,8 @@ function onSinDatos(p) {
 
 function pintarCabecera() {
   const perfil = datos.perfil || {};
-  $('hSub').textContent = [perfil.company, datos.salonName, perfil.userName].filter(Boolean).join(' · ');
+  $('hCompany').textContent = perfil.company || 'Monitor de consumo en salón';
+  $('hSub').textContent = [datos.salonName, perfil.userName].filter(Boolean).join(' · ');
   $('hBrands').innerHTML = (perfil.brands || []).map(b => `<span class="chip brand">${esc(b)}</span>`).join('');
   const per = $('hPeriod');
   per.hidden = false;
