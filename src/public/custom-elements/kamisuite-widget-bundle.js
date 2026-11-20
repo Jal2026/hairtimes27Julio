@@ -3,7 +3,25 @@
  * BUNDLE para Wix Custom Element (todo-en-uno)
  * =====================================================================
  * Tag name:  kami-reserva
- * VERSION:   2.2.0 (bundle)
+ * VERSION:   2.2.1 (bundle)
+ *
+ * v2.2.1 — LEYENDA «ZONA DE RESERVA SALÓN <MARCA>» (20-nov-2026).
+ *   Línea nueva arriba del todo, dentro del borde exterior del widget:
+ *   «Zona de reserva salón » + SalonConfig.brandName, tal cual está en el
+ *   CMS (sin cambiar mayúsculas ni minúsculas). Llega en
+ *   config.salonConfig.brandName (widgetPublicoLogic v0.14.1; el page code
+ *   ya pasa salonConfig entero, no cambia).
+ *     · _buildBrandLine(): devuelve la línea o null si no hay marca (con un
+ *       backend anterior a la 0.14.1 no se pinta nada, como hasta ahora).
+ *       El nombre se escribe con textContent, nunca como HTML.
+ *     · Se pinta en la ficha del servicio (antes de la tarjeta con foto y
+ *       nombre, _buildHeader) y en la lista de servicios de la categoría
+ *       (antes de la cabecera de la categoría, _renderServiceGrid). En la
+ *       reserva confirmada sigue visible porque la cabecera no se borra.
+ *     · CSS .kr-brandline: color de acento de la piel del salón, 15 px. El
+ *       espacio entre el borde exterior y la tarjeta crece con la línea y
+ *       su margen inferior; el padding del widget no cambia.
+ *   Nada más cambia.
  *
  * v2.2.0 — SERVICIO ENLAZADO: DOS SERVICIOS A LA VEZ (23-oct-2026).
  *   Caso Hair-Times: spa capilar + spa masaje de EMY a la vez, cada uno con
@@ -1232,7 +1250,8 @@ window.KR_applySkin = function (el, name) {
 /* ============================================================================
    kr-widget.js — <kami-reserva> Custom Element (Shadow DOM)
    ----------------------------------------------------------------------------
-   VERSION: 2.2.0
+   VERSION: 2.2.1
+   v2.2.1 — Leyenda «Zona de reserva salón <marca>» arriba del widget.
    v2.2.0 — Servicio enlazado a la vez: precio cerrado, fila «A la vez».
    v2.1.7 — Complemento Si/No obligatorio fijo en «Si»; aviso del candado
             oculto al elegir hora.
@@ -1638,6 +1657,14 @@ window.KR_applySkin = function (el, name) {
         .kr-empty { padding: 60px 24px; text-align: center; color: var(--kr-ink-2); }
         .kr-empty__msg { font-size: 14px; }
 
+        /* ─── v2.2.1 — Leyenda «Zona de reserva salón <marca>» ─── */
+        .kr-brandline {
+          margin: 0 0 14px; font-size: 15px; line-height: 1.35;
+          font-weight: 400; color: var(--kr-accent);
+          overflow-wrap: anywhere;
+        }
+        .kr-brandline--grid { padding: 0 24px; margin-bottom: 0; }
+
         /* ─── Cabecera interna del servicio elegido ─── */
         .kr-svc-header {
           display: flex; gap: 18px; align-items: flex-start;
@@ -1968,6 +1995,13 @@ window.KR_applySkin = function (el, name) {
       this.root.innerHTML = '';
       const cat = this._config?.categoria || {};
       const servicios = this._config?.servicios || [];
+
+      // v2.2.1 — Leyenda de la marca del salón, encima de la categoría.
+      const brandGrid = this._buildBrandLine();
+      if (brandGrid) {
+        brandGrid.classList.add('kr-brandline--grid');
+        this.root.appendChild(brandGrid);
+      }
 
       // Cabecera de la categoría
       const head = el('div', 'kr-cat-head');
@@ -2930,10 +2964,26 @@ window.KR_applySkin = function (el, name) {
       requestAnimationFrame(() => this._updateFades());
     }
 
+    // v2.2.1 — Leyenda «Zona de reserva salón <marca>». El nombre de marca
+    // sale de SalonConfig.brandName tal cual está en el CMS. Sin marca → null
+    // y no se pinta nada.
+    _buildBrandLine() {
+      const marca = String(this._config?.salonConfig?.brandName || '').trim();
+      if (!marca) return null;
+      const line = el('p', 'kr-brandline');
+      line.textContent = `Zona de reserva salón ${marca}`;
+      return line;
+    }
+
     // v2.0 — Cabecera dinámica del servicio elegido
     _buildHeader() {
       const cfg = this._service;
       const cat = this._config?.categoria || {};
+
+      // v2.2.1 — Leyenda de la marca del salón, encima de la tarjeta.
+      const brandLine = this._buildBrandLine();
+      if (brandLine) this.root.appendChild(brandLine);
+
       const head = el('div', 'kr-svc-header');
 
       // <Volver solo si hay >1 servicio en la categoría

@@ -1,7 +1,16 @@
 // =====================================================
 // KAMISUITE — Backend: Widget Público de Reservas
 // =====================================================
-// VERSION: 0.14.0
+// VERSION: 0.14.1
+//
+// v0.14.1 — NOMBRE DE MARCA PARA LA LEYENDA DEL WIDGET (20-nov-2026).
+//   getSalonConfig devuelve además `brandName` (SalonConfig.brandName).
+//   El widget (bundle v2.2.1) lo pinta arriba: «Zona de reserva salón
+//   <marca>». Hasta ahora solo devolvía `salonName` (c.salonName || c.name),
+//   que en Latifa sale vacío porque su SalonConfig no tiene esos campos.
+//   Solo se añade un dato: `salonName`, `widgetSkin` y las URLs legales no
+//   cambian, y el Área de Cliente (que también llama a getSalonConfig) no se
+//   ve afectada. Nada más cambia.
 //
 // v0.14.0 — 🔗 SERVICIO ENLAZADO EN LA RESERVA ONLINE (23-oct-2026).
 //   Un servicio puede llevar otro enlazado que EMPIEZA A LA VEZ, cada uno
@@ -1128,7 +1137,7 @@
 //   - getCategoriasPublicas()         → categorías activas con foto + descripción
 //   - getServiciosCategoria({slug})   → servicios principales de la categoría
 //   - getProfesionalesPublicos()      → staff del salón + "Cualquiera"
-//   - getSalonConfig()                → widgetSkin + nombre del salón
+//   - getSalonConfig()                → widgetSkin + nombre del salón + brandName
 //   - getHuecosDisponibles({fecha,    → mock determinista (fase 1)
 //       proId, durationMin})
 // =====================================================
@@ -1136,7 +1145,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '0.14.0';
+const VERSION = '0.14.1';
 const TAG = `[WidgetPublico][${VERSION}]`;
 
 // v0.10.0 — Prefijo de ordenación del nombre del personal.
@@ -2089,6 +2098,7 @@ export const getProfesionalesPublicos = webMethod(
 //   - widgetSkin: id del skin a aplicar (niebla, arena, lumiere, …,
 //                 oceano). Default 'niebla' si no está informado.
 //   - salonName: para texto de confirmación / agradecimiento.
+//   - brandName: v0.14.1 — leyenda «Zona de reserva salón <marca>».
 //
 // NOTA: el campo widgetSkin debe crearse en SalonConfig (Text). Mientras
 // no exista o esté vacío, devuelve 'niebla'.
@@ -2106,6 +2116,7 @@ export const getSalonConfig = webMethod(
         version: VERSION,
         config: {
           salonName: c.salonName || c.name || '',
+          brandName: c.brandName || '',
           widgetSkin: c.widgetSkin || 'niebla',
           privacyPolicyUrl: c.privacyPolicyUrl || '',
           termsConditionsUrl: c.termsConditionsUrl || ''
@@ -2114,7 +2125,7 @@ export const getSalonConfig = webMethod(
 
     } catch (e) {
       console.error(`${TAG} ❌ getSalonConfig:`, e.message);
-      return { ok: false, version: VERSION, error: safeErr(e), config: { salonName: '', widgetSkin: 'niebla', privacyPolicyUrl: '', termsConditionsUrl: '' } };
+      return { ok: false, version: VERSION, error: safeErr(e), config: { salonName: '', brandName: '', widgetSkin: 'niebla', privacyPolicyUrl: '', termsConditionsUrl: '' } };
     }
   }
 );
