@@ -1,8 +1,32 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.9.0
- * FECHA:    20 Agosto 2026
+ * VERSION:  1.9.1
+ * FECHA:    20 Noviembre 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.9.0 → v1.9.1 — CATEGORÍAS ACTIVAS vs SOLO HISTÓRICO
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   EL FALLO (Latifa Atnan, 20-Nov-2026): a "¿qué categorías tiene el
+ *   salón?" AKIRA enumeró DEPILACION, ESTETICA, MANICURA_&_PEDICURA… que solo
+ *   existen en servicios desactivados (active:false) copiados de Hair-Times.
+ *   _getGroups() leía el `group` de TODO el catálogo, sin mirar `active`.
+ *
+ *   EL ARREGLO:
+ *   - _getGroups() devuelve { activas, historico }.
+ *       activas   = `group` de servicios del catálogo con active !== false
+ *                   (mismo criterio que widgetPublicoLogic v0.9.4: activo
+ *                   salvo que esté explícitamente desactivado; filtro en
+ *                   código, no en la consulta).
+ *       historico = `group` presentes en reservas que no están en activas.
+ *                   Se siguen pasando para poder filtrar datos pasados.
+ *   - El prompt los separa en dos líneas. Las dos empiezan por
+ *     "CATEGORÍAS DISPONIBLES", así que la regla 9 sigue valiendo sin tocarla.
+ *     Si preguntan qué categorías tiene el salón, responde solo con las
+ *     activas y las presenta como "categorías activas".
+ *   - Log PREP: groups=<activas>+<historico>.
+ *   Sin cambios de CMS.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.8.0 → v1.9.0 — SESIÓN ANTES DE PREGUNTAR (arregla el 504 de la
@@ -476,7 +500,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '1.9.0';
+const VERSION = '1.9.1';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -1997,32 +2021,39 @@ async function _getFamilias() {
  * catálogo para no dejar categorías fuera del prompt.
  */
 async function _getGroups() {
-  const set = new Set();
+  // v1.9.1 — ACTIVAS: categorías con al menos un servicio activo en el
+  // catálogo. Activo salvo que esté explícitamente desactivado (mismo
+  // criterio que widgetPublicoLogic v0.9.4); el filtro va en código porque
+  // una fila con `active` vacío quedaría fuera de un .eq('active', true).
+  const activas = new Set();
+  try {
+    const resCat = await wixData.query(C_CATALOGO)
+      .isNotEmpty('group')
+      .limit(1000)
+      .find(AUTH);
+    for (const it of (resCat.items || [])) {
+      if (!it || it.active === false) continue;
+      const g = it.group;
+      if (g && g !== FAMILY_BLOQUEO) activas.add(g);
+    }
+  } catch (e) {
+    console.warn(`${TAG} _getGroups (catálogo) fallo:`, e.message);
+  }
+  // SOLO HISTÓRICO: categorías que aparecen en reservas pero ya no tienen
+  // servicios activos. Se mantienen para poder filtrar datos pasados.
+  const historico = new Set();
   try {
     const res = await wixData.query(C_RESERVAS)
       .isNotEmpty('group')
       .limit(50)
       .distinct('group', AUTH);
     for (const g of (res.items || [])) {
-      if (g && g !== FAMILY_BLOQUEO) set.add(g);
+      if (g && g !== FAMILY_BLOQUEO && !activas.has(g)) historico.add(g);
     }
   } catch (e) {
     console.warn(`${TAG} _getGroups (reservas) fallo:`, e.message);
   }
-  // Completar con el catálogo: categorías que existen aunque aún no tengan
-  // reservas con group (histórico previo al despliegue del campo).
-  try {
-    const resCat = await wixData.query(C_CATALOGO)
-      .isNotEmpty('group')
-      .limit(100)
-      .distinct('group', AUTH);
-    for (const g of (resCat.items || [])) {
-      if (g && g !== FAMILY_BLOQUEO) set.add(g);
-    }
-  } catch (e) {
-    console.warn(`${TAG} _getGroups (catálogo) fallo:`, e.message);
-  }
-  return Array.from(set);
+  return { activas: Array.from(activas), historico: Array.from(historico) };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2085,10 +2116,18 @@ function _buildSystemBlocks(ctx) {
     if (familias && familias.length > 0) {
       ctxSalon.push('Familias de servicio disponibles: ' + familias.join(', '));
     }
-    if (groups && groups.length > 0) {
+    // v1.9.1 — activas y solo histórico, separadas.
+    if (groups && groups.activas && groups.activas.length > 0) {
       ctxSalon.push(
-        'CATEGORÍAS DISPONIBLES (valores canónicos de `group` — úsalos EXACTOS al filtrar): ' +
-        groups.join(', ')
+        'CATEGORÍAS DISPONIBLES — ACTIVAS (tienen servicios activos en el catálogo; valores canónicos de `group` — úsalos EXACTOS al filtrar). ' +
+        'Si te preguntan qué categorías tiene el salón, responde SOLO con estas y preséntalas como "categorías activas": ' +
+        groups.activas.join(', ')
+      );
+    }
+    if (groups && groups.historico && groups.historico.length > 0) {
+      ctxSalon.push(
+        'CATEGORÍAS DISPONIBLES — SOLO HISTÓRICO (aparecen en reservas pasadas pero ya no tienen servicios activos; úsalas EXACTAS solo para filtrar datos pasados y no las enumeres como categorías del salón): ' +
+        groups.historico.join(', ')
       );
     }
   }
@@ -2461,7 +2500,7 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
     const fechas = resolverFechas();
     const prepMs = Date.now() - tIn;
     const charsCorpus = documentosDelPlano.reduce((n, d) => n + ((d && d.contenido) ? d.contenido.length : 0), 0);
-    console.log(`${TAG} PREP ${prepMs}ms: plano=${plano} align=${config ? 'v' + (config.version || '?') : 'por defecto'} docs=${documentos.length}→${documentosDelPlano.length} corpus=${charsCorpus}/${_docCharsDelPlano(plano)} chars staff=${staff.length} fams=${familias.length} groups=${groups.length}`);
+    console.log(`${TAG} PREP ${prepMs}ms: plano=${plano} align=${config ? 'v' + (config.version || '?') : 'por defecto'} docs=${documentos.length}→${documentosDelPlano.length} corpus=${charsCorpus}/${_docCharsDelPlano(plano)} chars staff=${staff.length} fams=${familias.length} groups=${groups.activas.length}+${groups.historico.length}`);
     if (charsCorpus > _docCharsDelPlano(plano)) {
       console.warn(`${TAG} ⚠️ corpus del plano '${plano}' excede el presupuesto: se truncará en ${_docCharsDelPlano(plano)} chars`);
     }
