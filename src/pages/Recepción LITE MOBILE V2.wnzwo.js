@@ -1,14 +1,30 @@
 // =====================================================
 // KAMISUITE — Page Code: Recepción Lite Mobile (V2 CMS-first)
 // =====================================================
-// VERSION: 0.3.9
-// FECHA: 6 de agosto de 2026
+// VERSION: 0.3.10
+// FECHA: 20 de noviembre de 2026
 // Página: /recepcionpromobile
 // Custom Element ID en Editor: kamisuiteBookingLite (tag: kamisuite-booking-lite)
 //
 // Comunicación (sin cambios respecto al cableado):
 //   Page → Element: el.setAttribute('response', JSON.stringify({type, ...data, ts}))
 //   Element → Page: el.on('booking-message', handler)  (CustomEvent)
+//
+// =====================================================
+// v0.3.10 — FIX "Cargando agenda…" colgado en salones sin chat de AKIRA
+// =====================================================
+//   Encontrado en Latifa Atnan (20-nov-2026). Consola: el widget manda
+//   'ready' 12 veces y el page code nunca contesta; antes sale
+//   "TypeError: $w(...).hide is not a function".
+//
+//   Causa: la primera línea de $w.onReady ocultaba el chat de AKIRA
+//   ('#f6B6E28D52B24De6Aab3Ff2Ccad8E2291') sin protección. En un salón
+//   donde ese elemento no existe, .hide() lanza y corta el onReady ANTES
+//   de enlazar #kamisuiteBookingLite, registrar el listener y lanzar el
+//   kickoff de handleReady. La agenda no recibe nunca 'init-data'.
+//
+//   Fix: esa línea envuelta en try/catch, patrón literal de
+//   "Recepción _ Control Acceso de Personal" (línea 32). Nada más cambia.
 //
 // =====================================================
 // v0.3.9 — ARMADO MÚLTIPLE: handler 'agregar-servicio'
@@ -314,7 +330,7 @@ import { crearContacto } from 'backend/recepcionLogic.web';
 import { buscarContactosRapido } from 'backend/contactSearchLogic.web';
 
 // v0.3.7 — TAG actualizado.
-const TAG = '[BookingLitePage v0.3.9]';
+const TAG = '[BookingLitePage v0.3.10]';
 const PRELOAD_BATCH = 5;
 
 let _el = null;
@@ -889,7 +905,7 @@ async function handleActualizarBloqueo(msg) {
 // =====================================================
 $w.onReady(() => {
   console.log(`${TAG} 👂 Listener activo`);
-$w('#f6B6E28D52B24De6Aab3Ff2Ccad8E2291').hide()
+  try { $w('#f6B6E28D52B24De6Aab3Ff2Ccad8E2291').hide(); } catch (e) {}
   _el = $w('#kamisuiteBookingLite');
   if (!_el) { console.error(`${TAG} ❌ Elemento #kamisuiteBookingLite no encontrado.`); return; }
 
