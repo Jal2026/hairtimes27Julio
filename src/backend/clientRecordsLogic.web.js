@@ -1,11 +1,36 @@
 // =====================================================
 // KAMISUITE — Backend: FICHAS DE CLIENTE (CMS-first)
 // =====================================================
-// VERSION: 1.0.2
-// FECHA:   19 de agosto de 2026
+// VERSION: 1.1.0
+// FECHA:   21 de noviembre de 2026
 // ARCHIVO: backend/clientRecordsLogic.web.js
 //
 // CHANGELOG
+//   v1.1.0 (21-Nov-2026) — MENSAJES ENTRE LA CLIENTA Y EL SALÓN.
+//     Las notas que la clienta deja en «Notas para el salón» de su Área
+//     de Cliente se guardaban en un campo personalizado de Wix Contacts.
+//     Dos problemas comprobados en Salón Kami y Latifa:
+//       · Wix limita ese campo a 200 caracteres. Como cada nota se
+//         añadía a las anteriores, con dos o tres notas el guardado
+//         fallaba.
+//       · La clave del campo cambia de un salón a otro (al clonar un
+//         sitio no se conserva): en Latifa no existe la que usa el
+//         código.
+//     Desde clienteAreaLogic v1.8.0 cada nota es una fila de esta
+//     colección con recordType 'NOTA_CLIENTE' (source 'CLIENTE'). El
+//     mensaje del salón a la clienta (CRM, «Información adicional» del
+//     Área de Cliente) pasa igual a filas 'MENSAJE_SALON'
+//     (fichaClienteLogic v1.10.0).
+//       · leerMensajeAreaCliente: lee las filas NOTA_CLIENTE (más
+//         recientes primero) y DETRÁS el histórico antiguo de Wix
+//         Contacts, que es anterior. Mismo shape { historico, raw }.
+//       · NOTA_CLIENTE y MENSAJE_SALON NO son ficha técnica: quedan
+//         fuera de leerAnotaciones (porTipo los habría metido en
+//         GENERAL) y de listarContactosConFicha (no encienden la
+//         insignia). No entran en TIPOS_VALIDOS: el popup no puede
+//         crearlos.
+//     Sin cambios en guardarFichaClienteRecord ni en
+//     desactivarFichaClienteRecord.
 //   v1.0.2 (19-Ago-2026) — NEW `listarContactosConFicha`.
 //     Devuelve la lista de contactId que tienen al menos una anotación
 //     activa con texto. Nada más: ni el texto, ni el tipo, ni la fecha.
@@ -88,15 +113,13 @@
 //   está envenenado deja solo las visitas de esa persona. Determinista
 //   y multi-tenant, sin ninguna constante por salón.
 //
-// ⚠️ MENSAJE DEL ÁREA DE CLIENTE — LECTURA TEMPORAL
-//   `appendNotaCliente` (clienteAreaLogic v1.6.6) sigue escribiendo el
-//   mensaje del cliente en Wix Contacts, acumulando entradas con el
-//   formato `[fecha] texto | [fecha] texto`. Este backend lo LEE de
-//   ahí, con el mismo lector flexible de fichaClienteLogic, para que
-//   el popup lo muestre desde el primer día. En el salón donde ese
-//   campo no exista devuelve lista vacía, sin romper nada. Ese canal
-//   se migrará a esta misma colección (source = 'CLIENTE') en la fase
-//   en la que el CRM deje de usar Wix Contacts.
+// ⚠️ MENSAJE DEL ÁREA DE CLIENTE — v1.1.0
+//   Desde clienteAreaLogic v1.8.0 el mensaje de la clienta se guarda en
+//   ESTA colección (recordType 'NOTA_CLIENTE', source 'CLIENTE'). Lo
+//   escrito antes en Wix Contacts (`[fecha] texto | [fecha] texto`) se
+//   sigue LEYENDO como respaldo, con el mismo lector flexible de
+//   fichaClienteLogic. En el salón donde ese campo no exista, esa parte
+//   devuelve vacío sin romper nada.
 //
 // NO SE TOCA NINGÚN ARCHIVO EXISTENTE
 //   Aditivo puro. No importa recepcionProLogic (motor compartido por
@@ -111,7 +134,7 @@ import { webMethod, Permissions } from 'wix-web-module';
 import { elevate } from 'wix-auth';
 import { contacts } from 'wix-crm-backend';
 
-const VERSION = '1.0.2';
+const VERSION = '1.1.0';
 const TAG = `[ClientRecords][${VERSION}]`;
 
 // =====================================================
@@ -146,6 +169,14 @@ const F_ACTIVE       = 'active';
 
 const TIPOS_VALIDOS   = ['COLOR', 'TRATAMIENTO', 'GENERAL'];
 const ORIGENES_VALIDOS = ['RECEPCION', 'CRM', 'CLIENTE'];
+
+// v1.1.0 — MENSAJES entre la clienta y el salón. Viven en esta colección
+// con tipo propio, pero NO son ficha técnica: no están en TIPOS_VALIDOS
+// (el popup no puede crearlos) y se excluyen de toda lectura de la ficha.
+const TIPO_NOTA_CLIENTE  = 'NOTA_CLIENTE';    // la clienta → el salón (Área de Cliente)
+const TIPO_MENSAJE_SALON = 'MENSAJE_SALON';   // el salón → la clienta (CRM)
+const TIPOS_MENSAJE      = [TIPO_NOTA_CLIENTE, TIPO_MENSAJE_SALON];
+const LIMITE_MENSAJES    = 200;
 
 const TIPO_DEFECTO   = 'GENERAL';
 const ORIGEN_DEFECTO = 'RECEPCION';
@@ -203,6 +234,25 @@ function safeErr(e) {
 
 function txt(v) {
   return String(v == null ? '' : v).trim();
+}
+
+// v1.1.0 — true si la fila es un mensaje (no ficha técnica).
+function esTipoMensaje(tipo) {
+  return TIPOS_MENSAJE.includes(txt(tipo).toUpperCase());
+}
+
+// v1.1.0 — Fecha de una nota de la clienta en el MISMO formato que
+// escribía appendNotaCliente en Wix Contacts:
+// toLocaleString('es-ES', { timeZone: 'Europe/Madrid' }).
+function fechaHoraNota(v) {
+  if (!v) return '';
+  try {
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('es-ES', { timeZone: TIMEZONE_MADRID });
+  } catch (_) {
+    return '';
+  }
 }
 
 function isGuid(x) {
@@ -457,6 +507,7 @@ async function leerAnotaciones(contactId, limite) {
 
   return items
     .filter(it => it && it[F_ACTIVE] !== false)
+    .filter(it => !esTipoMensaje(it[F_RECORD_TYPE]))   // v1.1.0 — los mensajes no son ficha
     .map(it => ({
       id: it._id,
       tipo: txt(it[F_RECORD_TYPE]).toUpperCase() || TIPO_DEFECTO,
@@ -540,10 +591,40 @@ async function leerNotaDeReserva(reservaId) {
 }
 
 /**
- * Mensaje permanente que el cliente deja desde su Área de Cliente.
- * Lectura temporal contra Wix Contacts — ver nota de cabecera.
+ * v1.1.0 — Mensaje que la clienta deja desde su Área de Cliente.
+ * Primero las filas NOTA_CLIENTE de esta colección (más recientes
+ * primero) y DETRÁS el histórico antiguo de Wix Contacts, que siempre
+ * es anterior. Mismo shape que antes: { historico, raw }.
  */
 async function leerMensajeAreaCliente(contactId) {
+  let deFilas = [];
+  try {
+    const res = await wixData.query(COL_RECORDS)
+      .eq(F_CONTACT_ID, contactId)
+      .eq(F_RECORD_TYPE, TIPO_NOTA_CLIENTE)
+      .descending(F_RECORD_DATE)
+      .limit(LIMITE_MENSAJES)
+      .find({ suppressAuth: true });
+
+    deFilas = (Array.isArray(res?.items) ? res.items : [])
+      .filter(it => it && it[F_ACTIVE] !== false && txt(it[F_RECORD_TEXT]))
+      .map(it => ({
+        fecha: fechaHoraNota(it[F_RECORD_DATE] || it._createdDate),
+        texto: txt(it[F_RECORD_TEXT])
+      }));
+  } catch (e) {
+    console.log(`${TAG} notas de la clienta en anotaciones no disponibles: ${safeErr(e).message}`);
+  }
+
+  const antiguo = await leerMensajeAreaClienteContacto(contactId);
+  return { historico: deFilas.concat(antiguo.historico), raw: antiguo.raw };
+}
+
+/**
+ * Histórico antiguo del mensaje del Área de Cliente en Wix Contacts.
+ * Solo lectura desde v1.1.0: ya no se escribe ahí.
+ */
+async function leerMensajeAreaClienteContacto(contactId) {
   try {
     const elevatedGet = elevate(contacts.getContact);
     const contact = await elevatedGet(contactId);
@@ -804,6 +885,7 @@ export const listarContactosConFicha = webMethod(
           filas++;
           if (!it) continue;
           if (it[F_ACTIVE] === false) continue;
+          if (esTipoMensaje(it[F_RECORD_TYPE])) continue;   // v1.1.0 — un mensaje no es ficha
           if (!String(it[F_RECORD_TEXT] || '').trim()) continue;
           const cid = String(it[F_CONTACT_ID] || '').trim();
           if (cid) conFicha.add(cid);

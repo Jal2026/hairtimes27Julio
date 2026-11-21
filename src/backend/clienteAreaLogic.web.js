@@ -1,7 +1,35 @@
 // =====================================================
 // KAMISUITE — Backend: Área de Cliente
 // =====================================================
-// VERSION: 1.7.2
+// VERSION: 1.8.0
+//
+// v1.8.0 — MENSAJES ENTRE LA CLIENTA Y EL SALÓN EN KamisuiteClientRecords
+//   (21-nov-2026).
+//   «Notas para el salón» (la clienta escribe) y «Información adicional»
+//   (el salón escribe desde el CRM) vivían en campos personalizados de Wix
+//   Contacts. Comprobado en Salón Kami: Wix rechaza más de 200 caracteres
+//   en esos campos. appendNotaCliente añadía cada nota a las anteriores en
+//   el mismo campo, así que con dos o tres notas fallaba el guardado. Y la
+//   clave del campo de la nota cambia de un salón a otro: en Latifa no
+//   existe 'custom.notas-fonyemjtcfteotgxzkaamjbuwmyuz'.
+//     · appendNotaCliente: ya NO escribe en Wix Contacts. Inserta una fila
+//       en KamisuiteClientRecords con recordType 'NOTA_CLIENTE' y source
+//       'CLIENTE'. Misma respuesta { nuevaEntrada, historico, raw }.
+//     · getAreaCliente:
+//         - Notas de la clienta: primero las filas NOTA_CLIENTE (más
+//           recientes primero) y detrás el histórico antiguo de Wix
+//           Contacts, que es anterior. notaCliente.texto/editado = la más
+//           reciente, como antes.
+//         - Mensaje del salón: si hay alguna fila 'MENSAJE_SALON' (la
+//           escribe fichaClienteLogic v1.10.0), manda la más reciente,
+//           aunque esté vacía (= el salón lo ha borrado), y no se buscan
+//           duplicados en Wix Contacts. Sin filas, todo sigue como en la
+//           v1.7.2 (campo de Wix Contacts y respaldo por email duplicado).
+//         - Una query más, en paralelo con la lectura del contacto.
+//   Las fechas de las notas nuevas llevan el mismo formato que antes:
+//   toLocaleString('es-ES', { timeZone: 'Europe/Madrid' }).
+//   El widget y el page code no cambian. Parejas: fichaClienteLogic
+//   v1.10.0, clientRecordsLogic v1.1.0, crmToolsLogic v1.1.3.
 //
 // v1.7.2 — UNIÓN DE LAS DOS RAMAS DEL ARCHIVO (18-nov-2026).
 //   Había dos líneas: Hair-Times (1.6.8 → 1.7.1: smart pricing, cita
@@ -502,7 +530,7 @@ import { cancelarReserva, reprogramarReserva } from 'backend/recepcionProLogic.w
 import { getHuecosDisponibles } from 'backend/widgetPublicoLogic.web';
 import wixData from 'wix-data';
 
-const VERSION = '1.7.2';
+const VERSION = '1.8.0';
 const TAG = `[ClienteArea][${VERSION}]`;
 
 // App ID constante de Wix Stores. Requerido en catalogReference.appId
@@ -520,6 +548,8 @@ const F_RES_GRUPO = 'grupoEnlazado';
 
 // Claves de campos personalizados Wix Contacts — KALONICE
 // (verificadas en el diálogo "Editar campo personalizado" / Lector CMS)
+// v1.8.0 — FIELD_NOTAS_CLIENTE y FIELD_NOTAS_PUBLICAS solo se LEEN, como
+// respaldo de lo escrito antes. Lo nuevo va a KamisuiteClientRecords.
 const FIELD_NOTAS_CLIENTE  = 'custom.notas-fonyemjtcfteotgxzkaamjbuwmyuz';
 const FIELD_NOTAS_PUBLICAS = 'customnotaspublicas';
 const FIELD_SEXO           = 'custom.sexo';
@@ -530,6 +560,27 @@ const FIELD_VAT_ID         = 'invoices.vatId';
 
 const DIAS_FUTURO_PROXIMAS = 45;
 const LIMITE_PAYMENT_RES   = 500;
+
+// v1.8.0 — Mensajes entre la clienta y el salón en KamisuiteClientRecords.
+// Misma colección e IDs de campo que clientRecordsLogic v1.1.0 y
+// fichaClienteLogic v1.10.0 (copiados literalmente: los imports entre
+// backends han devuelto vacío en silencio, ver v1.6.1).
+const CMS_CLIENT_RECORDS     = 'KamisuiteClientRecords';
+const REC_CONTACT_ID         = 'contactId';
+const REC_CLIENT_NAME        = 'clientName';
+const REC_CLIENT_PHONE       = 'clientPhone';
+const REC_RECORD_TYPE        = 'recordType';
+const REC_RECORD_TEXT        = 'recordText';
+const REC_RECORD_DATE        = 'recordDate';
+const REC_AUTHOR             = 'author';
+const REC_BOOKING_ID         = 'bookingId';
+const REC_SOURCE             = 'source';
+const REC_ACTIVE             = 'active';
+const REC_TIPO_NOTA_CLIENTE  = 'NOTA_CLIENTE';    // la clienta → el salón
+const REC_TIPO_MENSAJE_SALON = 'MENSAJE_SALON';   // el salón → la clienta
+const REC_SOURCE_CLIENTE     = 'CLIENTE';
+const REC_LIMITE_TEXTO       = 4000;
+const REC_LIMITE_FILAS       = 200;
 
 // =====================================================
 // HELPERS
@@ -542,6 +593,50 @@ function safeErr(e) {
 function isGuid(x) {
   return typeof x === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x);
+}
+
+// v1.8.0 — Fecha de una nota en el MISMO formato que se escribía en Wix
+// Contacts (appendNotaCliente hasta la v1.7.2).
+function fechaNotaMadrid(v) {
+  try {
+    const d = v instanceof Date ? v : new Date(v);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
+  } catch (_) {
+    return '';
+  }
+}
+
+// v1.8.0 — Mensajes de la clienta y del salón en KamisuiteClientRecords.
+// Una sola query por contacto; el filtro de `active` va en memoria (una
+// fila sin el campo informado no debe desaparecer), igual que en
+// clientRecordsLogic y fichaClienteLogic. Nunca lanza: ante cualquier
+// fallo devuelve vacío y el Área de Cliente cae a Wix Contacts.
+//   notasCliente — [{ fecha, texto }] NOTA_CLIENTE, más recientes primero.
+//   mensajeSalon — { existe, texto } de la MENSAJE_SALON más reciente.
+async function leerMensajesAnotaciones(contactId) {
+  const out = { notasCliente: [], mensajeSalon: { existe: false, texto: '' } };
+  try {
+    const res = await wixData.query(CMS_CLIENT_RECORDS)
+      .eq(REC_CONTACT_ID, contactId)
+      .descending(REC_RECORD_DATE)
+      .limit(REC_LIMITE_FILAS)
+      .find({ suppressAuth: true });
+
+    for (const it of (res?.items || [])) {
+      if (!it || it[REC_ACTIVE] === false) continue;
+      const tipo  = String(it[REC_RECORD_TYPE] || '').trim().toUpperCase();
+      const texto = String(it[REC_RECORD_TEXT] || '').trim();
+      if (tipo === REC_TIPO_MENSAJE_SALON) {
+        if (!out.mensajeSalon.existe) out.mensajeSalon = { existe: true, texto };
+      } else if (tipo === REC_TIPO_NOTA_CLIENTE && texto) {
+        out.notasCliente.push({ fecha: fechaNotaMadrid(it[REC_RECORD_DATE] || it._createdDate), texto });
+      }
+    }
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ mensajes en KamisuiteClientRecords no disponibles: ${e.message}`);
+  }
+  return out;
 }
 
 // v1.6.2 — Helpers REINCORPORADOS respecto a v1.6.0/v1.6.1.
@@ -1115,6 +1210,10 @@ export const getAreaCliente = webMethod(
       const ok = validarMemberContactId(memberContactId);
       if (!ok.ok) return { ok: false, version: VERSION, error: ok.error };
 
+      // v1.8.0 — mensajes de KamisuiteClientRecords, en paralelo con el
+      // contacto (leerMensajesAnotaciones nunca lanza).
+      const mensajesAnotP = leerMensajesAnotaciones(memberContactId);
+
       // 1) Contacto Wix CRM (elevate — patrón careProfileLogic / V1 saveNotaToCRM)
       const elevatedGet = elevate(contacts.getContact);
       const contact = await elevatedGet(memberContactId);
@@ -1124,6 +1223,7 @@ export const getAreaCliente = webMethod(
 
       const ef = contact.info?.extendedFields || {};
       const emailContacto = String(contact.info?.emails?.[0]?.email || '').trim();
+      const mensajesAnot = await mensajesAnotP;   // v1.8.0
 
       // 2) Notas públicas (salón → cliente). Read-only.
       // v1.5.5: lectura flexible + fallback por duplicados de Wix Contacts.
@@ -1144,7 +1244,16 @@ export const getAreaCliente = webMethod(
         `chars=${String(notasPublicasRaw || '').length}`
       );
 
-      if (!String(notasPublicasRaw || '').trim() && emailContacto) {
+      // v1.8.0 — El mensaje del salón vive en KamisuiteClientRecords. Si hay
+      // alguna fila (aunque esté vacía: el salón lo ha borrado), manda ella
+      // y no se buscan duplicados en Wix Contacts.
+      if (mensajesAnot.mensajeSalon.existe) {
+        notasPublicasRaw = mensajesAnot.mensajeSalon.texto;
+        notasPublicasOrigen = 'anotaciones';
+        console.log(`${TAG} 🧩 Notas públicas desde KamisuiteClientRecords | chars=${String(notasPublicasRaw || '').length}`);
+      }
+
+      if (!mensajesAnot.mensajeSalon.existe && !String(notasPublicasRaw || '').trim() && emailContacto) {
         try {
           const elevatedQueryContacts = elevate(contacts.queryContacts);
           const dupResp = await elevatedQueryContacts()
@@ -1195,7 +1304,9 @@ export const getAreaCliente = webMethod(
       // 4) Notas del cliente al salón (histórico append).
       // v1.1.0: el Custom Element espera { texto, editado } como la
       // entrada más reciente. Mantenemos historico y raw por compat.
-      const historico = parseNotasHistorico(ef[FIELD_NOTAS_CLIENTE]);
+      // v1.8.0: primero las filas NOTA_CLIENTE (más recientes primero) y
+      // detrás el histórico antiguo de Wix Contacts, que es anterior.
+      const historico = mensajesAnot.notasCliente.concat(parseNotasHistorico(ef[FIELD_NOTAS_CLIENTE]));
       const ultimoTexto = historico.length ? historico[0].texto : '';
       const ultimoFecha = historico.length ? historico[0].fecha : null;
       const notaCliente = {
@@ -1790,12 +1901,12 @@ export const updatePerfilCliente = webMethod(
 // =====================================================
 // 3 · APPEND NOTA CLIENTE (histórico append-only)
 // =====================================================
-// Mismo patrón EXACTO que saveNotaToCRM de coloracionLogic v3.2.x y
-// tratamientosLogic v1.x (V1 del flujo público de Hair-Times).
-// Append-only: nunca borra histórico. Separador " | " y timestamp en
-// formato local Madrid entre corchetes.
-//
-// Campo destino (KALONICE): custom.notas-fonyemjtcfteotgxzkaamjbuwmyuz
+// v1.8.0 — Cada nota es una fila de KamisuiteClientRecords con
+// recordType 'NOTA_CLIENTE' y source 'CLIENTE'. Ya NO se escribe en Wix
+// Contacts (máximo 200 caracteres y clave distinta en cada salón). Sigue
+// siendo append-only: nunca se borra histórico. El contacto solo se lee:
+// nombre y teléfono para la fila, y el histórico antiguo para la
+// respuesta. Misma respuesta que antes: { nuevaEntrada, historico, raw }.
 // =====================================================
 export const appendNotaCliente = webMethod(
   Permissions.SiteMember,
@@ -1809,33 +1920,47 @@ export const appendNotaCliente = webMethod(
         return { ok: false, version: VERSION, error: { message: 'Mensaje vacío' } };
       }
 
-      // Leer revision + valor actual
+      // Contacto: solo lectura (nombre, teléfono e histórico antiguo).
       const elevatedGet = elevate(contacts.getContact);
       const contact = await elevatedGet(memberContactId);
-      if (!contact || !contact.revision) {
+      if (!contact) {
         return { ok: false, version: VERSION, error: { message: 'Contacto no encontrado' } };
       }
 
       const ef = contact.info?.extendedFields || {};
-      const current = ef[FIELD_NOTAS_CLIENTE] || '';
-      const timestamp = new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
-      const newEntry = `[${timestamp}] ${txt}`;
-      const updated = current ? `${current} | ${newEntry}` : newEntry;
+      const nombre = `${contact.info?.name?.first || ''} ${contact.info?.name?.last || ''}`.trim();
+      const telefono = String(contact.info?.phones?.[0]?.phone || '').trim();
+      const textoNota = txt.slice(0, REC_LIMITE_TEXTO);
+      const ahoraNota = new Date();
 
-      // Update solo el campo de notas
-      const identifiers = { contactId: memberContactId, revision: contact.revision };
-      const contactInfo = { extendedFields: { [FIELD_NOTAS_CLIENTE]: updated } };
-      const elevatedUpdate = elevate(contacts.updateContact);
-      await elevatedUpdate(identifiers, contactInfo, { suppressAuth: true });
+      // v1.8.0 — INSERT puro en KamisuiteClientRecords.
+      const registro = {
+        [REC_CONTACT_ID]:   memberContactId,
+        [REC_CLIENT_NAME]:  nombre,
+        [REC_CLIENT_PHONE]: telefono,
+        [REC_RECORD_TYPE]:  REC_TIPO_NOTA_CLIENTE,
+        [REC_RECORD_TEXT]:  textoNota,
+        [REC_RECORD_DATE]:  ahoraNota,
+        [REC_AUTHOR]:       nombre,
+        [REC_BOOKING_ID]:   '',
+        [REC_SOURCE]:       REC_SOURCE_CLIENTE,
+        [REC_ACTIVE]:       true
+      };
+      await wixData.insert(CMS_CLIENT_RECORDS, registro, { suppressAuth: true });
 
-      console.log(`${TAG} ✅ Nota añadida ${memberContactId} | "${txt.substring(0, 60)}"`);
+      const timestamp = fechaNotaMadrid(ahoraNota);
+      console.log(`${TAG} ✅ Nota añadida ${memberContactId} | "${textoNota.substring(0, 60)}"`);
+
+      // Histórico para la respuesta: filas (incluida la nueva) + antiguo.
+      const mensajesAnot = await leerMensajesAnotaciones(memberContactId);
+      const historico = mensajesAnot.notasCliente.concat(parseNotasHistorico(ef[FIELD_NOTAS_CLIENTE]));
 
       return {
         ok: true,
         version: VERSION,
-        nuevaEntrada: { fecha: timestamp, texto: txt },
-        historico: parseNotasHistorico(updated),
-        raw: updated
+        nuevaEntrada: { fecha: timestamp, texto: textoNota },
+        historico,
+        raw: ef[FIELD_NOTAS_CLIENTE] || ''
       };
 
     } catch (e) {

@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  crmToolsLogic.web.js — Herramientas CRM                      ║
-// ║  KAMISUITE · v1.1.2                                            ║
+// ║  KAMISUITE · v1.1.3                                            ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: Herramientas de mantenimiento y enriquecimiento del CRM.
@@ -16,6 +16,13 @@
 //   - Anthropic Claude API (secret KAMISUITE)
 //
 // CHANGELOG:
+//   v1.1.3 (21-Nov-2026) — Los MENSAJES no cuentan como ficha técnica.
+//     - Desde clienteAreaLogic v1.8.0 y fichaClienteLogic v1.10.0 las
+//       notas de la clienta ('NOTA_CLIENTE') y el mensaje del salón
+//       ('MENSAJE_SALON') son filas de KamisuiteClientRecords. No son
+//       ficha técnica: _dupContactosConFicha las salta, igual que
+//       clientRecordsLogic v1.1.0 en la insignia de Recepción PRO.
+//     - Sin más cambios.
 //   v1.1.2 (19-Ago-2026) — Marca de PRODUCTO ACTIVO en los duplicados.
 //     - Cada contacto devuelve además `tieneProducto` y `productoTexto`:
 //       bono activo, PRIME activa o tarjeta en vigor.
@@ -57,7 +64,7 @@ import { elevate } from 'wix-auth';
 import { fetch } from 'wix-fetch';
 import { getSecret } from 'wix-secrets-backend';
 
-const VERSION = '1.1.2';
+const VERSION = '1.1.3';
 const TAG = '[CrmTools v1.1.2]';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -540,14 +547,16 @@ function _dupTextoProducto(d) {
 // clientRecordsLogic: una fila sin ese campo informado no debe
 // desaparecer por un .eq(active, true).
 //
-// ⚠️ ALCANCE: marca los contactos con anotaciones en el CMS. NO mira
-// las notas públicas ni la nota del cliente, que siguen viviendo en
-// campos personalizados de Wix Contacts. Si hiciera falta incluirlas,
-// es otra entrega y hay que resolver antes la clave real del campo.
+// ⚠️ ALCANCE: marca los contactos con FICHA TÉCNICA en el CMS (COLOR /
+// TRATAMIENTO / GENERAL). v1.1.3 — Las notas de la clienta y el mensaje
+// del salón también viven ya en esta colección ('NOTA_CLIENTE' y
+// 'MENSAJE_SALON'), pero no son ficha técnica y se saltan.
 const DUP_COL_RECORDS   = 'KamisuiteClientRecords';
 const DUP_REC_CONTACTID = 'contactId';
 const DUP_REC_TEXT      = 'recordText';
 const DUP_REC_ACTIVE    = 'active';
+const DUP_REC_TYPE      = 'recordType';                       // v1.1.3
+const DUP_TIPOS_MENSAJE = ['NOTA_CLIENTE', 'MENSAJE_SALON'];  // v1.1.3 — no son ficha
 const DUP_REC_PAGE      = 1000;
 const DUP_REC_MAX_PAGES = 20;
 
@@ -567,6 +576,7 @@ async function _dupContactosConFicha() {
         filas++;
         if (!it) continue;
         if (it[DUP_REC_ACTIVE] === false) continue;
+        if (DUP_TIPOS_MENSAJE.includes(String(it[DUP_REC_TYPE] || '').trim().toUpperCase())) continue;   // v1.1.3
         const texto = String(it[DUP_REC_TEXT] || '').trim();
         if (!texto) continue;
         const cid = String(it[DUP_REC_CONTACTID] || '').trim();

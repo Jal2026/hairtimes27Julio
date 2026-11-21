@@ -1,8 +1,46 @@
 // =====================================================
 // KAMISUITE - Backend Ficha Cliente CRM
 // =====================================================
-// VERSION: 1.9.16
-// FECHA: 27 de octubre de 2026
+// VERSION: 1.10.0
+// FECHA: 21 de noviembre de 2026
+//
+// v1.10.0 — MENSAJES ENTRE EL SALÓN Y LA CLIENTA FUERA DE WIX CONTACTS.
+//   Las «Notas públicas» del CRM (lo que la clienta lee en «Información
+//   adicional» de su Área de Cliente) y la nota que la clienta deja al
+//   salón vivían en campos personalizados de Wix Contacts. Comprobado en
+//   Salón Kami: Wix rechaza más de 200 caracteres en esos campos
+//   ("requires maxLength to be 200"). Y la clave del campo de la nota de
+//   la clienta cambia de un salón a otro (en Latifa no existe la de
+//   Salón Kami). Pasan a KamisuiteClientRecords, igual que Color y
+//   Tratamientos en la v1.9.13:
+//     · actualizarContactoCRM — `notasPublicas` deja de escribirse en
+//       Wix Contacts: inserta una fila MENSAJE_SALON, solo si cambia lo
+//       que la clienta ve. Una fila con el texto vacío es «borrar»: la
+//       clienta deja de verlo, como cuando antes se vaciaba el campo
+//       (helper insertarAnotacionCliente: nuevo parámetro opcional
+//       permitirVacio, por defecto false → Color y Tratamientos igual).
+//     · leerAnotacionesCliente — la misma query devuelve además
+//       `mensajeSalon` { existe, texto } (la fila MENSAJE_SALON más
+//       reciente) y `notasClienteEntradas` (filas NOTA_CLIENTE como
+//       "[fecha] texto", de la más antigua a la más reciente). Las dos
+//       quedan FUERA de historialGeneral: antes todo lo que no era COLOR
+//       ni TRATAMIENTO caía en GENERAL.
+//     · NEW notasCRMCompuestas(ef, anotaciones) — notasPublicas y
+//       notasClienteSalon* con el MISMO shape de siempre: si hay fila
+//       MENSAJE_SALON manda ella; si no, el campo antiguo de Wix
+//       Contacts. Las notas de la clienta: histórico antiguo de Wix
+//       Contacts + filas nuevas, en un solo raw "[fecha] texto | …".
+//     · getFichaCliente y extraerPatchCamposCRM (segundo parámetro
+//       opcional `anotaciones`) usan notasCRMCompuestas. En
+//       actualizarContactoCRM las anotaciones se releen ANTES del
+//       profilePatch.
+//     · Borrado de contacto: desglosarAnotacionesParaBorrado salta los
+//       dos tipos de mensaje (no son color, tratamiento ni general) y el
+//       modal enseña los mensajes de las filas, con el contacto como
+//       respaldo (NEW mensajesDesdeFilas, sin query extra).
+//   Los widgets y page codes no cambian: reciben las mismas claves.
+//   Parejas: clienteAreaLogic v1.8.0, clientRecordsLogic v1.1.0,
+//   crmToolsLogic v1.1.3.
 //
 // v1.9.16 — CIF/NIF Y RAZÓN SOCIAL EN EL CRM.
 //   Mismos campos personalizados que Recepción PRO (recepcionLogic
@@ -321,7 +359,7 @@ import { members } from 'wix-members.v2';
 import { accounts } from 'wix-loyalty.v2';
 import { mediaManager } from 'wix-media-backend';
 
-const VERSION = '1.9.16';
+const VERSION = '1.10.0';
 const TAG = `[FichaCliente][${VERSION}]`;
 
 // Colecciones CMS
@@ -363,6 +401,9 @@ const REC_ACTIVE       = 'active';
 const REC_TIPO_COLOR       = 'COLOR';
 const REC_TIPO_TRATAMIENTO = 'TRATAMIENTO';
 const REC_TIPO_GENERAL     = 'GENERAL';
+// v1.10.0 — Mensajes entre el salón y la clienta. NO son ficha técnica.
+const REC_TIPO_NOTA_CLIENTE  = 'NOTA_CLIENTE';    // la clienta → el salón (Área de Cliente)
+const REC_TIPO_MENSAJE_SALON = 'MENSAJE_SALON';   // el salón → la clienta (CRM)
 
 const REC_SOURCE_CRM = 'CRM';
 
@@ -864,7 +905,10 @@ async function guardarDatosFiscalesCRM(contactId, datos) {
   }
 }
 
-function extraerPatchCamposCRM(contactRaw) {
+// v1.10.0 — segundo parámetro opcional `anotaciones` (de
+// leerAnotacionesCliente): los mensajes salen de ahí. Sin él, el
+// comportamiento es el de siempre (campos de Wix Contacts).
+function extraerPatchCamposCRM(contactRaw, anotaciones = null) {
   const ef = contactRaw?.info?.extendedFields || {};
   const ultimaVisitaRaw = leerCampoCRM(ef, 'ultimaVisita').value;
 
@@ -877,14 +921,13 @@ function extraerPatchCamposCRM(contactRaw) {
     }
   }
 
-  const notasClienteSalonRaw = String(leerCampoCRM(ef, 'notasClienteSalon').value || '');
-  const notasClienteSalonHistorico = parseNotasClienteSalonHistorico(notasClienteSalonRaw);
+  const notas = notasCRMCompuestas(ef, anotaciones);   // v1.10.0
 
   return {
-    notasPublicas: String(leerCampoCRM(ef, 'notasPublicas').value || ''),
-    notasClienteSalonRaw,
-    notasClienteSalonHistorico,
-    notasClienteSalonUltima: notasClienteSalonHistorico[0] || null,
+    notasPublicas: notas.notasPublicas,
+    notasClienteSalonRaw: notas.notasClienteSalonRaw,
+    notasClienteSalonHistorico: notas.notasClienteSalonHistorico,
+    notasClienteSalonUltima: notas.notasClienteSalonUltima,
     // v1.9.13 — notasColor y notasTratamientos ya no se devuelven aquí.
     // Leerlas de Wix Contacts serviría el valor legacy congelado, y
     // devolverlas vacías podría vaciar la textarea en un merge; omitir
@@ -1186,6 +1229,77 @@ function fechaAnotacionLegible(valor) {
   }
 }
 
+// v1.10.0 — true si la fila es un mensaje (no ficha técnica).
+function esTipoMensaje(tipo) {
+  const t = String(tipo || '').trim().toUpperCase();
+  return t === REC_TIPO_NOTA_CLIENTE || t === REC_TIPO_MENSAJE_SALON;
+}
+
+// v1.10.0 — Mensajes a partir de filas de KamisuiteClientRecords ya
+// leídas (no lanza ninguna query). Devuelve:
+//   mensajeSalon          — { existe, texto } de la fila MENSAJE_SALON
+//                           activa más reciente. existe=true con texto
+//                           vacío = el salón lo ha borrado.
+//   notasClienteEntradas  — filas NOTA_CLIENTE como "[fecha] texto", de
+//                           la más ANTIGUA a la más reciente: el orden
+//                           del raw que parseNotasClienteSalonHistorico
+//                           parte por ' | ' e invierte.
+function mensajesDesdeFilas(items) {
+  const activas = (items || [])
+    .filter(it => it && it[REC_ACTIVE] !== false)
+    .slice()
+    .sort((a, b) =>
+      new Date(b[REC_RECORD_DATE] || b._createdDate || 0) -
+      new Date(a[REC_RECORD_DATE] || a._createdDate || 0)
+    );
+
+  let mensajeSalon = { existe: false, texto: '' };
+  const notas = [];
+
+  for (const it of activas) {
+    const tipo  = String(it[REC_RECORD_TYPE] || '').trim().toUpperCase();
+    const texto = String(it[REC_RECORD_TEXT] || '').trim();
+
+    if (tipo === REC_TIPO_MENSAJE_SALON) {
+      if (!mensajeSalon.existe) mensajeSalon = { existe: true, texto };
+    } else if (tipo === REC_TIPO_NOTA_CLIENTE && texto) {
+      const fecha = fechaAnotacionLegible(it[REC_RECORD_DATE] || it._createdDate);
+      // ' | ' separa entradas en el raw: dentro del texto se sustituye.
+      const limpio = texto.replace(/ \| /g, ' / ');
+      notas.push(fecha ? `[${fecha}] ${limpio}` : limpio);
+    }
+  }
+
+  return { mensajeSalon, notasClienteEntradas: notas.reverse() };
+}
+
+// v1.10.0 — notasPublicas y notasClienteSalon* con el MISMO shape que
+// antes. Si hay fila MENSAJE_SALON manda ella; si no, el campo antiguo
+// de Wix Contacts. Las notas de la clienta: el histórico antiguo de Wix
+// Contacts (anterior) seguido de las filas NOTA_CLIENTE.
+function notasCRMCompuestas(ef, anotaciones) {
+  const a  = anotaciones || {};
+  const ms = a.mensajeSalon || { existe: false, texto: '' };
+
+  const notasPublicas = ms.existe
+    ? String(ms.texto || '')
+    : String(leerCampoCRM(ef, 'notasPublicas').value || '');
+
+  const rawAntiguo = String(leerCampoCRM(ef, 'notasClienteSalon').value || '');
+  const notasClienteSalonRaw = [rawAntiguo]
+    .concat(Array.isArray(a.notasClienteEntradas) ? a.notasClienteEntradas : [])
+    .filter(x => String(x || '').trim())
+    .join(' | ');
+  const notasClienteSalonHistorico = parseNotasClienteSalonHistorico(notasClienteSalonRaw);
+
+  return {
+    notasPublicas,
+    notasClienteSalonRaw,
+    notasClienteSalonHistorico,
+    notasClienteSalonUltima: notasClienteSalonHistorico[0] || null
+  };
+}
+
 /**
  * Una sola query. Devuelve:
  *   notasColor         — texto de la fila COLOR activa más reciente
@@ -1205,7 +1319,11 @@ function fechaAnotacionLegible(valor) {
  * consola: la ficha se pinta sin anotaciones, no se rompe.
  */
 async function leerAnotacionesCliente(contactId) {
-  const vacio = { notasColor: '', notasTratamientos: '', historialGeneral: '' };
+  const vacio = {
+    notasColor: '', notasTratamientos: '', historialGeneral: '',
+    mensajeSalon: { existe: false, texto: '' },   // v1.10.0
+    notasClienteEntradas: []                       // v1.10.0
+  };
 
   if (!contactId || !isGuid(contactId)) return vacio;
 
@@ -1226,6 +1344,7 @@ async function leerAnotacionesCliente(contactId) {
     for (const it of items) {
       const tipo  = String(it[REC_RECORD_TYPE] || '').trim().toUpperCase();
       const texto = String(it[REC_RECORD_TEXT] || '').trim();
+      if (esTipoMensaje(tipo)) continue;   // v1.10.0 — van aparte (mensajesDesdeFilas)
       if (!texto) continue;
 
       if (tipo === REC_TIPO_COLOR) {
@@ -1248,13 +1367,23 @@ async function leerAnotacionesCliente(contactId) {
     // la más antigua a la más reciente.
     const historialGeneral = generales.reverse().join(' | ');
 
+    // v1.10.0 — mensajes entre el salón y la clienta, de las mismas filas.
+    const mensajes = mensajesDesdeFilas(items);
+
     console.log(
       `${TAG} anotaciones ${contactId} | filas=${items.length} ` +
       `color=${notasColor ? 'sí' : 'no'} trat=${notasTratamientos ? 'sí' : 'no'} ` +
-      `generales=${generales.length}`
+      `generales=${generales.length} | mensajeSalon=${mensajes.mensajeSalon.existe ? 'sí' : 'no'} ` +
+      `notasCliente=${mensajes.notasClienteEntradas.length}`
     );
 
-    return { notasColor, notasTratamientos, historialGeneral };
+    return {
+      notasColor,
+      notasTratamientos,
+      historialGeneral,
+      mensajeSalon: mensajes.mensajeSalon,
+      notasClienteEntradas: mensajes.notasClienteEntradas
+    };
 
   } catch (e) {
     console.warn(`${TAG} leerAnotacionesCliente no disponible: ${e.message}`);
@@ -1265,6 +1394,8 @@ async function leerAnotacionesCliente(contactId) {
 /**
  * INSERT puro. Nunca update: el histórico no se sobrescribe.
  * Texto vacío no inserta nada y devuelve { ok:true, insertado:false }.
+ * v1.10.0 — salvo con permitirVacio=true (solo MENSAJE_SALON): una fila
+ * vacía es como el salón «borra» el mensaje que lee la clienta.
  */
 async function insertarAnotacionCliente({
   contactId,
@@ -1272,13 +1403,14 @@ async function insertarAnotacionCliente({
   clientPhone = '',
   recordType,
   recordText,
-  author = ''
+  author = '',
+  permitirVacio = false
 } = {}) {
   const texto = String(recordText || '').trim().slice(0, REC_LIMITE_TEXTO);
   if (!contactId || !isGuid(contactId)) {
     return { ok: false, insertado: false, error: 'contactId requerido' };
   }
-  if (!texto) {
+  if (!texto && !permitirVacio) {
     return { ok: true, insertado: false };
   }
 
@@ -1665,10 +1797,13 @@ export const getFichaCliente = webMethod(Permissions.Anyone, async (payload) => 
 
     const stats = calcularStats(pagos, externosItems);
 
-    const notasPublicas    = String(leerCampoCRM(ef, 'notasPublicas').value || '');
-    const notasClienteSalonRaw = String(leerCampoCRM(ef, 'notasClienteSalon').value || '');
-    const notasClienteSalonHistorico = parseNotasClienteSalonHistorico(notasClienteSalonRaw);
-    const notasClienteSalonUltima = notasClienteSalonHistorico[0] || null;
+    // v1.10.0 — mensajes desde KamisuiteClientRecords, con el campo
+    // antiguo de Wix Contacts como respaldo. Mismas claves que antes.
+    const notasCompuestas  = notasCRMCompuestas(ef, anotaciones);
+    const notasPublicas    = notasCompuestas.notasPublicas;
+    const notasClienteSalonRaw = notasCompuestas.notasClienteSalonRaw;
+    const notasClienteSalonHistorico = notasCompuestas.notasClienteSalonHistorico;
+    const notasClienteSalonUltima = notasCompuestas.notasClienteSalonUltima;
     // v1.9.13 — desde KamisuiteClientRecords, no desde Wix Contacts.
     // Se sirve el texto de la fila activa más reciente de cada tipo,
     // que es lo que el widget espera: un string por categoría.
@@ -1934,9 +2069,8 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
       extSources[nombreCampo] = resolved;
     }
 
-    if (notasPublicas !== undefined) {
-      await setCampoCRM('notasPublicas', String(notasPublicas || ''));
-    }
+    // v1.10.0 — `notasPublicas` ya NO se escribe en Wix Contacts: ver
+    // el bloque MENSAJE DEL SALÓN, tras Color y Tratamientos.
 
     // v1.9.13 — Color y Tratamientos ya no van a extendedFields: cada
     // uno inserta su fila en KamisuiteClientRecords. Texto vacío no
@@ -1964,6 +2098,30 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
         recordText: notasTratamientos
       });
       if (r.insertado) anotacionesInsertadas++;
+    }
+
+    // v1.10.0 — MENSAJE DEL SALÓN A LA CLIENTA («Notas públicas» del CRM,
+    // «Información adicional» del Área de Cliente). Fila MENSAJE_SALON en
+    // KamisuiteClientRecords, sin el límite de 200 caracteres de Wix
+    // Contacts. Solo se inserta si cambia lo que la clienta ve; con el
+    // texto vacío se inserta igual (= borrar).
+    if (notasPublicas !== undefined) {
+      const nuevoMensaje = String(notasPublicas || '').trim();
+      const previas = await leerAnotacionesCliente(contactId);
+      const visible = previas.mensajeSalon.existe
+        ? String(previas.mensajeSalon.texto || '').trim()
+        : String(leerCampoCRM(currentEf, 'notasPublicas').value || '').trim();
+
+      if (nuevoMensaje !== visible) {
+        const r = await insertarAnotacionCliente({
+          contactId,
+          ...datosAnotacion,
+          recordType: REC_TIPO_MENSAJE_SALON,
+          recordText: nuevoMensaje,
+          permitirVacio: true
+        });
+        if (r.insertado) anotacionesInsertadas++;
+      }
     }
 
     if (sexo !== undefined) {
@@ -2014,7 +2172,7 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
           ok: true,
           version: VERSION,
           cliente: formatearContacto(current, anotacionesTrasGuardar.historialGeneral),
-          profilePatch: extraerPatchCamposCRM(current),
+          profilePatch: extraerPatchCamposCRM(current, anotacionesTrasGuardar),   // v1.10.0
           debug: { anotacionesInsertadas, contactInfoEscritos: [] }
         };
       }
@@ -2046,12 +2204,13 @@ export const actualizarContactoCRM = webMethod(Permissions.Anyone, async (payloa
       console.warn(`${TAG} relectura post-update no disponible: ${eAfter.message}`);
     }
 
-    const profilePatch = extraerPatchCamposCRM(after);
-
     // v1.9.13 — El histórico de notas internas viaja en `cliente`, y el
     // widget lo repinta con cada renderContactData. Si no se relee, la
     // pestaña Notas se vaciaría al editar cualquier dato del contacto.
+    // v1.10.0 — Se relee ANTES del profilePatch: los mensajes salen de aquí.
     const anotacionesTrasGuardar = await leerAnotacionesCliente(contactId);
+
+    const profilePatch = extraerPatchCamposCRM(after, anotacionesTrasGuardar);
 
     console.log(
       `${TAG} actualizarContactoCRM OK: ${contactId} | ` +
@@ -2760,6 +2919,8 @@ async function borrarFilasCMS(coleccion, items) {
 // Las notas públicas y la nota que el cliente escribió desde su Área
 // viven en campos personalizados de Wix Contacts, NO en el CMS: se van
 // con el contacto y no dejan rastro. Por eso hay que enseñarlas antes.
+// v1.10.0 — Lo nuevo ya se escribe en KamisuiteClientRecords; esta
+// lectura queda como respaldo de lo escrito antes (ver auditarBorradoInterno).
 // Si el contacto no se puede leer, devuelve vacío y la auditoría sigue:
 // el bloqueo y la cascada no dependen de esto.
 async function leerNotasContactoParaBorrado(contactId) {
@@ -2807,6 +2968,7 @@ function desglosarAnotacionesParaBorrado(items) {
   for (const it of activas) {
     const tipo  = String(it[REC_RECORD_TYPE] || '').trim().toUpperCase();
     const texto = String(it[REC_RECORD_TEXT] || '').trim();
+    if (esTipoMensaje(tipo)) continue;   // v1.10.0 — los mensajes van aparte
 
     const destino = (tipo === REC_TIPO_COLOR)       ? out.color
                   : (tipo === REC_TIPO_TRATAMIENTO) ? out.tratamiento
@@ -2954,6 +3116,16 @@ async function auditarBorradoInterno(contactId) {
 
   const anotacionesDesglose = desglosarAnotacionesParaBorrado(anotaciones.items);
 
+  // v1.10.0 — Mensajes desde las filas ya leídas; el contacto, respaldo.
+  const mensajesFilas = mensajesDesdeFilas(anotaciones.items);
+  const notasPublicasBorrado = mensajesFilas.mensajeSalon.existe
+    ? String(mensajesFilas.mensajeSalon.texto || '').trim()
+    : notasContacto.notasPublicas;
+  const notasClienteBorrado = [notasContacto.notasCliente]
+    .concat(mensajesFilas.notasClienteEntradas)
+    .filter(x => String(x || '').trim())
+    .join(' | ');
+
   const contenido = {
     // 1 — COBROS. No se borran, pero se quedan sin ficha a la que volver.
     cobros: {
@@ -2972,8 +3144,8 @@ async function auditarBorradoInterno(contactId) {
       color:           anotacionesDesglose.color,
       tratamiento:     anotacionesDesglose.tratamiento,
       general:         anotacionesDesglose.general,
-      notasPublicas:   notasContacto.notasPublicas,
-      notasCliente:    notasContacto.notasCliente,
+      notasPublicas:   notasPublicasBorrado,   // v1.10.0
+      notasCliente:    notasClienteBorrado,    // v1.10.0
       tieneExpediente: careProfile.total > 0,
       careVisitas:     careVisitas.total
     },
