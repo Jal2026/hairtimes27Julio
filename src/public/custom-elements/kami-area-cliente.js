@@ -1,11 +1,28 @@
 /* ============================================================================
  * kami-area-cliente.js
  * ----------------------------------------------------------------------------
- * VERSION: 1.2.3
- * FECHA:   18 de noviembre de 2026
+ * VERSION: 1.2.4
+ * FECHA:   21 de noviembre de 2026
  *
  * Área de Cliente KAMISUITE — Custom Element con Shadow DOM.
  * Mismo patrón que <kami-reserva> del widget público. Tag: <kami-area-cliente>.
+ *
+ * v1.2.4 — «INFORMACIÓN IMPORTANTE» (21-nov-2026).
+ *   La tarjeta del mensaje del salón (antes «Información adicional») estaba
+ *   la última y podía pasar desapercibida.
+ *   - Sube al segundo lugar, justo debajo de «Información personal», en la
+ *     página, en el menú lateral y en el menú del móvil (los tres salen de
+ *     SECCIONES). El id interno sigue siendo 'expediente'.
+ *   - Título nuevo: «Información importante».
+ *   - Icono nuevo 'info' (una «i» en un círculo) en amarillo fijo #f59e0b,
+ *     el mismo ámbar del semáforo de la agenda, igual en todas las pieles.
+ *     Sustituye a la hoja en el título, en los dos menús y en el recuadro
+ *     «Esto lo escribe tu salón…». SECCIONES admite `iconCls` para eso.
+ *   - Cada línea del mensaje enseña debajo, en pequeño, el día en que el
+ *     salón la escribió (`fecha` de clienteAreaLogic v1.8.1). Sin fecha
+ *     (líneas anteriores al 21-nov-2026 o backend anterior) no se pinta.
+ *   - CSS nuevo: .ic-info y .exp-fecha. Nada más cambia.
+ *   Pareja: clienteAreaLogic 1.8.1.
  *
  * v1.2.3 — UNIÓN DE LAS DOS RAMAS DEL ARCHIVO (18-nov-2026).
  *   La 1.2.2 (Hair-Times: aviso de oferta al mover una cita) más la 1.2.1
@@ -258,6 +275,8 @@
 
 const SECCIONES = [
   { id: 'personal',   label: 'Información personal', icon: 'user' },
+  // v1.2.4 — sube aquí desde el final; título e icono nuevos.
+  { id: 'expediente', label: 'Información importante', icon: 'info', iconCls: 'ic-info' },
   // v1.1.0 — label placeholder. El label real se calcula en runtime con
   // `labelSeccion(s, data)` porque incorpora `data.salon.brandName`
   // (multi-tenant). Ver referencia en `section()`, `_sidenav()`,
@@ -267,7 +286,6 @@ const SECCIONES = [
   { id: 'anteriores', label: 'Servicios anteriores', icon: 'clock' },
   { id: 'notas',      label: 'Notas para el salón',  icon: 'note' },
   { id: 'productos',  label: 'Productos comprados',  icon: 'bag' },
-  { id: 'expediente', label: 'Información adicional', icon: 'file' },
 ];
 
 /**
@@ -302,6 +320,7 @@ const ICONS = {
   warn:     '<path d="M12 5l8 14H4z"/><path d="M12 10v4M12 16.5v.5"/>',
   spark:    '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/>',
   arrow:    '<path d="M5 12h13M13 7l5 5-5 5"/>',
+  info:     '<circle cx="12" cy="12" r="7.5"/><path d="M12 11v5M12 8.2v.3"/>',   // v1.2.4
 };
 
 function ic(name, cls = '') {
@@ -1048,6 +1067,17 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
 .dl{display:grid;grid-template-columns:max-content 1fr;gap:11px 22px;margin:0 0 22px}
 .dl dt{font-size:13px;font-weight:600;color:var(--kr-ink-soft)}
 .dl dd{margin:0;font-size:14.5px;text-wrap:pretty}
+/* v1.2.4 — fecha de cada línea del mensaje del salón */
+.exp-fecha{display:block;margin-top:2px;font-size:12px;color:var(--kr-ink-soft)}
+/* v1.2.4 — «i» de Información importante: amarillo fijo en todas las pieles */
+.ic.ic-info,
+nav.sidenav button .ic.ic-info,
+nav.sidenav button.active .ic.ic-info,
+.navselect .ns-ic .ic.ic-info,
+.navmenu button .ic.ic-info,
+.navmenu button.active .ic.ic-info,
+.sec-head .ic.ic-info,
+.exp-intro .ic.ic-info{color:#f59e0b}
 .diag{display:flex;flex-direction:column;gap:14px}
 .diag-card{display:flex;gap:16px;background:var(--kr-surface-2);border:1px solid var(--kr-line);border-radius:var(--r);padding:16px;align-items:flex-start}
 .diag-card .ph{width:128px;height:96px;border-radius:11px;overflow:hidden;flex:none;background:var(--kr-surface);border:1px solid var(--kr-line)}
@@ -1190,7 +1220,7 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
 
   nav() {
     return `<nav class="sidenav">${SECCIONES.map(s =>
-      `<button data-nav="${s.id}" class="${s.id === this._activa ? 'active' : ''}">${ic(s.icon)}<span>${esc(labelSeccion(s, this._data))}</span></button>`
+      `<button data-nav="${s.id}" class="${s.id === this._activa ? 'active' : ''}">${ic(s.icon, s.iconCls || '')}<span>${esc(labelSeccion(s, this._data))}</span></button>`
     ).join('')}</nav>`;
   }
 
@@ -1198,12 +1228,12 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
     const act = SECCIONES.find(s => s.id === this._activa) || SECCIONES[0];
     return `<div class="navmobile">
       <button class="navselect" data-navtoggle>
-        <span class="ns-ic">${ic(act.icon)}</span>
+        <span class="ns-ic">${ic(act.icon, act.iconCls || '')}</span>
         <span class="ns-label">${esc(labelSeccion(act, this._data))}</span>
         <span class="ns-chev">${ic('arrow')}</span>
       </button>
       <div class="navmenu" data-navmenu hidden>
-        ${SECCIONES.map(s => `<button data-nav="${s.id}" class="${s.id === this._activa ? 'active' : ''}">${ic(s.icon)}<span>${esc(labelSeccion(s, this._data))}</span></button>`).join('')}
+        ${SECCIONES.map(s => `<button data-nav="${s.id}" class="${s.id === this._activa ? 'active' : ''}">${ic(s.icon, s.iconCls || '')}<span>${esc(labelSeccion(s, this._data))}</span></button>`).join('')}
       </div>
     </div>`;
   }
@@ -1214,7 +1244,7 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
     const headExtra = s.id === 'personal' ? this.personalHeadActions() : '';
     return `<section class="sec ${collapsed ? 'collapsed' : ''}" id="sec-${s.id}" data-sec="${s.id}">
       <div class="sec-head" data-head="${s.id}">
-        ${ic(s.icon)}<h2>${esc(labelSeccion(s, this._data))}</h2>${headExtra}
+        ${ic(s.icon, s.iconCls || '')}<h2>${esc(labelSeccion(s, this._data))}</h2>${headExtra}
         <span class="chev">${ic('arrow')}</span>
       </div>
       <div class="sec-body">${body}</div>
@@ -1652,7 +1682,7 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
     </div>`).join('')}</div>`;
   }
 
-  /* ---------------- 3.7 INFORMACIÓN ADICIONAL (expediente) ---------------- */
+  /* ---------------- 3.7 INFORMACIÓN IMPORTANTE (expediente) ---------------- */
   sec_expediente() {
     const e = this._data.expediente;
     if (!e) {
@@ -1661,8 +1691,9 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
     }
     // v1.0.3 — Jal pidió eliminar sub-sección "Diagnósticos". Mantenemos
     // solo "Detalles de tus servicios" parseado desde customnotaspublicas.
-    const dl = (e.detalles || []).map(d => `<dt>${esc(d.etiqueta)}</dt><dd>${esc(d.valor)}</dd>`).join('');
-    return `<div class="exp-intro">${ic('file')}<div>Esto lo escribe tu salón para cuidarte mejor. Es solo de lectura — si algo no encaja, coméntalo en tu próxima visita.</div></div>
+    // v1.2.4 — fecha de cada línea (clienteAreaLogic 1.8.1); sin fecha no se pinta.
+    const dl = (e.detalles || []).map(d => `<dt>${esc(d.etiqueta)}</dt><dd>${esc(d.valor)}${d.fecha ? `<span class="exp-fecha">${esc(fechaCorta(d.fecha))}</span>` : ''}</dd>`).join('');
+    return `<div class="exp-intro">${ic('info', 'ic-info')}<div>Esto lo escribe tu salón para cuidarte mejor. Es solo de lectura — si algo no encaja, coméntalo en tu próxima visita.</div></div>
       <p class="lbl-mini">Detalles de tus servicios</p>
       <dl class="dl">${dl}</dl>`;
   }
@@ -1779,7 +1810,7 @@ textarea.nota:focus{outline:none;border-color:var(--kr-accent);box-shadow:0 0 0 
     const lbl = sr.querySelector('.navselect .ns-label');
     const nsic = sr.querySelector('.navselect .ns-ic');
     if (lbl && secDef) lbl.textContent = labelSeccion(secDef, this._data);
-    if (nsic && secDef) nsic.innerHTML = ic(secDef.icon);
+    if (nsic && secDef) nsic.innerHTML = ic(secDef.icon, secDef.iconCls || '');
     const menu = sr.querySelector('[data-navmenu]');
     if (menu) menu.hidden = true;
     const nm = sr.querySelector('.navmobile');

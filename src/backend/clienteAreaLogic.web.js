@@ -1,7 +1,28 @@
 // =====================================================
 // KAMISUITE — Backend: Área de Cliente
 // =====================================================
-// VERSION: 1.8.0
+// VERSION: 1.8.1
+//
+// v1.8.1 — FECHA DE CADA LÍNEA DEL MENSAJE DEL SALÓN (21-nov-2026).
+//   El salón escribe en el CRM un único texto al que va añadiendo líneas, y
+//   lo guarda entero: cada guardado es una fila 'MENSAJE_SALON' con su
+//   recordDate (fichaClienteLogic v1.10.0). Ahora cada línea del bloque
+//   expediente.detalles lleva `fecha` ('YYYY-MM-DD', día de Madrid): la del
+//   guardado más antiguo de la racha de guardados seguidos que la contienen
+//   hasta el actual. Si la racha llega al primer guardado y la línea ya
+//   estaba en el campo antiguo de Wix Contacts, su fecha real no se conoce
+//   y va vacía (''). Una línea corregida cuenta desde la corrección.
+//     · leerMensajesAnotaciones devuelve además `versionesSalon`
+//       [{ fecha, texto }] (todas las filas MENSAJE_SALON, más recientes
+//       primero). Misma query: ninguna lectura nueva.
+//     · Nueva función fechasLineasMensajeSalon().
+//     · Si el mensaje viene de Wix Contacts (salón sin filas), no hay
+//       `fecha` en las líneas, como hasta ahora.
+//   Límite: la lectura trae como mucho REC_LIMITE_FILAS filas por contacto;
+//   si un contacto tuviera más, la línea toma la fecha de la copia más
+//   antigua que llega.
+//   El page code no cambia (pasa `expediente` entero). Pareja:
+//   kami-area-cliente.js v1.2.4.
 //
 // v1.8.0 — MENSAJES ENTRE LA CLIENTA Y EL SALÓN EN KamisuiteClientRecords
 //   (21-nov-2026).
@@ -530,7 +551,7 @@ import { cancelarReserva, reprogramarReserva } from 'backend/recepcionProLogic.w
 import { getHuecosDisponibles } from 'backend/widgetPublicoLogic.web';
 import wixData from 'wix-data';
 
-const VERSION = '1.8.0';
+const VERSION = '1.8.1';
 const TAG = `[ClienteArea][${VERSION}]`;
 
 // App ID constante de Wix Stores. Requerido en catalogReference.appId
@@ -614,8 +635,10 @@ function fechaNotaMadrid(v) {
 // fallo devuelve vacío y el Área de Cliente cae a Wix Contacts.
 //   notasCliente — [{ fecha, texto }] NOTA_CLIENTE, más recientes primero.
 //   mensajeSalon — { existe, texto } de la MENSAJE_SALON más reciente.
+//   versionesSalon — v1.8.1: [{ fecha, texto }] todas las MENSAJE_SALON,
+//                    más recientes primero (para fechar cada línea).
 async function leerMensajesAnotaciones(contactId) {
-  const out = { notasCliente: [], mensajeSalon: { existe: false, texto: '' } };
+  const out = { notasCliente: [], mensajeSalon: { existe: false, texto: '' }, versionesSalon: [] };
   try {
     const res = await wixData.query(CMS_CLIENT_RECORDS)
       .eq(REC_CONTACT_ID, contactId)
@@ -629,6 +652,7 @@ async function leerMensajesAnotaciones(contactId) {
       const texto = String(it[REC_RECORD_TEXT] || '').trim();
       if (tipo === REC_TIPO_MENSAJE_SALON) {
         if (!out.mensajeSalon.existe) out.mensajeSalon = { existe: true, texto };
+        out.versionesSalon.push({ fecha: it[REC_RECORD_DATE] || it._createdDate, texto });
       } else if (tipo === REC_TIPO_NOTA_CLIENTE && texto) {
         out.notasCliente.push({ fecha: fechaNotaMadrid(it[REC_RECORD_DATE] || it._createdDate), texto });
       }
@@ -873,6 +897,31 @@ function ymdMadrid(any) {
   if (isNaN(d)) return '';
   // toLocaleDateString con 'es-CA' devuelve YYYY-MM-DD
   return d.toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+}
+
+// v1.8.1 — Fecha de cada línea del mensaje del salón.
+// versionesDesc: [{ fecha, texto }] filas MENSAJE_SALON, más recientes
+// primero (la primera es el texto actual). Cada línea del texto actual
+// toma la fecha del guardado más antiguo de la racha de guardados seguidos
+// que la contienen hasta el actual. Si la racha llega al primer guardado y
+// la línea ya estaba en el campo antiguo de Wix Contacts, va sin fecha.
+// Mismo troceado que parsearNotasPublicas (líneas recortadas, sin vacías).
+// Devuelve Map(línea → 'YYYY-MM-DD' | '').
+function fechasLineasMensajeSalon(versionesDesc, textoContactoAntiguo) {
+  const lineasDe = t => new Set(String(t || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean));
+  const versiones = (versionesDesc || []).slice().reverse();
+  const out = new Map();
+  if (!versiones.length) return out;
+  const conjuntos = versiones.map(v => lineasDe(v.texto));
+  const antiguo = lineasDe(textoContactoAntiguo);
+  const n = versiones.length;
+  for (const linea of conjuntos[n - 1]) {
+    let k = n - 1;
+    while (k > 0 && conjuntos[k - 1].has(linea)) k--;
+    const sinFecha = k === 0 && antiguo.has(linea);
+    out.set(linea, sinFecha ? '' : ymdMadrid(versiones[k].fecha));
+  }
+  return out;
 }
 
 /**
@@ -1230,6 +1279,7 @@ export const getAreaCliente = webMethod(
       const lecturaNotas = leerNotasPublicasFlexible(ef);
       let notasPublicasRaw = normalizarTextoCampo(lecturaNotas.value);
       let notasPublicasOrigen = 'contacto-logueado';
+      const notasContactoAntiguo = notasPublicasRaw;   // v1.8.1 — para fechar líneas
 
       const allExtendedKeysNotas = listarKeysDebug(ef || {}, 3, 120);
       const notasKeysDetectadas = allExtendedKeysNotas.filter(k => esClaveNotasPublicas(k));
@@ -1572,6 +1622,14 @@ export const getAreaCliente = webMethod(
       const expediente = tieneNotasPublicas
         ? { detalles: parsearNotasPublicas(notasPublicasRaw) }
         : null;
+      // v1.8.1 — fecha de cada línea, solo si el mensaje viene de
+      // KamisuiteClientRecords. Mismo troceado que parsearNotasPublicas,
+      // así que cada línea cae en su detalle por posición.
+      if (expediente && notasPublicasOrigen === 'anotaciones') {
+        const fechasLinea = fechasLineasMensajeSalon(mensajesAnot.versionesSalon, notasContactoAntiguo);
+        const lineasMensaje = String(notasPublicasRaw || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        expediente.detalles.forEach((d, i) => { d.fecha = fechasLinea.get(lineasMensaje[i]) || ''; });
+      }
 
       // 11) Productos custom del miembro (PRIME + Bonos + Tarjetas).
       // v1.6.1 — Queries LOCALES directas contra las tres colecciones,
