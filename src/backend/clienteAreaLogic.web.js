@@ -1,7 +1,32 @@
 // =====================================================
 // KAMISUITE — Backend: Área de Cliente
 // =====================================================
-// VERSION: 1.8.1
+// VERSION: 1.8.2
+//
+// v1.8.2 — «SERVICIOS ANTERIORES» CON SUS DATOS (21-nov-2026).
+//   Cada servicio anterior salía solo con la fecha y 0,00 €: el mapeo leía
+//   serviciosDetail / servicios, staffName, importe / precioTotal y family,
+//   que PaymentReservations no tiene. Los campos reales del cobro son
+//   descripcion («Label (X€), Label (Y€)»), importeTotal y staff
+//   (comprobado en Latifa: KRI_921056ac…, 48 €, «Ade»).
+//     · servicios  ← descripcion, sin los precios (serviciosDeCobro). Las
+//                    piezas de tienda («🛒 …») no cuentan como servicio.
+//     · importe    ← importeTotal.   · profesional ← staff.
+//     · categoria  ← '' (el cobro no la lleva; el page code no la usa
+//                    para «Repetir», que va siempre a urlBooking).
+//   Además:
+//     · Fuera los cobros no activos (estadoCobro ANULADO y su fila
+//       REVERSION). Vacío === ACTIVO, el mismo criterio que _esActivo de
+//       paymentReservationsLogic y _cobroActivo de facturacionSalonLogic.
+//     · Fuera las ventas de ESPECIALES (bookingId 'ESP_…': bonos, PRIME,
+//       tarjetas): no son servicios.
+//     · Fuera los cobros sin ningún servicio que enseñar (una fecha sin
+//       datos no aporta nada).
+//     · Filtro por clienta: query por contactId (antes se miraban los 500
+//       cobros más recientes del salón y se filtraba por nombre contenido,
+//       que mezclaba «Ana Gil» con «Ana Gil Pérez»). El nombre solo se usa
+//       para cobros antiguos sin contactId, sobre los 500 más recientes.
+//   El widget y el page code no cambian.
 //
 // v1.8.1 — FECHA DE CADA LÍNEA DEL MENSAJE DEL SALÓN (21-nov-2026).
 //   El salón escribe en el CRM un único texto al que va añadiendo líneas, y
@@ -551,7 +576,7 @@ import { cancelarReserva, reprogramarReserva } from 'backend/recepcionProLogic.w
 import { getHuecosDisponibles } from 'backend/widgetPublicoLogic.web';
 import wixData from 'wix-data';
 
-const VERSION = '1.8.1';
+const VERSION = '1.8.2';
 const TAG = `[ClienteArea][${VERSION}]`;
 
 // App ID constante de Wix Stores. Requerido en catalogReference.appId
@@ -922,6 +947,38 @@ function fechasLineasMensajeSalon(versionesDesc, textoContactoAntiguo) {
     out.set(linea, sinFecha ? '' : ymdMadrid(versiones[k].fecha));
   }
   return out;
+}
+
+// v1.8.2 — ¿Es un cobro vivo? Vacío === ACTIVO. Criterio idéntico a
+// _esActivo de paymentReservationsLogic y _cobroActivo de
+// facturacionSalonLogic: si cambia en un sitio, cambia en los tres.
+function cobroActivoArea(item) {
+  const e = String((item && item.estadoCobro) || '').trim().toUpperCase();
+  return e === '' || e === 'ACTIVO';
+}
+
+// v1.8.2 — Servicios de un cobro a partir de su descripcion
+// («Label (X€), Label (Y€)», la que escriben recepcionProLogic y
+// marcarPagadoReserva). Quita el precio de cada pieza; una etiqueta puede
+// llevar comas o paréntesis propios. Texto sin precios → una sola pieza.
+// Las piezas de tienda («🛒 …») no son servicios.
+function serviciosDeCobro(desc) {
+  const s = String(desc || '').trim();
+  if (!s) return [];
+  const out = [];
+  const re = /(.+?)\s*\((-?\d+(?:[.,]\d+)?)\s*€\)\s*(?:,\s*|$)/g;
+  let m;
+  let ultimo = 0;
+  while ((m = re.exec(s)) !== null) {
+    out.push(m[1].trim());
+    ultimo = re.lastIndex;
+  }
+  if (!out.length) out.push(s);
+  else if (ultimo < s.length) {
+    const resto = s.slice(ultimo).trim();
+    if (resto) out.push(resto);
+  }
+  return out.filter(x => x && !x.startsWith('🛒'));
 }
 
 /**
@@ -1411,36 +1468,52 @@ export const getAreaCliente = webMethod(
         console.warn(`${TAG} ⚠️ proximas: ${e.message}`);
       }
 
-      // 6) Anteriores (PaymentReservations, mismo patrón careProfileLogic).
+      // 6) Anteriores (PaymentReservations).
+      // v1.8.2 — campos reales del cobro, solo cobros activos de servicios
+      // y filtro por clienta (contactId; nombre solo sin contactId).
       let anteriores = [];
       try {
         const nombreCompleto = `${cliente.nombre} ${cliente.apellido}`.trim().toLowerCase();
-        if (nombreCompleto) {
-          const r = await wixData.query(CMS_PAGOS)
+        const [rContacto, rRecientes] = await Promise.all([
+          wixData.query(CMS_PAGOS)
+            .eq('contactId', memberContactId)
             .descending('fechaReserva')
             .limit(LIMITE_PAYMENT_RES)
-            .find({ suppressAuth: true });
-          anteriores = (r.items || [])
-            .filter(it => {
-              const nc = String(it.nombreCliente || '').toLowerCase();
-              return nc && nc.includes(nombreCompleto);
-            })
-            .map(it => {
-              const fechaIni = it.fechaReserva instanceof Date
-                ? it.fechaReserva : new Date(it.fechaReserva);
-              return {
-                id: it._id,
-                fecha: ymdMadrid(fechaIni),
-                servicios: String(it.serviciosDetail || it.servicios || '')
-                  .split(';;')
-                  .map(s => s.split('|')[0])
-                  .filter(Boolean),
-                profesional: it.staffName || '',
-                importe: it.importe || it.precioTotal || 0,
-                categoria: it.family || ''
-              };
-            });
+            .find({ suppressAuth: true }),
+          nombreCompleto
+            ? wixData.query(CMS_PAGOS)
+                .descending('fechaReserva')
+                .limit(LIMITE_PAYMENT_RES)
+                .find({ suppressAuth: true })
+            : Promise.resolve({ items: [] })
+        ]);
+        const vistos = new Set();
+        const propios = [];
+        for (const it of (rContacto.items || [])) {
+          if (!vistos.has(it._id)) { vistos.add(it._id); propios.push(it); }
         }
+        for (const it of (rRecientes.items || [])) {
+          if (vistos.has(it._id) || String(it.contactId || '').trim()) continue;
+          const nc = String(it.nombreCliente || '').toLowerCase();
+          if (nc && nc.includes(nombreCompleto)) { vistos.add(it._id); propios.push(it); }
+        }
+        const msFecha = v => { const d = v instanceof Date ? v : new Date(v); return isNaN(d) ? 0 : d.getTime(); };
+        anteriores = propios
+          .filter(it => cobroActivoArea(it) && !String(it.bookingId || '').startsWith('ESP_'))
+          .sort((a, b) => msFecha(b.fechaReserva) - msFecha(a.fechaReserva))
+          .map(it => {
+            const fechaIni = it.fechaReserva instanceof Date
+              ? it.fechaReserva : new Date(it.fechaReserva);
+            return {
+              id: it._id,
+              fecha: ymdMadrid(fechaIni),
+              servicios: serviciosDeCobro(it.descripcion),
+              profesional: String(it.staff || '').trim(),
+              importe: Number(it.importeTotal) || 0,
+              categoria: ''
+            };
+          })
+          .filter(h => h.fecha && h.servicios.length);
       } catch (e) {
         console.warn(`${TAG} ⚠️ anteriores: ${e.message}`);
       }
