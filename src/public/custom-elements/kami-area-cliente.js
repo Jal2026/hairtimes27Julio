@@ -1,11 +1,20 @@
 /* ============================================================================
  * kami-area-cliente.js
  * ----------------------------------------------------------------------------
- * VERSION: 1.2.4
+ * VERSION: 1.2.5
  * FECHA:   21 de noviembre de 2026
  *
  * Área de Cliente KAMISUITE — Custom Element con Shadow DOM.
  * Mismo patrón que <kami-reserva> del widget público. Tag: <kami-area-cliente>.
+ *
+ * v1.2.5 — MÓVIL: PESTAÑAS CERRADAS AL ENTRAR Y BOTÓN «MENÚ» (21-nov-2026).
+ *   - En el móvil todas las secciones arrancan cerradas (antes, abiertas):
+ *     `_abiertas` nace vacío. En el ordenador no hay acordeón: sin cambios.
+ *   - El botón de arriba del menú del móvil dice siempre «Menú», con un
+ *     icono nuevo 'menu' (tres rayas). Antes repetía la sección actual y
+ *     parecía que «Información personal» salía dos veces. irA() ya no le
+ *     cambia el texto ni el icono. El desplegable no cambia.
+ *   Solo este archivo.
  *
  * v1.2.4 — «INFORMACIÓN IMPORTANTE» (21-nov-2026).
  *   La tarjeta del mensaje del salón (antes «Información adicional») estaba
@@ -321,6 +330,7 @@ const ICONS = {
   spark:    '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/>',
   arrow:    '<path d="M5 12h13M13 7l5 5-5 5"/>',
   info:     '<circle cx="12" cy="12" r="7.5"/><path d="M12 11v5M12 8.2v.3"/>',   // v1.2.4
+  menu:     '<path d="M5 7h14M5 12h14M5 17h14"/>',   // v1.2.5
 };
 
 function ic(name, cls = '') {
@@ -686,7 +696,7 @@ class KamiAreaCliente extends HTMLElement {
     this._notaDirty = false;
     this._activa = 'personal';
     this._narrow = false;
-    this._abiertas = new Set(SECCIONES.map(s => s.id)); // accordion (todas abiertas por defecto)
+    this._abiertas = new Set(); // accordion — v1.2.5: todas cerradas al entrar
     // v1.0.4 — NO se llama a aplicarSkin aquí.
     // El constructor de un Custom Element TIENE PROHIBIDO añadir atributos
     // al elemento (host.dataset.skin = ... añade un data-skin attribute).
@@ -1225,11 +1235,11 @@ nav.sidenav button.active .ic.ic-info,
   }
 
   navMobile() {
-    const act = SECCIONES.find(s => s.id === this._activa) || SECCIONES[0];
+    // v1.2.5 — el botón dice siempre «Menú» (antes repetía la sección actual).
     return `<div class="navmobile">
       <button class="navselect" data-navtoggle>
-        <span class="ns-ic">${ic(act.icon, act.iconCls || '')}</span>
-        <span class="ns-label">${esc(labelSeccion(act, this._data))}</span>
+        <span class="ns-ic">${ic('menu')}</span>
+        <span class="ns-label">Menú</span>
         <span class="ns-chev">${ic('arrow')}</span>
       </button>
       <div class="navmenu" data-navmenu hidden>
@@ -1805,12 +1815,7 @@ nav.sidenav button.active .ic.ic-info,
     if (setActive) this._activa = id;
     const sr = this.shadowRoot;
     sr.querySelectorAll('[data-nav]').forEach(b => b.classList.toggle('active', b.dataset.nav === id));
-    // actualizar y cerrar el dropdown móvil
-    const secDef = SECCIONES.find(s => s.id === id);
-    const lbl = sr.querySelector('.navselect .ns-label');
-    const nsic = sr.querySelector('.navselect .ns-ic');
-    if (lbl && secDef) lbl.textContent = labelSeccion(secDef, this._data);
-    if (nsic && secDef) nsic.innerHTML = ic(secDef.icon, secDef.iconCls || '');
+    // cerrar el dropdown móvil (v1.2.5: el botón sigue diciendo «Menú»)
     const menu = sr.querySelector('[data-navmenu]');
     if (menu) menu.hidden = true;
     const nm = sr.querySelector('.navmobile');
