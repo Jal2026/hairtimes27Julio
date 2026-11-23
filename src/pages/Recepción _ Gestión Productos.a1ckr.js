@@ -4,7 +4,7 @@
 // Página: Recepción | Tienda Productos (renombrada
 // internamente a "Alta y Edición Productos")
 // Elemento: #widgetTienda (HtmlComponent)
-// Versión: 3.7
+// Versión: 3.8
 // =====================================================
 // v1.4: + metodoPago, generarFacturaProducto, obtenerHistorialVentas
 // v2.0: + edición productos (tiendaEdicionLogic.web.js)
@@ -86,6 +86,19 @@
 //      incluido en el reporte de errores parciales.
 // =====================================================
 
+// v3.8 (23 Nov 2026): + CAMPAÑA DE DESCUENTO (botón BLACK FRIDAY).
+//      · NUEVOS imports: estadoCampanaDescuento,
+//        prepararCampanaDescuento, aplicarCampanaDescuentoLote,
+//        terminarCampanaDescuentoLote, refrescarCorreosTrasCampana
+//        (tiendaEdicionLogic v1.5.0).
+//      · NUEVOS handlers: 'campana-estado', 'campana-aplicar' y
+//        'campana-terminar'.
+//      · El catálogo se procesa por lotes de LOTE_CAMPANA productos
+//        y el widget recibe el avance tras cada lote.
+//      · Un fallo en un lote no corta la campaña: se apunta y sigue.
+//      · Al acabar: caché de los correos invalidada una sola vez, el
+//        mismo margen de 1200 ms y recarga del listado.
+//
 // v3.7 (13 Sep 2026): la promoción viaja como {tipo, valor}, donde
 //      tipo es 'PERCENT' o 'AMOUNT'. Antes se mandaba solo el precio
 //      final de venta y el backend lo traducía siempre a importe.
@@ -128,8 +141,20 @@ import {
   activarSeguimientoStock,
   duplicarProducto,
   activarPromocionProducto,
-  desactivarPromocionProducto
+  desactivarPromocionProducto,
+  estadoCampanaDescuento,
+  prepararCampanaDescuento,
+  aplicarCampanaDescuentoLote,
+  terminarCampanaDescuentoLote,
+  refrescarCorreosTrasCampana
 } from 'backend/tiendaEdicionLogic.web';
+
+// v3.8: productos por llamada al backend en la campaña de descuento.
+const LOTE_CAMPANA = 10;
+// v3.8: tope de vueltas al terminar la campaña (10 x 200 = 2000 productos).
+const MAX_VUELTAS_CAMPANA = 200;
+// v3.8: mensaje para el salón cuando falla algo inesperado.
+const ERROR_CAMPANA = 'No se pudo completar la campaña. Vuelve a intentarlo; si sigue fallando, avisa a soporte.';
 
 $w.onReady(function () {
 
@@ -156,6 +181,11 @@ $w.onReady(function () {
     // ── Handlers PROMOCIÓN (v3.6) ──
     if (msg.type === 'activar-promocion') { await activarPromocionHandler(msg.payload); }
     if (msg.type === 'quitar-promocion') { await quitarPromocionHandler(msg.payload); }
+
+    // ── Handlers CAMPAÑA DE DESCUENTO (v3.8) ──
+    if (msg.type === 'campana-estado') { await campanaEstadoHandler(); }
+    if (msg.type === 'campana-aplicar') { await campanaAplicarHandler(msg.payload); }
+    if (msg.type === 'campana-terminar') { await campanaTerminarHandler(); }
   });
 
   // ══════════════════════════════════════════════════
@@ -613,6 +643,141 @@ $w.onReady(function () {
       await cargarDatos();
     } catch (e) {
       widget.postMessage({ type: 'promocionError', payload: { productId: payload?.productId, error: e.message || String(e) } });
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // v3.8 — CAMPAÑA DE DESCUENTO (BLACK FRIDAY)
+  // ══════════════════════════════════════════════════
+  // El widget solo pide; aquí se recorre el catálogo por lotes y se
+  // le va contando el avance. Evita lanzar dos campañas a la vez.
+  let campanaEnCurso = false;
+
+  async function campanaEstadoHandler() {
+    try {
+      const est = await estadoCampanaDescuento();
+      widget.postMessage({ type: 'campanaEstado', payload: est });
+    } catch (e) {
+      console.error('[AltaEdicion] campana-estado:', e.message || e);
+      widget.postMessage({ type: 'campanaEstado', payload: { ok: false, error: ERROR_CAMPANA } });
+    }
+  }
+
+  async function campanaAplicarHandler(payload) {
+    if (campanaEnCurso) return;
+    campanaEnCurso = true;
+    try {
+      const porcentaje = Number(payload?.porcentaje);
+      if (!Number.isFinite(porcentaje) || porcentaje <= 0 || porcentaje >= 100) {
+        widget.postMessage({ type: 'campanaError', payload: { error: 'El porcentaje debe ser mayor que 0 y menor que 100.' } });
+        return;
+      }
+
+      const prep = await prepararCampanaDescuento();
+      if (!prep.ok) {
+        widget.postMessage({ type: 'campanaError', payload: { error: prep.error || ERROR_CAMPANA } });
+        return;
+      }
+
+      const ids = prep.ids || [];
+      const total = ids.length;
+      let actualizados = 0;
+      const errores = [];
+      widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'aplicar', hechos: 0, total } });
+
+      for (let i = 0; i < ids.length; i += LOTE_CAMPANA) {
+        const lote = ids.slice(i, i + LOTE_CAMPANA);
+        let r;
+        try {
+          r = await aplicarCampanaDescuentoLote(porcentaje, lote);
+        } catch (e) {
+          console.error('[AltaEdicion] campana-aplicar lote:', e.message || e);
+          r = { ok: false };
+        }
+        if (r && r.ok) {
+          actualizados += r.actualizados || 0;
+          (r.errores || []).forEach(err => errores.push(err));
+        } else {
+          lote.forEach(productId => errores.push({ productId, nombre: '', error: 'No se pudo poner el descuento' }));
+        }
+        widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'aplicar', hechos: Math.min(i + LOTE_CAMPANA, total), total } });
+      }
+
+      await refrescarCorreosTrasCampana();
+
+      widget.postMessage({
+        type: 'campanaAplicada',
+        payload: { porcentaje, total, actualizados, excluidos: prep.excluidos || 0, errores }
+      });
+
+      await new Promise(r => setTimeout(r, 1200));
+      await cargarDatos();
+    } catch (e) {
+      console.error('[AltaEdicion] campana-aplicar:', e.message || e);
+      widget.postMessage({ type: 'campanaError', payload: { error: ERROR_CAMPANA } });
+    } finally {
+      campanaEnCurso = false;
+    }
+  }
+
+  async function campanaTerminarHandler() {
+    if (campanaEnCurso) return;
+    campanaEnCurso = true;
+    try {
+      const est = await estadoCampanaDescuento();
+      if (!est.ok) {
+        widget.postMessage({ type: 'campanaError', payload: { error: est.error || ERROR_CAMPANA } });
+        return;
+      }
+
+      const total = est.productos || 0;
+      let saltar = 0;
+      let hechos = 0;
+      let restaurados = 0;
+      let respetados = 0;
+      let sinProducto = 0;
+      const errores = [];
+      widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'terminar', hechos: 0, total } });
+
+      for (let vuelta = 0; vuelta < MAX_VUELTAS_CAMPANA; vuelta++) {
+        let r;
+        try {
+          r = await terminarCampanaDescuentoLote(LOTE_CAMPANA, saltar);
+        } catch (e) {
+          console.error('[AltaEdicion] campana-terminar lote:', e.message || e);
+          r = { ok: false };
+        }
+        if (!r || !r.ok) {
+          errores.push({ productId: '', nombre: '', error: (r && r.error) || ERROR_CAMPANA });
+          break;
+        }
+        if (!r.procesados) break;
+
+        restaurados += r.restaurados || 0;
+        respetados += r.respetados || 0;
+        sinProducto += r.sinProducto || 0;
+        (r.errores || []).forEach(err => errores.push(err));
+        // Las filas que fallan se quedan en la colección y van delante:
+        // se saltan en la vuelta siguiente.
+        saltar += (r.errores || []).length;
+        hechos += r.procesados;
+        widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'terminar', hechos: Math.min(hechos, total), total } });
+      }
+
+      await refrescarCorreosTrasCampana();
+
+      widget.postMessage({
+        type: 'campanaTerminada',
+        payload: { total, restaurados, respetados, sinProducto, errores }
+      });
+
+      await new Promise(r => setTimeout(r, 1200));
+      await cargarDatos();
+    } catch (e) {
+      console.error('[AltaEdicion] campana-terminar:', e.message || e);
+      widget.postMessage({ type: 'campanaError', payload: { error: ERROR_CAMPANA } });
+    } finally {
+      campanaEnCurso = false;
     }
   }
 });

@@ -9,8 +9,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Alta y Edición Productos v3.10.0
+       KAMISUITE — Alta y Edición Productos v3.11.0
        Dark theme (same as Catálogo / Checkout)
+       v3.11.0 (23 Nov 2026): + BLACK FRIDAY. Botón fucsia a la
+              derecha del buscador que abre, justo debajo de la
+              barra, el panel de la campaña de descuento en toda
+              la tienda: porcentaje, APLICAR A TODA LA TIENDA y
+              TERMINAR CAMPAÑA. Confirmación, avance y resultado
+              salen dentro del propio panel, al lado de donde se
+              pulsa. Con campaña activa, el botón muestra el
+              porcentaje. Parejas: page code v3.8 y
+              tiendaEdicionLogic v1.5.0.
        v3.10.0 (13 Sep 2026): el porcentaje ya no se calcula aquí:
               viene resuelto del backend (v1.4.3), que usa el
               descuento guardado en Wix cuando está en PERCENT.
@@ -143,6 +152,7 @@
       --blue: #4a9ec9;
       --blue-dim: rgba(74,158,201,.12);
       --yellow: #e5c44a;
+      --fucsia: #ff1493;
       --radius: 10px;
       --radius-sm: 6px;
     }
@@ -226,6 +236,54 @@
       transition: all .15s;
     }
     .btn-toolbar-action:hover { background: var(--accent-dim); }
+
+    /* v3.11.0: BLACK FRIDAY — campaña de descuento en toda la tienda */
+    .btn-bf {
+      background: var(--fucsia); border: 1px solid var(--fucsia);
+      color: #fff; border-radius: var(--radius-sm);
+      padding: 7px 16px; font-family: inherit; font-size: 11px;
+      font-weight: 700; letter-spacing: 1px; cursor: pointer;
+      white-space: nowrap; transition: all .15s;
+      box-shadow: 0 0 12px rgba(255,20,147,.45);
+    }
+    .btn-bf:hover { filter: brightness(1.12); }
+    .btn-bf:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+    .bf-panel {
+      display: none; background: var(--surface2);
+      border: 1px solid var(--fucsia); border-radius: var(--radius);
+      padding: 12px 14px; margin-bottom: 10px;
+    }
+    .bf-panel.open { display: block; }
+    .bf-title {
+      font-size: 12px; font-weight: 700; letter-spacing: 1px;
+      color: var(--fucsia); margin-bottom: 4px;
+    }
+    .bf-estado { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; }
+    .bf-estado strong { color: var(--fucsia); }
+    .bf-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .bf-pct-wrap { display: flex; align-items: stretch; }
+    .bf-pct-wrap .modal-input {
+      width: 80px; border-top-right-radius: 0; border-bottom-right-radius: 0;
+    }
+    .bf-pct-unit {
+      display: flex; align-items: center; padding: 0 11px;
+      background: var(--surface3); border: 1px solid var(--border);
+      border-left: none; color: var(--muted); font-size: 12px; font-weight: 700;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    }
+    .bf-panel .btn-modal-cancel:disabled { opacity: .4; cursor: not-allowed; }
+    .bf-panel .btn-modal-cancel:disabled:hover { border-color: var(--border); color: var(--muted); }
+    .bf-confirm {
+      display: none; margin-top: 10px; font-size: 11px; color: var(--text);
+      background: var(--surface3); border-radius: var(--radius-sm);
+      padding: 10px 12px;
+    }
+    .bf-confirm.open { display: block; }
+    .bf-confirm .bf-row { margin-top: 8px; }
+    .bf-msg { margin-top: 10px; font-size: 11px; color: var(--text-secondary); }
+    .bf-msg:empty { display: none; }
+    .bf-msg .ok { color: var(--green); font-weight: 700; }
+    .bf-msg .ko { color: var(--red); font-weight: 700; }
 
     /* ═══ LOADING ═══ */
     .loading {
@@ -705,12 +763,13 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
-    <span class="header-version">v3.10.0</span>
+    <span class="header-version">v3.11.0</span>
   </div>
 
   <!-- TOOLBAR -->
   <div class="toolbar" id="toolbar" style="display:none;">
     <input type="text" class="search-box" id="searchBox" placeholder="Buscar producto...">
+    <button type="button" class="btn-bf" id="btnBlackFriday">BLACK FRIDAY</button>
     <select class="filter-select" id="filterCollection" style="display:none;">
       <option value="">Todas las categorías</option>
     </select>
@@ -724,6 +783,28 @@
     <div class="toolbar-sep"></div>
     <button class="btn-toolbar-action" id="btnNuevoProducto">+ PRODUCTO</button>
     <button class="btn-toolbar-action" id="btnNuevaCategoria" style="border-color:var(--blue);color:var(--blue);">+ CATEGORÍA</button>
+  </div>
+
+  <!-- v3.11.0: BLACK FRIDAY — campaña de descuento en toda la tienda -->
+  <div class="bf-panel" id="bfPanel">
+    <div class="bf-title">BLACK FRIDAY · DESCUENTO EN TODA LA TIENDA</div>
+    <div class="bf-estado" id="bfEstado">Comprobando si hay una campaña activa…</div>
+    <div class="bf-row">
+      <div class="bf-pct-wrap">
+        <input type="number" class="modal-input" id="bfPorcentaje" step="1" min="1" max="99" placeholder="20">
+        <span class="bf-pct-unit">%</span>
+      </div>
+      <button type="button" class="btn-bf" id="btnBfAplicar">APLICAR A TODA LA TIENDA</button>
+      <button type="button" class="btn-modal-cancel" id="btnBfTerminar">TERMINAR CAMPAÑA</button>
+    </div>
+    <div class="bf-confirm" id="bfConfirm">
+      <div id="bfConfirmTexto"></div>
+      <div class="bf-row">
+        <button type="button" class="btn-bf" id="btnBfConfirmar">CONFIRMAR</button>
+        <button type="button" class="btn-modal-cancel" id="btnBfCancelar">CANCELAR</button>
+      </div>
+    </div>
+    <div class="bf-msg" id="bfMsg"></div>
   </div>
 
   <!-- CONTENT (product grid) -->
@@ -1357,6 +1438,109 @@
       payload: { productId: editingProductId }
     }, '*');
   }
+
+  // ═══════════════════════════════════════════════════
+  // v3.11.0: BLACK FRIDAY — CAMPAÑA DE DESCUENTO EN TODA LA TIENDA
+  // ═══════════════════════════════════════════════════
+  // Todo sale dentro del panel, justo debajo del botón: estado,
+  // confirmación, avance y resultado. Nada en ventanas aparte.
+  let campana = { cargada: false, activa: false, productos: 0, porcentaje: null, error: false };
+  let campanaOcupada = false;
+  let campanaAccionPendiente = null; // 'aplicar' | 'terminar'
+
+  const bf = {
+    btn: document.getElementById('btnBlackFriday'),
+    panel: document.getElementById('bfPanel'),
+    estado: document.getElementById('bfEstado'),
+    pct: document.getElementById('bfPorcentaje'),
+    aplicar: document.getElementById('btnBfAplicar'),
+    terminar: document.getElementById('btnBfTerminar'),
+    confirm: document.getElementById('bfConfirm'),
+    confirmTexto: document.getElementById('bfConfirmTexto'),
+    confirmar: document.getElementById('btnBfConfirmar'),
+    cancelar: document.getElementById('btnBfCancelar'),
+    msg: document.getElementById('bfMsg')
+  };
+
+  // Porcentaje con coma decimal, como en el resto del widget.
+  function fmtPctCampana(n) {
+    return String(Math.round(Number(n) * 100) / 100).replace('.', ',');
+  }
+
+  function pintarCampana() {
+    if (campana.activa) {
+      bf.btn.textContent = `BLACK FRIDAY · -${fmtPctCampana(campana.porcentaje)}%`;
+      bf.estado.innerHTML = `Campaña activa: <strong>-${fmtPctCampana(campana.porcentaje)}%</strong> en ${campana.productos} productos. Al terminarla, cada producto recupera la oferta que tenía antes.`;
+    } else {
+      bf.btn.textContent = 'BLACK FRIDAY';
+      if (campana.error) {
+        bf.estado.textContent = 'No se pudo comprobar si hay una campaña activa. Recarga la página; si sigue igual, avisa a soporte.';
+      } else if (campana.cargada) {
+        bf.estado.textContent = 'No hay ninguna campaña activa. Escribe el porcentaje y aplícalo a toda la tienda.';
+      } else {
+        bf.estado.textContent = 'Comprobando si hay una campaña activa…';
+      }
+    }
+    const listo = campana.cargada && !campana.error;
+    bf.aplicar.disabled = campanaOcupada || !listo;
+    bf.terminar.disabled = campanaOcupada || !listo || !campana.activa;
+    bf.pct.disabled = campanaOcupada;
+    if (campana.activa && !bf.pct.value) bf.pct.value = campana.porcentaje;
+  }
+
+  function pedirEstadoCampana() {
+    parent.postMessage({ type: 'campana-estado' }, '*');
+  }
+
+  function erroresCampanaHtml(errores) {
+    if (!errores || !errores.length) return '';
+    const nombres = errores.slice(0, 10).map(e => esc(e.nombre || 'producto sin nombre')).join(', ');
+    const mas = errores.length > 10 ? ` y ${errores.length - 10} más` : '';
+    return `<br><span class="ko">No se pudo con ${errores.length} producto(s): ${nombres}${mas}.</span>`;
+  }
+
+  function pedirConfirmacionCampana(accion) {
+    bf.msg.innerHTML = '';
+    if (accion === 'aplicar') {
+      const pct = Number(bf.pct.value);
+      if (!isFinite(pct) || pct <= 0 || pct >= 100) {
+        bf.msg.innerHTML = '<span class="ko">Escribe un porcentaje mayor que 0 y menor que 100.</span>';
+        return;
+      }
+      bf.confirmTexto.innerHTML = campana.activa
+        ? `Ya hay una campaña al <strong>-${fmtPctCampana(campana.porcentaje)}%</strong>. Todos los productos pasarán al <strong>-${fmtPctCampana(pct)}%</strong>. Las ofertas que tenían antes siguen guardadas y se devuelven al terminar la campaña.`
+        : `Se pondrá un <strong>-${fmtPctCampana(pct)}%</strong> a todos los productos de la tienda, también a los que ya tienen oferta. Esas ofertas se guardan y se devuelven al terminar la campaña. Los productos de uso interno del salón quedan fuera.`;
+    } else {
+      bf.confirmTexto.innerHTML = `Se quitará el <strong>-${fmtPctCampana(campana.porcentaje)}%</strong> y cada producto recuperará la oferta que tenía antes. Si durante la campaña se cambió a mano la oferta de algún producto, ese cambio se respeta.`;
+    }
+    campanaAccionPendiente = accion;
+    bf.confirm.classList.add('open');
+  }
+
+  bf.btn.addEventListener('click', () => {
+    bf.panel.classList.toggle('open');
+    if (bf.panel.classList.contains('open')) pintarCampana();
+  });
+  bf.aplicar.addEventListener('click', () => pedirConfirmacionCampana('aplicar'));
+  bf.terminar.addEventListener('click', () => pedirConfirmacionCampana('terminar'));
+  bf.cancelar.addEventListener('click', () => {
+    campanaAccionPendiente = null;
+    bf.confirm.classList.remove('open');
+  });
+  bf.confirmar.addEventListener('click', () => {
+    const accion = campanaAccionPendiente;
+    campanaAccionPendiente = null;
+    bf.confirm.classList.remove('open');
+    if (!accion || campanaOcupada) return;
+    campanaOcupada = true;
+    pintarCampana();
+    bf.msg.textContent = 'Preparando…';
+    if (accion === 'aplicar') {
+      parent.postMessage({ type: 'campana-aplicar', payload: { porcentaje: Number(bf.pct.value) } }, '*');
+    } else {
+      parent.postMessage({ type: 'campana-terminar' }, '*');
+    }
+  });
 
   // v3.10.0: el porcentaje lo resuelve el backend (v1.4.3) a partir del
   // descuento guardado en Wix, así que aquí solo se lee. El cálculo local
@@ -2125,7 +2309,7 @@
     const msg = event.data;
     if (!msg || typeof msg !== 'object') return;
 
-    if (msg.type === 'data') { render(msg.payload); }
+    if (msg.type === 'data') { render(msg.payload); pedirEstadoCampana(); }
 
     if (msg.type === 'error') {
       el.content.innerHTML = `<div class="error-msg">❌ ${esc(msg.message || 'Error')}</div>`;
@@ -2225,6 +2409,52 @@
       const prodActual = (allProductos || []).find(x => x.id === editingProductId) || null;
       pintarEstadoPromo(prodActual);
       showToast('❌ ' + (msg.payload?.error || 'Error con la oferta'), true);
+    }
+
+    // v3.11.0: BLACK FRIDAY
+    if (msg.type === 'campanaEstado') {
+      const e = msg.payload || {};
+      campana = {
+        cargada: true,
+        activa: e.ok === true && e.activa === true,
+        productos: e.productos || 0,
+        porcentaje: e.porcentaje,
+        error: e.ok !== true
+      };
+      pintarCampana();
+    }
+    if (msg.type === 'campanaProgreso') {
+      const g = msg.payload || {};
+      const que = g.fase === 'terminar' ? 'Terminando la campaña' : 'Aplicando el descuento';
+      bf.msg.textContent = `${que}… ${g.hechos || 0} de ${g.total || 0} productos. No cierres esta página.`;
+    }
+    if (msg.type === 'campanaAplicada') {
+      const g = msg.payload || {};
+      campanaOcupada = false;
+      const errores = g.errores || [];
+      bf.msg.innerHTML =
+        `<span class="ok">✓ -${fmtPctCampana(g.porcentaje)}% aplicado a ${g.actualizados || 0} de ${g.total || 0} productos.</span>` +
+        (g.excluidos ? ` ${g.excluidos} de uso interno del salón se han quedado fuera.` : '') +
+        erroresCampanaHtml(errores) +
+        (errores.length ? ' Vuelve a aplicar la campaña para reintentarlo.' : '');
+      pintarCampana();
+    }
+    if (msg.type === 'campanaTerminada') {
+      const g = msg.payload || {};
+      campanaOcupada = false;
+      const errores = g.errores || [];
+      bf.msg.innerHTML =
+        `<span class="ok">✓ Campaña terminada. ${g.restaurados || 0} productos han recuperado su oferta anterior.</span>` +
+        (g.respetados ? ` ${g.respetados} se han dejado como estaban porque se les cambió la oferta a mano.` : '') +
+        erroresCampanaHtml(errores) +
+        (errores.length ? ' Pulsa TERMINAR CAMPAÑA otra vez para reintentarlo.' : '');
+      bf.pct.value = '';
+      pintarCampana();
+    }
+    if (msg.type === 'campanaError') {
+      campanaOcupada = false;
+      bf.msg.innerHTML = `<span class="ko">${esc(msg.payload?.error || 'No se pudo completar la campaña.')}</span>`;
+      pintarCampana();
     }
 
     if (msg.type === 'costeError') {

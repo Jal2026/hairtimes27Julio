@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.4.3
+// Versión: 1.5.0
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -227,6 +227,29 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.5.0 (23 Nov 2026): + CAMPAÑA DE DESCUENTO EN TODA LA TIENDA
+//         (botón BLACK FRIDAY del gestor de productos).
+//         · NEW prepararCampanaDescuento() — lista los productos que
+//           entran en la campaña. Quedan fuera los de uso interno: los
+//           que solo están en categorías con el prefijo de almacén.
+//         · NEW aplicarCampanaDescuentoLote(porcentaje, ids) — por cada
+//           producto guarda la oferta que tenía (una sola vez por
+//           campaña) en KamisuiteCampanaDescuento y escribe el
+//           descuento PERCENT de la campaña, por la misma vía que
+//           activarPromocionProducto.
+//         · NEW terminarCampanaDescuentoLote(limite, saltar) — devuelve
+//           a cada producto su oferta anterior, solo si sigue con el
+//           porcentaje de la campaña: si se le cambió la oferta a mano
+//           durante la campaña, se respeta. Borra la fila al acabar.
+//         · NEW estadoCampanaDescuento() — si hay campaña, con qué
+//           porcentaje y en cuántos productos.
+//         · NEW refrescarCorreosTrasCampana() — invalida UNA vez la
+//           caché del bloque de productos de los correos al final de la
+//           campaña, no producto a producto.
+//         · Los lotes los orquesta el page code (v3.8): ninguna llamada
+//           carga con el catálogo entero.
+//         · Sin cambios en el resto de funciones.
+//
 // v1.4.3 (13 Sep 2026): el PORCENTAJE que se enseña deja de deducirse
 //         de los precios cuando Wix lo tiene guardado.
 //         Caso real: precio 19,85 con un 10%. Wix redondea el precio de
@@ -374,7 +397,7 @@ import { mediaManager } from 'wix-media-backend';
 import { invalidarCacheCatalogo } from 'backend/sugerenciasProductosLogic.web.js';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.4.3';
+const VERSION = '1.5.0';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -1103,6 +1126,316 @@ export const desactivarPromocionProducto = webMethod(
       console.error(`${TAG} ❌ desactivarPromocionProducto FAIL:`, e.message);
       return { ok: false, error: e.message, version: VERSION };
     }
+  }
+);
+
+// =====================================================
+// 2d. CAMPAÑA DE DESCUENTO EN TODA LA TIENDA (v1.5.0)
+// =====================================================
+// Pone el mismo porcentaje a todos los productos de la tienda (botón
+// BLACK FRIDAY del gestor) y, al terminar, devuelve a cada producto la
+// oferta que tenía antes.
+//
+// · Cada producto admite UN solo descuento (`discount`). Antes de
+//   escribir el de la campaña se guarda el que tenía en la colección
+//   KamisuiteCampanaDescuento, una fila por producto.
+// · Se escribe por la misma vía que activarPromocionProducto:
+//   storesProducts.updateProduct con elevate(), discount PERCENT. El
+//   precio original no se toca nunca.
+// · Al terminar, un producto solo se restaura si sigue con el
+//   porcentaje de la campaña. Si alguien le cambió la oferta a mano
+//   durante la campaña, se respeta ese cambio.
+// · Quedan fuera los productos de uso interno: los que SOLO están en
+//   categorías con el prefijo de almacén. Un producto que además está
+//   en una categoría de venta entra en la campaña (mismo criterio de
+//   doble categoría que almacenLogic).
+// · El trabajo va por lotes que orquesta el page code.
+// =====================================================
+const COL_CAMPANA = 'KamisuiteCampanaDescuento';
+
+// Mismo prefijo que PREFIJO_ALMACEN de almacenLogic.web.js. Si allí
+// cambia, hay que cambiarlo también aquí.
+const PREFIJO_USO_INTERNO = 'USO SALON-';
+
+// Tope de productos por llamada, por si llega un lote mayor del previsto.
+const MAX_LOTE_CAMPANA = 25;
+
+function esSoloUsoInterno(prod) {
+  const cols = Array.isArray(prod?.collections) ? prod.collections : [];
+  const reales = cols.filter(c => c && typeof c.name === 'string' && !esCollectionGeneral(c.name));
+  if (reales.length === 0) return false;
+  const pref = PREFIJO_USO_INTERNO.toUpperCase();
+  return reales.every(c => c.name.toUpperCase().startsWith(pref));
+}
+
+// Descuento guardado en el producto, normalizado a {type, value}.
+function descuentoNormalizado(discount) {
+  const type = (discount && discount.type) ? String(discount.type).toUpperCase() : 'NONE';
+  const value = Number(discount?.value);
+  return { type, value: Number.isFinite(value) ? value : 0 };
+}
+
+// ¿El producto sigue con el descuento de la campaña?
+function tieneDescuentoCampana(discount, valorCampana) {
+  const d = descuentoNormalizado(discount);
+  const v = Number(valorCampana);
+  return d.type === 'PERCENT' && Number.isFinite(v) && Math.abs(d.value - v) < 0.001;
+}
+
+function porcentajeCampana(valor) {
+  const p = dosDecimales(valor);
+  if (!Number.isFinite(p) || p <= 0 || p >= 100) return null;
+  return p;
+}
+
+// Nombre y descuento actual de un producto. Misma query que
+// leerPrecioBase: incluye los productos ocultos.
+async function leerProductoCampana(productId) {
+  const r = await wixData.query('Stores/Products')
+    .eq('_id', productId)
+    .limit(1)
+    .find({ suppressAuth: true, appOptions: { includeHiddenProducts: true } });
+  const prod = (r.items || [])[0];
+  if (!prod) return null;
+  return { nombre: prod.name || '', discount: prod.discount || null };
+}
+
+async function filaCampana(productId) {
+  const r = await wixData.query(COL_CAMPANA)
+    .eq('productId', productId)
+    .limit(1)
+    .find({ suppressAuth: true });
+  return (r.items || [])[0] || null;
+}
+
+/**
+ * ESTADO DE LA CAMPAÑA
+ * Hay campaña mientras quede alguna fila en KamisuiteCampanaDescuento.
+ */
+export const estadoCampanaDescuento = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    try {
+      const r = await wixData.query(COL_CAMPANA)
+        .limit(1)
+        .find({ suppressAuth: true });
+      const filas = r.items || [];
+      const total = r.totalCount || filas.length;
+      const primera = filas[0] || null;
+      return {
+        ok: true,
+        activa: total > 0,
+        productos: total,
+        porcentaje: primera ? (Number(primera.valorCampana) || null) : null,
+        version: VERSION
+      };
+    } catch (e) {
+      console.error(`${TAG} ❌ estadoCampanaDescuento FAIL:`, e.message);
+      return { ok: false, error: 'No se pudo comprobar si hay una campaña activa.', version: VERSION };
+    }
+  }
+);
+
+/**
+ * PREPARAR CAMPAÑA
+ * Devuelve los ids de los productos que entran. Misma lectura paginada
+ * que listarProductosParaEdicion (con ocultos y con categorías).
+ */
+export const prepararCampanaDescuento = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    try {
+      let items = [];
+      let skip = 0;
+      const PAGE = 100;
+      let hasMore = true;
+
+      while (hasMore) {
+        const result = await wixData.query("Stores/Products")
+          .include("collections")
+          .limit(PAGE)
+          .skip(skip)
+          .find({
+            suppressAuth: true,
+            appOptions: { includeHiddenProducts: true }
+          });
+        const page = result.items || [];
+        items = items.concat(page);
+        hasMore = page.length === PAGE;
+        skip += PAGE;
+      }
+
+      const ids = [];
+      let excluidos = 0;
+      for (const prod of items) {
+        if (!prod || !prod._id) continue;
+        if (esSoloUsoInterno(prod)) { excluidos++; continue; }
+        ids.push(prod._id);
+      }
+
+      console.log(`${TAG} 🏷 Campaña: entran ${ids.length} productos, ${excluidos} de uso interno quedan fuera (de ${items.length})`);
+      return { ok: true, ids, total: ids.length, excluidos, version: VERSION };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ prepararCampanaDescuento FAIL:`, e.message);
+      return { ok: false, error: 'No se pudo leer el catálogo para preparar la campaña.', version: VERSION };
+    }
+  }
+);
+
+/**
+ * APLICAR CAMPAÑA — un lote de productos
+ *
+ * @param {number} porcentaje  Mayor que 0 y menor que 100.
+ * @param {string[]} ids       Ids de producto (máx. MAX_LOTE_CAMPANA).
+ *
+ * Por producto: 1) guarda su oferta anterior si aún no está guardada;
+ * 2) escribe el descuento de la campaña. Si el paso 2 falla, la fila
+ * queda guardada y el producto sin tocar: al terminar la campaña se ve
+ * que no tiene el porcentaje de la campaña y se deja como está.
+ */
+export const aplicarCampanaDescuentoLote = webMethod(
+  Permissions.SiteMember,
+  async (porcentaje, ids) => {
+    try {
+      const pct = porcentajeCampana(porcentaje);
+      if (pct === null) {
+        return { ok: false, error: 'El porcentaje debe ser mayor que 0 y menor que 100.', version: VERSION };
+      }
+      const lote = (Array.isArray(ids) ? ids : []).filter(Boolean).slice(0, MAX_LOTE_CAMPANA);
+
+      const elevatedUpdate = elevate(storesProducts.updateProduct);
+      let actualizados = 0;
+      const errores = [];
+
+      for (const productId of lote) {
+        let nombre = '';
+        try {
+          const prod = await leerProductoCampana(productId);
+          if (!prod) throw new Error('Producto no encontrado en Stores/Products');
+          nombre = prod.nombre;
+
+          // 1) Guardar la oferta que tenía, una sola vez por campaña.
+          const fila = await filaCampana(productId);
+          if (!fila) {
+            const previo = descuentoNormalizado(prod.discount);
+            await wixData.insert(COL_CAMPANA, {
+              productId,
+              tipoAnterior: previo.type,
+              valorAnterior: previo.value,
+              valorCampana: pct
+            }, { suppressAuth: true });
+          } else if (Number(fila.valorCampana) !== pct) {
+            // Campaña ya en marcha con otro porcentaje: la oferta
+            // original guardada se conserva y solo cambia el de la
+            // campaña. READ-MERGE-UPDATE.
+            const merged = { ...fila, valorCampana: pct };
+            await wixData.update(COL_CAMPANA, merged, { suppressAuth: true });
+          }
+
+          // 2) Escribir el descuento de la campaña.
+          await elevatedUpdate(productId, {
+            discount: { type: 'PERCENT', value: pct }
+          });
+          actualizados++;
+
+        } catch (err) {
+          console.error(`${TAG} ❌ Campaña: no se pudo aplicar a ${nombre || productId}:`, err.message);
+          errores.push({ productId, nombre, error: 'No se pudo poner el descuento' });
+        }
+      }
+
+      console.log(`${TAG} 🏷 Campaña -${pct}%: lote de ${lote.length} → ${actualizados} actualizados, ${errores.length} con error`);
+      return { ok: true, procesados: lote.length, actualizados, errores, version: VERSION };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ aplicarCampanaDescuentoLote FAIL:`, e.message);
+      return { ok: false, error: 'No se pudo aplicar el descuento a este grupo de productos.', version: VERSION };
+    }
+  }
+);
+
+/**
+ * TERMINAR CAMPAÑA — un lote de filas
+ *
+ * @param {number} limite  Filas a procesar (máx. MAX_LOTE_CAMPANA).
+ * @param {number} saltar  Filas a saltar: las que fallaron en lotes
+ *                         anteriores siguen en la colección y van
+ *                         primero, porque se lee por orden de creación.
+ *
+ * Por fila: si el producto sigue con el porcentaje de la campaña, se le
+ * devuelve la oferta anterior (o se le quita si no tenía); si no, se
+ * deja como está. En los dos casos se borra la fila. Si algo falla, la
+ * fila se queda para poder reintentarlo.
+ */
+export const terminarCampanaDescuentoLote = webMethod(
+  Permissions.SiteMember,
+  async (limite, saltar) => {
+    try {
+      const lim = Math.min(Math.max(parseInt(limite, 10) || 10, 1), MAX_LOTE_CAMPANA);
+      const sk = Math.max(parseInt(saltar, 10) || 0, 0);
+
+      const r = await wixData.query(COL_CAMPANA)
+        .ascending('_createdDate')
+        .skip(sk)
+        .limit(lim)
+        .find({ suppressAuth: true });
+      const filas = r.items || [];
+
+      const elevatedUpdate = elevate(storesProducts.updateProduct);
+      let restaurados = 0;
+      let respetados = 0;
+      let sinProducto = 0;
+      const errores = [];
+
+      for (const fila of filas) {
+        let nombre = '';
+        try {
+          const prod = await leerProductoCampana(fila.productId);
+          if (!prod) {
+            // El producto se eliminó durante la campaña.
+            sinProducto++;
+          } else {
+            nombre = prod.nombre;
+            if (tieneDescuentoCampana(prod.discount, fila.valorCampana)) {
+              const tipo = String(fila.tipoAnterior || 'NONE').toUpperCase();
+              const valor = Number(fila.valorAnterior);
+              const discount = ((tipo === 'PERCENT' || tipo === 'AMOUNT') && Number.isFinite(valor) && valor > 0)
+                ? { type: tipo, value: valor }
+                : { type: 'NONE', value: 0 };
+              await elevatedUpdate(fila.productId, { discount });
+              restaurados++;
+            } else {
+              respetados++;
+            }
+          }
+          await wixData.remove(COL_CAMPANA, fila._id, { suppressAuth: true });
+
+        } catch (err) {
+          console.error(`${TAG} ❌ Campaña: no se pudo devolver la oferta de ${nombre || fila.productId}:`, err.message);
+          errores.push({ productId: fila.productId, nombre, error: 'No se pudo devolver su oferta' });
+        }
+      }
+
+      console.log(`${TAG} 🏷 Fin de campaña: lote de ${filas.length} → ${restaurados} restaurados, ${respetados} respetados, ${sinProducto} sin producto, ${errores.length} con error`);
+      return { ok: true, procesados: filas.length, restaurados, respetados, sinProducto, errores, version: VERSION };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ terminarCampanaDescuentoLote FAIL:`, e.message);
+      return { ok: false, error: 'No se pudo terminar la campaña en este grupo de productos.', version: VERSION };
+    }
+  }
+);
+
+/**
+ * Al acabar de aplicar o de terminar la campaña: tirar UNA vez la caché
+ * del bloque de productos de los correos.
+ */
+export const refrescarCorreosTrasCampana = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    const ok = await invalidarCacheCorreos('campaña de descuento');
+    return { ok: true, cacheInvalidada: ok, version: VERSION };
   }
 );
 
