@@ -4,7 +4,7 @@
 // Página: Recepción | Tienda Productos (renombrada
 // internamente a "Alta y Edición Productos")
 // Elemento: #widgetTienda (HtmlComponent)
-// Versión: 3.5
+// Versión: 3.7
 // =====================================================
 // v1.4: + metodoPago, generarFacturaProducto, obtenerHistorialVentas
 // v2.0: + edición productos (tiendaEdicionLogic.web.js)
@@ -86,6 +86,22 @@
 //      incluido en el reporte de errores parciales.
 // =====================================================
 
+// v3.7 (13 Sep 2026): la promoción viaja como {tipo, valor}, donde
+//      tipo es 'PERCENT' o 'AMOUNT'. Antes se mandaba solo el precio
+//      final de venta y el backend lo traducía siempre a importe.
+//      El backend (v1.4.2) sigue aceptando la forma antigua.
+//
+// v3.6 (13 Sep 2026): + PRECIO PROMOCIONAL.
+//      · NUEVOS imports: activarPromocionProducto,
+//        desactivarPromocionProducto (tiendaEdicionLogic v1.4.1).
+//      · NUEVOS handlers: 'activar-promocion' y 'quitar-promocion'.
+//      · Tras escribir el descuento se espera 1200 ms antes de releer,
+//        el mismo margen de propagación que ya se usa desde la v3.3
+//        para el inventario: sin él, el listado vuelve con el precio
+//        anterior y el widget parece no haber guardado.
+//      · El backend ya invalida por su cuenta la caché del bloque de
+//        productos de los correos. El page code no hace nada de eso.
+//
 // v3.5 (28 Ago 2026): + DUPLICAR PRODUCTO.
 //      Wix no gestiona variantes por Velo. Para tener el mismo
 //      producto en varios tamaños, el salón duplica y cambia el
@@ -110,7 +126,9 @@ import {
   obtenerCosteProducto,
   setearCosteProducto,
   activarSeguimientoStock,
-  duplicarProducto
+  duplicarProducto,
+  activarPromocionProducto,
+  desactivarPromocionProducto
 } from 'backend/tiendaEdicionLogic.web';
 
 $w.onReady(function () {
@@ -134,6 +152,10 @@ $w.onReady(function () {
     if (msg.type === 'descontar-unidad') { await descontarUnidadHandler(msg.payload); }
     if (msg.type === 'setear-stock') { await setearStockHandler(msg.payload); }
     if (msg.type === 'obtener-coste') { await obtenerCosteHandler(msg.payload); }
+
+    // ── Handlers PROMOCIÓN (v3.6) ──
+    if (msg.type === 'activar-promocion') { await activarPromocionHandler(msg.payload); }
+    if (msg.type === 'quitar-promocion') { await quitarPromocionHandler(msg.payload); }
   });
 
   // ══════════════════════════════════════════════════
@@ -527,6 +549,70 @@ $w.onReady(function () {
       widget.postMessage({ type: 'costeCargado', payload: { productId, cost: result.cost } });
     } catch (e) {
       widget.postMessage({ type: 'costeError', payload: { productId: payload?.productId, error: e.message || String(e) } });
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // v3.6 — ACTIVAR PROMOCIÓN
+  // ══════════════════════════════════════════════════
+  // El widget manda el precio al que quiere vender. El backend calcula
+  // la rebaja y escribe el descuento; el precio original no se toca.
+  async function activarPromocionHandler(payload) {
+    try {
+      const { productId, tipo, valor } = payload || {};
+      if (!productId) {
+        widget.postMessage({ type: 'promocionError', payload: { error: 'productId requerido' } });
+        return;
+      }
+
+      const result = await activarPromocionProducto(productId, { tipo, valor });
+      if (!result.ok) {
+        widget.postMessage({ type: 'promocionError', payload: { productId, error: result.error } });
+        return;
+      }
+
+      widget.postMessage({
+        type: 'promocionActivada',
+        payload: {
+          productId,
+          precioAnterior: result.precioAnterior,
+          precioPromocional: result.precioPromocional,
+          tipo: result.tipo,
+          valor: result.valor
+        }
+      });
+
+      // Margen de propagación de Wix, igual que en el inventario (v3.3).
+      await new Promise(r => setTimeout(r, 1200));
+      await cargarDatos();
+    } catch (e) {
+      widget.postMessage({ type: 'promocionError', payload: { productId: payload?.productId, error: e.message || String(e) } });
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // v3.6 — QUITAR PROMOCIÓN
+  // ══════════════════════════════════════════════════
+  async function quitarPromocionHandler(payload) {
+    try {
+      const { productId } = payload || {};
+      if (!productId) {
+        widget.postMessage({ type: 'promocionError', payload: { error: 'productId requerido' } });
+        return;
+      }
+
+      const result = await desactivarPromocionProducto(productId);
+      if (!result.ok) {
+        widget.postMessage({ type: 'promocionError', payload: { productId, error: result.error } });
+        return;
+      }
+
+      widget.postMessage({ type: 'promocionQuitada', payload: { productId } });
+
+      await new Promise(r => setTimeout(r, 1200));
+      await cargarDatos();
+    } catch (e) {
+      widget.postMessage({ type: 'promocionError', payload: { productId: payload?.productId, error: e.message || String(e) } });
     }
   }
 });
