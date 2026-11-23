@@ -9,8 +9,39 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Alta y Edición Productos v3.4.0
+       KAMISUITE — Alta y Edición Productos v3.10.0
        Dark theme (same as Catálogo / Checkout)
+       v3.10.0 (13 Sep 2026): el porcentaje ya no se calcula aquí:
+              viene resuelto del backend (v1.4.3), que usa el
+              descuento guardado en Wix cuando está en PERCENT.
+              Con precio 19,85 y un 10%, Wix cobra 17,87 y la
+              rebaja deducida daba 9,97: la ficha decía -9% con
+              un 10% escrito.
+              Además, los botones dicen la verdad: con oferta
+              puesta, ACTIVAR pasa a ACTUALIZAR; sin oferta,
+              QUITAR queda apagado.
+       v3.9.1 (13 Sep 2026): FIX del porcentaje. El redondeo hacia
+              abajo de la v3.9.0 arrastraba el error de coma
+              flotante: 13,50 € rebajados a 12,15 € daban
+              9,999999998 y se pintaba -9% en vez de -10%. Se
+              aplica una tolerancia antes de redondear.
+       v3.9.0 (13 Sep 2026): la oferta se pone en PORCENTAJE o en
+              EUROS, con el mismo selector que el panel de Wix.
+              Los dos campos van enlazados: se escriba por donde
+              se escriba, el otro se recalcula sobre el precio.
+              La ficha abre con el tipo REAL que Wix tiene
+              guardado, así que una oferta puesta desde el panel
+              de Wix se lee bien.
+              El porcentaje de la tarjeta se redondea hacia
+              abajo: 23,00 € a 10,00 € es -56%, no -57%.
+       v3.8.0 (13 Sep 2026): + PRECIO PROMOCIONAL. La ficha
+              permite poner y quitar el precio de oferta, y la
+              tarjeta muestra el precio anterior tachado junto
+              al promocional, con el porcentaje de rebaja.
+              El precio original NUNCA se modifica: Wix lo
+              conserva y lo pinta tachado en la tienda.
+              La oferta se aplica al pulsar ACTIVAR, no al
+              GUARDAR: es una llamada aparte al backend.
        v3.0: + módulo Almacén (descontar unidad, stock editable,
               lectura coste real). Sin venta, sin cliente,
               sin historial.
@@ -280,6 +311,30 @@
       margin-top: auto; padding-top: 4px;
     }
     .prod-price { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -.3px; }
+    /* v3.9.0: selector de unidad del descuento (% o €) */
+    .promo-desc-wrap { display: flex; align-items: stretch; }
+    .promo-desc-wrap .modal-input {
+      flex: 1; border-top-right-radius: 0; border-bottom-right-radius: 0;
+    }
+    .promo-unit {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-left: none; color: var(--muted); font-family: inherit;
+      font-size: 12px; font-weight: 700; padding: 0 11px; cursor: pointer;
+    }
+    .promo-unit:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+    .promo-unit-on { background: var(--accent-dim); color: var(--accent); }
+    .promo-unit:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* v3.8.0: precio anterior tachado + porcentaje de rebaja */
+    .prod-price-old {
+      font-size: 12px; font-weight: 600; color: var(--muted);
+      text-decoration: line-through; margin-right: 6px;
+    }
+    .promo-chip {
+      font-size: 9px; font-weight: 700; letter-spacing: .5px;
+      padding: 2px 5px; border-radius: 3px; margin-left: 6px;
+      background: var(--accent-dim); color: var(--accent);
+    }
     .prod-type {
       font-size: 9px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
       color: var(--muted); padding: 2px 6px; background: var(--surface3);
@@ -650,7 +705,7 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
-    <span class="header-version">v3.7.1</span>
+    <span class="header-version">v3.10.0</span>
   </div>
 
   <!-- TOOLBAR -->
@@ -705,6 +760,28 @@
             <label class="modal-label">COSTE (€) · solo lectura</label>
             <input type="number" class="modal-input" id="editCoste" step="0.01" min="0" placeholder="Cargando…" readonly>
             <div style="font-size:10px;color:var(--text-dim);margin-top:4px;">El coste se gestiona desde Almacén.</div>
+          </div>
+        </div>
+
+        <!-- v3.9.0: OFERTA — descuento en % o en €, como el panel de Wix -->
+        <div class="modal-row">
+          <div class="modal-field">
+            <label class="modal-label">DESCUENTO</label>
+            <div class="promo-desc-wrap">
+              <input type="number" class="modal-input" id="editPromoValor" step="0.01" min="0" placeholder="0">
+              <button type="button" class="promo-unit" id="btnPromoPct" title="Descuento en porcentaje">%</button>
+              <button type="button" class="promo-unit promo-unit-on" id="btnPromoEur" title="Descuento en euros">€</button>
+            </div>
+            <span class="modal-hint" id="promoHint">El precio de arriba se conserva y sale tachado.</span>
+          </div>
+          <div class="modal-field">
+            <label class="modal-label">PRECIO DE OFERTA (€)</label>
+            <input type="number" class="modal-input" id="editPromoPrecio" step="0.01" min="0" placeholder="—">
+            <div class="toggle-wrap">
+              <button type="button" class="btn-modal-save" id="btnActivarPromo">🏷 ACTIVAR</button>
+              <button type="button" class="btn-modal-cancel" id="btnQuitarPromo">QUITAR</button>
+            </div>
+            <span class="modal-hint">Se aplica al pulsar, sin esperar a GUARDAR.</span>
           </div>
         </div>
 
@@ -1078,6 +1155,18 @@
     const hiddenText = p.visible === false ? 'OCULTO' : '';
     const priceDisplay = p.formattedPrice || (p.price !== null && p.price !== undefined ? Number(p.price).toFixed(2) + ' €' : '—');
 
+    // v3.8.0: con oferta activa, el precio anterior va tachado delante
+    // del promocional y se añade el porcentaje de rebaja. Sin oferta,
+    // la línea queda exactamente igual que en v3.7.1.
+    const promoActiva = p.enPromocion === true;
+    const promoDisplay = promoActiva
+      ? (p.formattedDiscountedPrice || (Number(p.discountedPrice).toFixed(2) + ' €'))
+      : '';
+    const promoPct = promoActiva ? pctProducto(p) : 0;
+    const precioHTML = promoActiva
+      ? `<span class="prod-price-old">${esc(priceDisplay)}</span><span class="prod-price">${esc(promoDisplay)}</span>${promoPct > 0 ? `<span class="promo-chip">-${pctTexto(promoPct)}%</span>` : ''}`
+      : `<span class="prod-price">${priceDisplay}</span>`;
+
     // v3.0: solo se puede descontar si trackInventory=true y stock > 0
     const stockNum = (p.trackInventory && typeof p.quantityInStock === 'number') ? p.quantityInStock : null;
     const canDecrement = stockNum !== null && stockNum > 0;
@@ -1103,7 +1192,7 @@
             : ''}
           ${p.sku ? `<div class="prod-sku">SKU: ${esc(p.sku)}</div>` : ''}
           <div class="prod-price-row">
-            <span><span class="prod-price">${priceDisplay}</span></span>
+            <span>${precioHTML}</span>
             <span class="prod-type">${esc(p.productType)}</span>
           </div>
           ${buildStockHTML(p)}
@@ -1117,6 +1206,183 @@
         </div>
       </div>
     `;
+  }
+
+  // ══════════════════════════════════════════════════
+  // v3.8.0 — PRECIO PROMOCIONAL
+  // ══════════════════════════════════════════════════
+  // El precio de la oferta se escribe en Wix como una rebaja sobre el
+  // precio original, que no se toca. Por eso QUITAR no necesita saber
+  // el precio de antes: Wix lo conserva.
+  // v3.9.0: unidad activa del descuento. 'AMOUNT' (euros) o 'PERCENT'.
+  let promoTipo = 'AMOUNT';
+
+  function precioBaseFicha() {
+    const base = parseFloat(document.getElementById('editPrecio').value);
+    return isFinite(base) && base > 0 ? base : 0;
+  }
+
+  function cambiarUnidadPromo(tipo) {
+    promoTipo = tipo;
+    document.getElementById('btnPromoPct').classList.toggle('promo-unit-on', tipo === 'PERCENT');
+    document.getElementById('btnPromoEur').classList.toggle('promo-unit-on', tipo === 'AMOUNT');
+    // Al cambiar de unidad se conserva el PRECIO DE OFERTA y se
+    // recalcula el descuento: es lo que el salón tiene en la cabeza.
+    recalcularDesdePrecioOferta();
+  }
+
+  // Descuento → precio de oferta.
+  function recalcularDesdeDescuento() {
+    const base = precioBaseFicha();
+    const valor = parseFloat(document.getElementById('editPromoValor').value);
+    const campoPrecio = document.getElementById('editPromoPrecio');
+    if (!base || !isFinite(valor) || valor <= 0) { campoPrecio.value = ''; return; }
+    const promo = (promoTipo === 'PERCENT') ? base * (1 - valor / 100) : base - valor;
+    campoPrecio.value = promo > 0 ? promo.toFixed(2) : '';
+  }
+
+  // Precio de oferta → descuento.
+  function recalcularDesdePrecioOferta() {
+    const base = precioBaseFicha();
+    const promo = parseFloat(document.getElementById('editPromoPrecio').value);
+    const campoValor = document.getElementById('editPromoValor');
+    if (!base || !isFinite(promo) || promo <= 0 || promo >= base) { campoValor.value = ''; return; }
+    const valor = (promoTipo === 'PERCENT') ? (1 - promo / base) * 100 : base - promo;
+    campoValor.value = valor.toFixed(2);
+  }
+
+  // El precio original nunca se toca: Wix lo conserva. Por eso QUITAR no
+  // necesita saber el precio de antes.
+  function pintarEstadoPromo(prod) {
+    const campoValor = document.getElementById('editPromoValor');
+    const campoPrecio = document.getElementById('editPromoPrecio');
+    const hint = document.getElementById('promoHint');
+    const btnOn = document.getElementById('btnActivarPromo');
+    const btnOff = document.getElementById('btnQuitarPromo');
+    const btnPct = document.getElementById('btnPromoPct');
+    const btnEur = document.getElementById('btnPromoEur');
+    if (!campoValor || !campoPrecio || !hint || !btnOn || !btnOff) return;
+
+    // v3.10.0: los botones reflejan si el producto YA está de oferta.
+    const yaEnOferta = !!(prod && prod.enPromocion === true);
+    btnOn.disabled = false;
+    btnOn.textContent = yaEnOferta ? '🏷 ACTUALIZAR' : '🏷 ACTIVAR';
+    btnOff.disabled = !yaEnOferta;
+    btnOff.textContent = 'QUITAR';
+
+    if (!prod) {
+      campoValor.value = '';
+      campoPrecio.value = '';
+      campoValor.disabled = true;
+      campoPrecio.disabled = true;
+      btnPct.disabled = true;
+      btnEur.disabled = true;
+      btnOn.disabled = true;
+      btnOff.disabled = true;
+      hint.textContent = 'Disponible al guardar el producto y volver a abrir su ficha.';
+      return;
+    }
+
+    campoValor.disabled = false;
+    campoPrecio.disabled = false;
+    btnPct.disabled = false;
+    btnEur.disabled = false;
+
+    // Tipo REAL guardado en Wix. Si la oferta se puso desde el panel de
+    // Wix en porcentaje, la ficha abre en porcentaje.
+    const guardado = prod.discount || null;
+    const tipoGuardado = guardado && guardado.type ? String(guardado.type).toUpperCase() : '';
+    promoTipo = (tipoGuardado === 'PERCENT') ? 'PERCENT' : 'AMOUNT';
+    btnPct.classList.toggle('promo-unit-on', promoTipo === 'PERCENT');
+    btnEur.classList.toggle('promo-unit-on', promoTipo === 'AMOUNT');
+
+    if (prod.enPromocion === true) {
+      campoValor.value = (guardado && isFinite(Number(guardado.value)))
+        ? Number(guardado.value).toFixed(2)
+        : '';
+      campoPrecio.value = (prod.discountedPrice !== null && prod.discountedPrice !== undefined)
+        ? Number(prod.discountedPrice).toFixed(2)
+        : '';
+      if (!campoValor.value) recalcularDesdePrecioOferta();
+      const pct = pctProducto(prod);
+      hint.textContent = pct > 0
+        ? `En oferta: -${pctTexto(pct)}% sobre ${Number(prod.price).toFixed(2)} €.`
+        : 'En oferta.';
+    } else {
+      campoValor.value = '';
+      campoPrecio.value = '';
+      hint.textContent = 'El precio de arriba se conserva y sale tachado.';
+    }
+  }
+
+  function activarPromocion() {
+    if (modalMode !== 'edit' || !editingProductId) {
+      showToast('⚠️ Guarda el producto antes de ponerle oferta', true);
+      return;
+    }
+    const valor = parseFloat(document.getElementById('editPromoValor').value);
+    if (!isFinite(valor) || valor <= 0) {
+      showToast('⚠️ Escribe el descuento', true);
+      return;
+    }
+    if (promoTipo === 'PERCENT' && valor >= 100) {
+      showToast('⚠️ El porcentaje debe ser menor que 100', true);
+      return;
+    }
+    const base = precioBaseFicha();
+    if (promoTipo === 'AMOUNT' && base && valor >= base) {
+      showToast('⚠️ La rebaja debe ser menor que el precio', true);
+      return;
+    }
+
+    const btnOn = document.getElementById('btnActivarPromo');
+    btnOn.disabled = true;
+    btnOn.textContent = 'APLICANDO…';
+
+    parent.postMessage({
+      type: 'activar-promocion',
+      payload: { productId: editingProductId, tipo: promoTipo, valor: valor }
+    }, '*');
+  }
+
+  function quitarPromocion() {
+    if (modalMode !== 'edit' || !editingProductId) return;
+
+    const btnOff = document.getElementById('btnQuitarPromo');
+    btnOff.disabled = true;
+    btnOff.textContent = 'QUITANDO…';
+
+    parent.postMessage({
+      type: 'quitar-promocion',
+      payload: { productId: editingProductId }
+    }, '*');
+  }
+
+  // v3.10.0: el porcentaje lo resuelve el backend (v1.4.3) a partir del
+  // descuento guardado en Wix, así que aquí solo se lee. El cálculo local
+  // queda como red de seguridad para un listado antiguo sin el campo.
+  function pctProducto(p) {
+    if (p && isFinite(Number(p.descuentoPct)) && Number(p.descuentoPct) > 0) {
+      return Number(p.descuentoPct);
+    }
+    return calcularPct(p ? p.price : 0, p ? p.discountedPrice : 0);
+  }
+
+  // Coma decimal, que un -12.5% en español chirría.
+  function pctTexto(pct) {
+    return String(pct).replace('.', ',');
+  }
+
+  // Respaldo. Trunca —nunca prometer más rebaja de la que hay— con
+  // tolerancia para el error de coma flotante: 12,15/13,50 da
+  // 9,999999999999998 y sin ella se quedaría en 9.
+  function calcularPct(precio, precioDescontado) {
+    const base = Number(precio);
+    const promo = Number(precioDescontado);
+    if (!isFinite(base) || !isFinite(promo) || base <= 0 || promo <= 0 || promo >= base) return 0;
+    // La tolerancia evita que 12,15/13,50 (que en coma flotante da
+    // 9,999999999999998) se quede en 9 al redondear hacia abajo.
+    return Math.floor(((1 - (promo / base)) * 100) + 1e-9);
   }
 
   function bindCardEvents() {
@@ -1217,6 +1483,15 @@
   document.getElementById('modalProductoClose').addEventListener('click', closeProductModal);
   document.getElementById('btnCancelarProducto').addEventListener('click', closeProductModal);
   document.getElementById('btnGuardarProducto').addEventListener('click', saveProduct);
+  // v3.8.0: la oferta se aplica al pulsar, no al guardar.
+  document.getElementById('btnActivarPromo').addEventListener('click', activarPromocion);
+  document.getElementById('btnQuitarPromo').addEventListener('click', quitarPromocion);
+  // v3.9.0: selector de unidad y campos enlazados.
+  document.getElementById('btnPromoPct').addEventListener('click', () => cambiarUnidadPromo('PERCENT'));
+  document.getElementById('btnPromoEur').addEventListener('click', () => cambiarUnidadPromo('AMOUNT'));
+  document.getElementById('editPromoValor').addEventListener('input', recalcularDesdeDescuento);
+  document.getElementById('editPromoPrecio').addEventListener('input', recalcularDesdePrecioOferta);
+  document.getElementById('editPrecio').addEventListener('input', recalcularDesdeDescuento);
 
   // v3.7.1: ventana de categorías incompletas
   function cerrarAvisoCategorias() {
@@ -1424,6 +1699,9 @@
     document.getElementById('editNombre').value = prod.name || '';
     document.getElementById('editPrecio').value = prod.price || '';
 
+    // v3.8.0: estado de la oferta de este producto.
+    pintarEstadoPromo(prod);
+
     // v3.0.2: el coste ya viene en el listado masivo (backend
     // v1.2.0 lo cruza desde storesProducts.queryProducts). Si es
     // null, el producto no tiene coste configurado.
@@ -1498,6 +1776,10 @@
     document.getElementById('btnEliminarProducto').style.display = 'none';
     document.getElementById('editNombre').value = '';
     document.getElementById('editPrecio').value = '';
+
+    // v3.8.0: en un alta todavía no hay productId al que colgar la
+    // oferta. Se pone después, abriendo la ficha del producto creado.
+    pintarEstadoPromo(null);
 
     const costeInput = document.getElementById('editCoste');
     costeInput.value = '';
@@ -1927,6 +2209,24 @@
         costeInput.placeholder = '';
       }
     }
+    // v3.8.0: precio promocional
+    if (msg.type === 'promocionActivada') {
+      showToast('🏷 Oferta activada');
+      closeProductModal();
+    }
+    if (msg.type === 'promocionQuitada') {
+      showToast('🏷 Oferta retirada');
+      closeProductModal();
+    }
+    if (msg.type === 'promocionError') {
+      const btnOn = document.getElementById('btnActivarPromo');
+      const btnOff = document.getElementById('btnQuitarPromo');
+      // v3.10.0: se repinta el estado REAL del producto, no uno fijo.
+      const prodActual = (allProductos || []).find(x => x.id === editingProductId) || null;
+      pintarEstadoPromo(prodActual);
+      showToast('❌ ' + (msg.payload?.error || 'Error con la oferta'), true);
+    }
+
     if (msg.type === 'costeError') {
       // Silencioso: el campo se queda vacío con placeholder normal
       if (modalMode === 'edit' && editingProductId === msg.payload?.productId) {
