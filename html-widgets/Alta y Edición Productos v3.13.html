@@ -9,8 +9,16 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Alta y Edición Productos v3.12.0
+       KAMISUITE — Alta y Edición Productos v3.13.0
        Dark theme (same as Catálogo / Checkout)
+       v3.13.0 (24 Nov 2026): + PROCESO EN CURSO. Si la campaña se
+              está aplicando o terminando desde la tarea programada
+              o desde otro equipo, el panel lo muestra con su avance
+              («Aplicando la campaña programada: 40 de 220»),
+              bloquea los botones y se refresca solo cada 10
+              segundos. Al acabar, recarga el listado y se
+              desbloquea. Parejas: page code v3.10 y
+              tiendaEdicionLogic v1.7.0.
        v3.12.0 (24 Nov 2026): + CAMPAÑA PROGRAMADA POR FECHAS en el
               panel BLACK FRIDAY: campos EMPIEZA y TERMINA, botones
               PROGRAMAR y QUITAR PROGRAMACIÓN, y una línea con el
@@ -781,7 +789,7 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
-    <span class="header-version">v3.12.0</span>
+    <span class="header-version">v3.13.0</span>
   </div>
 
   <!-- TOOLBAR -->
@@ -1470,7 +1478,10 @@
   // ═══════════════════════════════════════════════════
   // Todo sale dentro del panel, justo debajo del botón: estado,
   // confirmación, avance y resultado. Nada en ventanas aparte.
-  let campana = { cargada: false, activa: false, productos: 0, porcentaje: null, error: false, programada: null, programacionOk: true };
+  let campana = { cargada: false, activa: false, productos: 0, porcentaje: null, error: false, programada: null, programacionOk: true, proceso: null };
+  // v3.13.0: sondeo del estado mientras hay un proceso ajeno en curso.
+  let campanaSondeo = null;
+  const SONDEO_CAMPANA_MS = 10000;
   let campanaOcupada = false;
   let campanaAccionPendiente = null; // 'aplicar' | 'terminar'
 
@@ -1527,10 +1538,25 @@
       if (!bf.fin.value && pr.fin) bf.fin.value = isoACampoFecha(pr.fin);
     }
     const listo = campana.cargada && !campana.error && campana.programacionOk;
-    bf.programar.disabled = campanaOcupada || !listo;
-    bf.desprogramar.disabled = campanaOcupada || !listo || !pr;
-    bf.inicio.disabled = campanaOcupada;
-    bf.fin.disabled = campanaOcupada;
+    const ajeno = !!campana.proceso && !campanaOcupada;
+    bf.programar.disabled = campanaOcupada || ajeno || !listo;
+    bf.desprogramar.disabled = campanaOcupada || ajeno || !listo || !pr;
+    bf.inicio.disabled = campanaOcupada || ajeno;
+    bf.fin.disabled = campanaOcupada || ajeno;
+  }
+
+  // v3.13.0: mientras haya un proceso ajeno, se pide el estado cada 10 s.
+  // Cuando termina, se recarga el listado (mensaje 'ready', el mismo del
+  // arranque) para ver los precios nuevos.
+  function vigilarProcesoCampana() {
+    const ajeno = !!campana.proceso && !campanaOcupada;
+    if (ajeno && !campanaSondeo) {
+      campanaSondeo = setInterval(pedirEstadoCampana, SONDEO_CAMPANA_MS);
+    } else if (!ajeno && campanaSondeo) {
+      clearInterval(campanaSondeo);
+      campanaSondeo = null;
+      parent.postMessage({ type: 'ready' }, '*');
+    }
   }
 
   // Porcentaje con coma decimal, como en el resto del widget.
@@ -1552,10 +1578,19 @@
         bf.estado.textContent = 'Comprobando si hay una campaña activa…';
       }
     }
+    // v3.13.0: campaña en proceso desde la tarea programada o desde otro equipo.
+    const ajeno = !!campana.proceso && !campanaOcupada;
+    if (ajeno) {
+      const pr = campana.proceso;
+      const quien = pr.origen === 'programada' ? 'la campaña programada' : 'una campaña lanzada desde otro equipo';
+      const que = pr.fase === 'terminar' ? 'Terminando' : 'Aplicando';
+      const pctTxt = pr.porcentaje ? ` (-${fmtPctCampana(pr.porcentaje)}%)` : '';
+      bf.estado.innerHTML = `<strong>En proceso:</strong> ${que.toLowerCase()} ${quien}${pctTxt}: ${pr.hechos || 0} de ${pr.total || 0} productos. Espera a que termine; el panel se desbloquea solo.`;
+    }
     const listo = campana.cargada && !campana.error;
-    bf.aplicar.disabled = campanaOcupada || !listo;
-    bf.terminar.disabled = campanaOcupada || !listo || !campana.activa;
-    bf.pct.disabled = campanaOcupada;
+    bf.aplicar.disabled = campanaOcupada || ajeno || !listo;
+    bf.terminar.disabled = campanaOcupada || ajeno || !listo || !campana.activa;
+    bf.pct.disabled = campanaOcupada || ajeno;
     if (campana.activa && !bf.pct.value) bf.pct.value = campana.porcentaje;
     if (!campana.activa && !bf.pct.value && campana.programada && campana.programada.porcentaje) bf.pct.value = campana.programada.porcentaje;
     pintarProgramacion();
@@ -2535,9 +2570,12 @@
         error: e.ok !== true,
         // v3.12.0
         programada: e.programada || null,
-        programacionOk: e.programacionOk !== false
+        programacionOk: e.programacionOk !== false,
+        // v3.13.0
+        proceso: e.proceso || null
       };
       pintarCampana();
+      vigilarProcesoCampana();
     }
     // v3.12.0: programación por fechas
     if (msg.type === 'campanaProgramada') {

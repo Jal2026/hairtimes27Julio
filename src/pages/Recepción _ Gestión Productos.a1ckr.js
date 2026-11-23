@@ -4,7 +4,7 @@
 // Página: Recepción | Tienda Productos (renombrada
 // internamente a "Alta y Edición Productos")
 // Elemento: #widgetTienda (HtmlComponent)
-// Versión: 3.9
+// Versión: 3.10
 // =====================================================
 // v1.4: + metodoPago, generarFacturaProducto, obtenerHistorialVentas
 // v2.0: + edición productos (tiendaEdicionLogic.web.js)
@@ -86,6 +86,15 @@
 //      incluido en el reporte de errores parciales.
 // =====================================================
 
+// v3.10 (24 Nov 2026): + PROCESO EN CURSO.
+//      · NUEVOS imports: registrarProcesoCampana,
+//        finalizarProcesoCampana (tiendaEdicionLogic v1.7.0).
+//      · Antes de aplicar, terminar, programar o quitar la programación
+//        se comprueba que no haya otra campaña en proceso (de la tarea
+//        programada o lanzada desde otro equipo).
+//      · La campaña lanzada desde aquí registra su avance en cada lote
+//        y lo borra al acabar, para que otros equipos lo vean.
+//
 // v3.9 (24 Nov 2026): + CAMPAÑA PROGRAMADA POR FECHAS.
 //      · NUEVOS imports: programarCampanaDescuento,
 //        quitarProgramacionCampana, cerrarProgramacionCampana
@@ -159,7 +168,9 @@ import {
   refrescarCorreosTrasCampana,
   programarCampanaDescuento,
   quitarProgramacionCampana,
-  cerrarProgramacionCampana
+  cerrarProgramacionCampana,
+  registrarProcesoCampana,
+  finalizarProcesoCampana
 } from 'backend/tiendaEdicionLogic.web';
 
 // v3.8: productos por llamada al backend en la campaña de descuento.
@@ -168,6 +179,8 @@ const LOTE_CAMPANA = 10;
 const MAX_VUELTAS_CAMPANA = 200;
 // v3.8: mensaje para el salón cuando falla algo inesperado.
 const ERROR_CAMPANA = 'No se pudo completar la campaña. Vuelve a intentarlo; si sigue fallando, avisa a soporte.';
+// v3.10: otra campaña en proceso.
+const ERROR_PROCESO_EN_CURSO = 'Ya hay una campaña en proceso. Espera a que termine: el panel se desbloquea solo.';
 
 $w.onReady(function () {
 
@@ -668,6 +681,34 @@ $w.onReady(function () {
   // le va contando el avance. Evita lanzar dos campañas a la vez.
   let campanaEnCurso = false;
 
+  // v3.10: ¿hay otra campaña en proceso? Si no se puede comprobar, no se
+  // bloquea: el registro de proceso es un aviso, no un requisito.
+  async function hayProcesoAjeno() {
+    try {
+      const est = await estadoCampanaDescuento();
+      return !!(est && est.ok && est.proceso);
+    } catch (e) {
+      console.error('[AltaEdicion] comprobar proceso:', e.message || e);
+      return false;
+    }
+  }
+
+  async function registrarProcesoSeguro(fase, hechos, total, porcentaje) {
+    try {
+      await registrarProcesoCampana(fase, hechos, total, porcentaje);
+    } catch (e) {
+      console.error('[AltaEdicion] registrar proceso:', e.message || e);
+    }
+  }
+
+  async function finalizarProcesoSeguro() {
+    try {
+      await finalizarProcesoCampana();
+    } catch (e) {
+      console.error('[AltaEdicion] finalizar proceso:', e.message || e);
+    }
+  }
+
   async function campanaEstadoHandler() {
     try {
       const est = await estadoCampanaDescuento();
@@ -681,10 +722,15 @@ $w.onReady(function () {
   async function campanaAplicarHandler(payload) {
     if (campanaEnCurso) return;
     campanaEnCurso = true;
+    let registrado = false;
     try {
       const porcentaje = Number(payload?.porcentaje);
       if (!Number.isFinite(porcentaje) || porcentaje <= 0 || porcentaje >= 100) {
         widget.postMessage({ type: 'campanaError', payload: { error: 'El porcentaje debe ser mayor que 0 y menor que 100.' } });
+        return;
+      }
+      if (await hayProcesoAjeno()) {
+        widget.postMessage({ type: 'campanaError', payload: { error: ERROR_PROCESO_EN_CURSO } });
         return;
       }
 
@@ -699,6 +745,8 @@ $w.onReady(function () {
       let actualizados = 0;
       const errores = [];
       widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'aplicar', hechos: 0, total } });
+      await registrarProcesoSeguro('aplicar', 0, total, porcentaje);
+      registrado = true;
 
       for (let i = 0; i < ids.length; i += LOTE_CAMPANA) {
         const lote = ids.slice(i, i + LOTE_CAMPANA);
@@ -716,7 +764,11 @@ $w.onReady(function () {
           lote.forEach(productId => errores.push({ productId, nombre: '', error: 'No se pudo poner el descuento' }));
         }
         widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'aplicar', hechos: Math.min(i + LOTE_CAMPANA, total), total } });
+        await registrarProcesoSeguro('aplicar', Math.min(i + LOTE_CAMPANA, total), total, porcentaje);
       }
+
+      await finalizarProcesoSeguro();
+      registrado = false;
 
       await refrescarCorreosTrasCampana();
 
@@ -731,6 +783,7 @@ $w.onReady(function () {
       console.error('[AltaEdicion] campana-aplicar:', e.message || e);
       widget.postMessage({ type: 'campanaError', payload: { error: ERROR_CAMPANA } });
     } finally {
+      if (registrado) await finalizarProcesoSeguro();
       campanaEnCurso = false;
     }
   }
@@ -738,10 +791,15 @@ $w.onReady(function () {
   async function campanaTerminarHandler() {
     if (campanaEnCurso) return;
     campanaEnCurso = true;
+    let registrado = false;
     try {
       const est = await estadoCampanaDescuento();
       if (!est.ok) {
         widget.postMessage({ type: 'campanaError', payload: { error: est.error || ERROR_CAMPANA } });
+        return;
+      }
+      if (est.proceso) {
+        widget.postMessage({ type: 'campanaError', payload: { error: ERROR_PROCESO_EN_CURSO } });
         return;
       }
 
@@ -753,6 +811,8 @@ $w.onReady(function () {
       let sinProducto = 0;
       const errores = [];
       widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'terminar', hechos: 0, total } });
+      await registrarProcesoSeguro('terminar', 0, total, est.porcentaje);
+      registrado = true;
 
       for (let vuelta = 0; vuelta < MAX_VUELTAS_CAMPANA; vuelta++) {
         let r;
@@ -777,7 +837,11 @@ $w.onReady(function () {
         saltar += (r.errores || []).length;
         hechos += r.procesados;
         widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'terminar', hechos: Math.min(hechos, total), total } });
+        await registrarProcesoSeguro('terminar', Math.min(hechos, total), total, est.porcentaje);
       }
+
+      await finalizarProcesoSeguro();
+      registrado = false;
 
       // v3.9: si había una campaña programada ya empezada, se cierra.
       try {
@@ -799,6 +863,7 @@ $w.onReady(function () {
       console.error('[AltaEdicion] campana-terminar:', e.message || e);
       widget.postMessage({ type: 'campanaError', payload: { error: ERROR_CAMPANA } });
     } finally {
+      if (registrado) await finalizarProcesoSeguro();
       campanaEnCurso = false;
     }
   }
@@ -809,6 +874,10 @@ $w.onReady(function () {
   async function campanaProgramarHandler(payload) {
     try {
       const { porcentaje, inicio, fin } = payload || {};
+      if (await hayProcesoAjeno()) {
+        widget.postMessage({ type: 'campanaError', payload: { error: ERROR_PROCESO_EN_CURSO } });
+        return;
+      }
       const r = await programarCampanaDescuento(Number(porcentaje), inicio, fin);
       if (!r.ok) {
         widget.postMessage({ type: 'campanaError', payload: { error: r.error || ERROR_CAMPANA } });
@@ -824,6 +893,10 @@ $w.onReady(function () {
 
   async function campanaDesprogramarHandler() {
     try {
+      if (await hayProcesoAjeno()) {
+        widget.postMessage({ type: 'campanaError', payload: { error: ERROR_PROCESO_EN_CURSO } });
+        return;
+      }
       const r = await quitarProgramacionCampana();
       if (!r.ok) {
         widget.postMessage({ type: 'campanaError', payload: { error: r.error || ERROR_CAMPANA } });

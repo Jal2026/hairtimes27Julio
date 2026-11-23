@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.6.0
+// Versión: 1.7.0
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -227,6 +227,33 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.7.0 (24 Nov 2026): + PROCESO EN CURSO VISIBLE.
+//         · Colección KamisuiteCampanaProceso (una fila): fase
+//           (aplicar/terminar), origen (manual/programada), hechos,
+//           total y porcentaje. Su _updatedDate hace de latido: si
+//           lleva más de PROCESO_CADUCA_MS sin moverse, el proceso se
+//           da por parado.
+//         · La tarea programada escribe su avance en cada lote, borra
+//           el registro al acabar y no arranca si hay otro proceso vivo.
+//         · NEW registrarProcesoCampana(fase, hechos, total, porcentaje)
+//           y finalizarProcesoCampana() para la campaña lanzada a mano
+//           desde el gestor (page code v3.10).
+//         · estadoCampanaDescuento() devuelve también `proceso`.
+//         · Si la colección no existe, la campaña funciona igual y
+//           simplemente no se ve el proceso en curso.
+//         · FIX GRAVE (comprobado en Salón KAMI el 24-nov): el descuento
+//           que se escribe como PERCENT 20 Wix lo guarda convertido a
+//           AMOUNT (Anti-Frizz 40,56 € → AMOUNT 8,11; All Soft 19,85 € →
+//           AMOUNT 3,97). La v1.5.0/v1.6.0 reconocía la campaña solo por
+//           PERCENT, así que al terminar habría dado todos los productos
+//           por cambiados a mano y no habría devuelto ninguna oferta.
+//           Ahora, tras escribir, se guarda en la fila lo que Wix ha
+//           guardado de verdad (tipoGuardado, valorGuardado) y al
+//           terminar se compara con eso. Filas sin ese dato (campañas
+//           aplicadas con la v1.5.0/v1.6.0): se reconoce el PERCENT o su
+//           equivalente en euros sobre el precio actual, con medio
+//           céntimo de margen.
+//
 // v1.6.0 (24 Nov 2026): + CAMPAÑA PROGRAMADA POR FECHAS.
 //         · NEW programarCampanaDescuento(porcentaje, inicioISO, finISO),
 //           quitarProgramacionCampana() y cerrarProgramacionCampana().
@@ -414,7 +441,7 @@ import { mediaManager } from 'wix-media-backend';
 import { invalidarCacheCatalogo } from 'backend/sugerenciasProductosLogic.web.js';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -1183,6 +1210,9 @@ export const desactivarPromocionProducto = webMethod(
 // =====================================================
 const COL_CAMPANA = 'KamisuiteCampanaDescuento';
 const COL_CAMPANA_PROGRAMADA = 'KamisuiteCampanaProgramada';
+// v1.7.0: proceso en curso (una fila) y tiempo sin latido para darlo por parado.
+const COL_CAMPANA_PROCESO = 'KamisuiteCampanaProceso';
+const PROCESO_CADUCA_MS = 3 * 60 * 1000;
 
 // Mismo prefijo que PREFIJO_ALMACEN de almacenLogic.web.js. Si allí
 // cambia, hay que cambiarlo también aquí.
@@ -1212,10 +1242,26 @@ function descuentoNormalizado(discount) {
 }
 
 // ¿El producto sigue con el descuento de la campaña?
-function tieneDescuentoCampana(discount, valorCampana) {
+// v1.7.0: Wix guarda el PERCENT convertido a AMOUNT. Se reconoce:
+//  1) por lo que Wix guardó al escribirlo (tipoGuardado/valorGuardado);
+//  2) si la fila no lo tiene, por el PERCENT o por su equivalente en
+//     euros sobre el precio actual, con medio céntimo de margen.
+function tieneDescuentoCampana(discount, fila, precio) {
   const d = descuentoNormalizado(discount);
-  const v = Number(valorCampana);
-  return d.type === 'PERCENT' && Number.isFinite(v) && Math.abs(d.value - v) < 0.001;
+  const tipoG = String(fila?.tipoGuardado || '').toUpperCase();
+  const valorG = Number(fila?.valorGuardado);
+  if ((tipoG === 'PERCENT' || tipoG === 'AMOUNT') && Number.isFinite(valorG)) {
+    return d.type === tipoG && Math.abs(d.value - valorG) < 0.001;
+  }
+  const pct = Number(fila?.valorCampana);
+  if (!Number.isFinite(pct)) return false;
+  if (d.type === 'PERCENT') return Math.abs(d.value - pct) < 0.001;
+  if (d.type === 'AMOUNT') {
+    const p = Number(precio);
+    if (!Number.isFinite(p) || p <= 0) return false;
+    return Math.abs(d.value - (p * pct / 100)) <= 0.0051;
+  }
+  return false;
 }
 
 function porcentajeCampana(valor) {
@@ -1233,7 +1279,7 @@ async function leerProductoCampana(productId) {
     .find({ suppressAuth: true, appOptions: { includeHiddenProducts: true } });
   const prod = (r.items || [])[0];
   if (!prod) return null;
-  return { nombre: prod.name || '', discount: prod.discount || null };
+  return { nombre: prod.name || '', discount: prod.discount || null, precio: Number(prod.price) };
 }
 
 async function filaCampana(productId) {
@@ -1300,16 +1346,17 @@ async function aplicarLoteCampanaInterno(pct, lote) {
       nombre = prod.nombre;
 
       const fila = await filaCampana(productId);
-      if (fila && Number(fila.valorCampana) === pct && tieneDescuentoCampana(prod.discount, pct)) {
+      if (fila && Number(fila.valorCampana) === pct && tieneDescuentoCampana(prod.discount, fila, prod.precio)) {
         yaEstaban++;
         actualizados++;
         continue;
       }
 
       // 1) Guardar la oferta que tenía, una sola vez por campaña.
+      let filaGuardada = fila;
       if (!fila) {
         const previo = descuentoNormalizado(prod.discount);
-        await wixData.insert(COL_CAMPANA, {
+        filaGuardada = await wixData.insert(COL_CAMPANA, {
           productId,
           tipoAnterior: previo.type,
           valorAnterior: previo.value,
@@ -1318,16 +1365,34 @@ async function aplicarLoteCampanaInterno(pct, lote) {
       } else if (Number(fila.valorCampana) !== pct) {
         // Campaña ya en marcha con otro porcentaje: la oferta
         // original guardada se conserva y solo cambia el de la
-        // campaña. READ-MERGE-UPDATE.
-        const merged = { ...fila, valorCampana: pct };
-        await wixData.update(COL_CAMPANA, merged, { suppressAuth: true });
+        // campaña. READ-MERGE-UPDATE. Lo guardado por Wix para el
+        // porcentaje anterior deja de valer.
+        const merged = { ...fila, valorCampana: pct, tipoGuardado: '', valorGuardado: null };
+        filaGuardada = await wixData.update(COL_CAMPANA, merged, { suppressAuth: true });
       }
 
       // 2) Escribir el descuento de la campaña.
-      await elevatedUpdate(productId, {
+      const res = await elevatedUpdate(productId, {
         discount: { type: 'PERCENT', value: pct }
       });
       actualizados++;
+
+      // 3) v1.7.0: apuntar lo que Wix ha guardado de verdad (convierte el
+      //    PERCENT en AMOUNT). Si falla, el descuento ya está puesto: al
+      //    terminar se reconoce por el equivalente en euros.
+      try {
+        let guardado = descuentoNormalizado((res?.product || res)?.discount);
+        if (guardado.type === 'NONE') {
+          const releido = await leerProductoCampana(productId);
+          if (releido) guardado = descuentoNormalizado(releido.discount);
+        }
+        if (guardado.type !== 'NONE' && filaGuardada && filaGuardada._id) {
+          const conGuardado = { ...filaGuardada, tipoGuardado: guardado.type, valorGuardado: guardado.value };
+          await wixData.update(COL_CAMPANA, conGuardado, { suppressAuth: true });
+        }
+      } catch (eGuardado) {
+        console.warn(`${TAG} ⚠️ Campaña: no se pudo apuntar lo guardado de ${nombre || productId}: ${eGuardado.message}`);
+      }
 
     } catch (err) {
       console.error(`${TAG} ❌ Campaña: no se pudo aplicar a ${nombre || productId}:`, err.message);
@@ -1367,7 +1432,7 @@ async function terminarLoteCampanaInterno(limite, saltar) {
         sinProducto++;
       } else {
         nombre = prod.nombre;
-        if (tieneDescuentoCampana(prod.discount, fila.valorCampana)) {
+        if (tieneDescuentoCampana(prod.discount, fila, prod.precio)) {
           const tipo = String(fila.tipoAnterior || 'NONE').toUpperCase();
           const valor = Number(fila.valorAnterior);
           const discount = ((tipo === 'PERCENT' || tipo === 'AMOUNT') && Number.isFinite(valor) && valor > 0)
@@ -1432,6 +1497,61 @@ async function guardarResultadoProgramacion(original, cambios) {
   return true;
 }
 
+// v1.7.0: registro del proceso en curso. Nunca bloquea la campaña: si
+// la colección no existe o falla, solo se pierde el aviso en el panel.
+async function escribirProceso(datos) {
+  try {
+    const r = await wixData.query(COL_CAMPANA_PROCESO)
+      .limit(1)
+      .find({ suppressAuth: true });
+    const fila = (r.items || [])[0] || null;
+    if (fila) {
+      const merged = { ...fila, ...datos };
+      await wixData.update(COL_CAMPANA_PROCESO, merged, { suppressAuth: true });
+    } else {
+      await wixData.insert(COL_CAMPANA_PROCESO, datos, { suppressAuth: true });
+    }
+    return true;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ No se pudo escribir el proceso de la campaña: ${e.message}`);
+    return false;
+  }
+}
+
+async function borrarProceso() {
+  try {
+    const r = await wixData.query(COL_CAMPANA_PROCESO)
+      .limit(10)
+      .find({ suppressAuth: true });
+    for (const fila of (r.items || [])) {
+      await wixData.remove(COL_CAMPANA_PROCESO, fila._id, { suppressAuth: true });
+    }
+    return true;
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ No se pudo borrar el proceso de la campaña: ${e.message}`);
+    return false;
+  }
+}
+
+// Proceso vivo (con latido reciente) o null. Lanza si la colección no
+// se puede leer: cada llamador decide qué hacer.
+async function leerProcesoVivo() {
+  const r = await wixData.query(COL_CAMPANA_PROCESO)
+    .limit(1)
+    .find({ suppressAuth: true });
+  const fila = (r.items || [])[0] || null;
+  if (!fila) return null;
+  const latido = new Date(fila._updatedDate).getTime();
+  if (!Number.isFinite(latido) || (Date.now() - latido) > PROCESO_CADUCA_MS) return null;
+  return {
+    fase: fila.fase === 'terminar' ? 'terminar' : 'aplicar',
+    origen: fila.origen === 'programada' ? 'programada' : 'manual',
+    hechos: Number(fila.hechos) || 0,
+    total: Number(fila.total) || 0,
+    porcentaje: Number(fila.porcentaje) || null
+  };
+}
+
 /**
  * ESTADO DE LA CAMPAÑA
  * Hay campaña mientras quede alguna fila en KamisuiteCampanaDescuento.
@@ -1459,6 +1579,14 @@ export const estadoCampanaDescuento = webMethod(
         console.error(`${TAG} ❌ estadoCampanaDescuento (programación) FAIL:`, eProg.message);
       }
 
+      // v1.7.0: proceso en curso, si lo hay.
+      let proceso = null;
+      try {
+        proceso = await leerProcesoVivo();
+      } catch (eProc) {
+        console.error(`${TAG} ❌ estadoCampanaDescuento (proceso) FAIL:`, eProc.message);
+      }
+
       return {
         ok: true,
         activa: total > 0,
@@ -1466,6 +1594,7 @@ export const estadoCampanaDescuento = webMethod(
         porcentaje: primera ? (Number(primera.valorCampana) || null) : null,
         programada,
         programacionOk,
+        proceso,
         version: VERSION
       };
     } catch (e) {
@@ -1650,6 +1779,33 @@ export const cerrarProgramacionCampana = webMethod(
 );
 
 /**
+ * v1.7.0 — PROCESO EN CURSO de una campaña lanzada a mano desde el
+ * gestor. El page code lo registra al empezar y en cada lote, y lo
+ * finaliza al acabar.
+ */
+export const registrarProcesoCampana = webMethod(
+  Permissions.SiteMember,
+  async (fase, hechos, total, porcentaje) => {
+    const ok = await escribirProceso({
+      fase: fase === 'terminar' ? 'terminar' : 'aplicar',
+      origen: 'manual',
+      hechos: Number(hechos) || 0,
+      total: Number(total) || 0,
+      porcentaje: Number(porcentaje) || null
+    });
+    return { ok: true, registrado: ok, version: VERSION };
+  }
+);
+
+export const finalizarProcesoCampana = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    const ok = await borrarProceso();
+    return { ok: true, borrado: ok, version: VERSION };
+  }
+);
+
+/**
  * v1.6.0 — TAREA PROGRAMADA (campanaDescuentoJob.js)
  *
  * Permissions.Admin, como ejecutarResumenDiarioProgramado: la llama la
@@ -1682,20 +1838,48 @@ export const ejecutarCampanaProgramada = webMethod(
         return { ok: false, accion: 'fechas no válidas', version: VERSION };
       }
 
+      // v1.7.0: si hay una campaña en proceso (por ejemplo, lanzada a mano
+      // desde el gestor), esta vuelta no hace nada y lo intenta la siguiente.
+      if (ahora >= inicio) {
+        let vivo = null;
+        try {
+          vivo = await leerProcesoVivo();
+        } catch (eProc) {
+          console.warn(`${TAG} ⚠️ No se pudo comprobar el proceso en curso: ${eProc.message}`);
+        }
+        if (vivo) {
+          console.log(`${TAG} 🗓 Tarea: hay una campaña en proceso (${vivo.origen}, ${vivo.fase}); se espera a la siguiente vuelta`);
+          return { ok: true, accion: 'proceso en curso', version: VERSION };
+        }
+      }
+
       // 1) Fin alcanzado: terminar.
       if (ahora >= fin) {
         let saltar = 0;
         let restaurados = 0;
         let respetados = 0;
         let fallidos = 0;
+        let hechos = 0;
         let completo = false;
-        while (quedaTiempo()) {
-          const r = await terminarLoteCampanaInterno(LOTE_TAREA, saltar);
-          if (!r.procesados) { completo = true; break; }
-          restaurados += r.restaurados;
-          respetados += r.respetados;
-          fallidos += r.errores.length;
-          saltar += r.errores.length;
+        const cuenta = await wixData.query(COL_CAMPANA)
+          .limit(1)
+          .find({ suppressAuth: true });
+        const totalFilas = cuenta.totalCount || (cuenta.items || []).length;
+        const pctProg = Number(prog.porcentaje) || null;
+        try {
+          await escribirProceso({ fase: 'terminar', origen: 'programada', hechos: 0, total: totalFilas, porcentaje: pctProg });
+          while (quedaTiempo()) {
+            const r = await terminarLoteCampanaInterno(LOTE_TAREA, saltar);
+            if (!r.procesados) { completo = true; break; }
+            restaurados += r.restaurados;
+            respetados += r.respetados;
+            fallidos += r.errores.length;
+            saltar += r.errores.length;
+            hechos += r.procesados;
+            await escribirProceso({ fase: 'terminar', origen: 'programada', hechos: Math.min(hechos, totalFilas), total: totalFilas, porcentaje: pctProg });
+          }
+        } finally {
+          await borrarProceso();
         }
         await invalidarCacheCorreos('campaña programada: fin');
 
@@ -1723,10 +1907,16 @@ export const ejecutarCampanaProgramada = webMethod(
         let actualizados = 0;
         let fallidos = 0;
         let i = 0;
-        for (; i < ids.length && quedaTiempo(); i += LOTE_TAREA) {
-          const r = await aplicarLoteCampanaInterno(pct, ids.slice(i, i + LOTE_TAREA));
-          actualizados += r.actualizados;
-          fallidos += r.errores.length;
+        try {
+          await escribirProceso({ fase: 'aplicar', origen: 'programada', hechos: 0, total: ids.length, porcentaje: pct });
+          for (; i < ids.length && quedaTiempo(); i += LOTE_TAREA) {
+            const r = await aplicarLoteCampanaInterno(pct, ids.slice(i, i + LOTE_TAREA));
+            actualizados += r.actualizados;
+            fallidos += r.errores.length;
+            await escribirProceso({ fase: 'aplicar', origen: 'programada', hechos: Math.min(i + LOTE_TAREA, ids.length), total: ids.length, porcentaje: pct });
+          }
+        } finally {
+          await borrarProceso();
         }
         const completo = i >= ids.length;
         await invalidarCacheCorreos('campaña programada: inicio');
