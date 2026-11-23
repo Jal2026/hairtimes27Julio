@@ -9,8 +9,16 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Alta y Edición Productos v3.11.0
+       KAMISUITE — Alta y Edición Productos v3.12.0
        Dark theme (same as Catálogo / Checkout)
+       v3.12.0 (24 Nov 2026): + CAMPAÑA PROGRAMADA POR FECHAS en el
+              panel BLACK FRIDAY: campos EMPIEZA y TERMINA, botones
+              PROGRAMAR y QUITAR PROGRAMACIÓN, y una línea con el
+              estado de la programación (pendiente, en marcha o
+              terminada). Usa el mismo porcentaje del panel. La
+              campaña entra y sale sola, con hasta 20 minutos de
+              margen. Parejas: page code v3.9 y tiendaEdicionLogic
+              v1.6.0.
        v3.11.0 (23 Nov 2026): + BLACK FRIDAY. Botón fucsia a la
               derecha del buscador que abre, justo debajo de la
               barra, el panel de la campaña de descuento en toda
@@ -273,6 +281,16 @@
     }
     .bf-panel .btn-modal-cancel:disabled { opacity: .4; cursor: not-allowed; }
     .bf-panel .btn-modal-cancel:disabled:hover { border-color: var(--border); color: var(--muted); }
+    .bf-sub {
+      font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      color: var(--fucsia); margin: 14px 0 6px;
+    }
+    .bf-fecha {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; font-weight: 600; color: var(--text-secondary);
+    }
+    .bf-fecha .modal-input { color-scheme: dark; }
+    .bf-prog { margin: 8px 0 0; }
     .bf-confirm {
       display: none; margin-top: 10px; font-size: 11px; color: var(--text);
       background: var(--surface3); border-radius: var(--radius-sm);
@@ -763,7 +781,7 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Alta y Edición Productos</span>
-    <span class="header-version">v3.11.0</span>
+    <span class="header-version">v3.12.0</span>
   </div>
 
   <!-- TOOLBAR -->
@@ -797,6 +815,14 @@
       <button type="button" class="btn-bf" id="btnBfAplicar">APLICAR A TODA LA TIENDA</button>
       <button type="button" class="btn-modal-cancel" id="btnBfTerminar">TERMINAR CAMPAÑA</button>
     </div>
+    <div class="bf-sub">PROGRAMAR POR FECHAS</div>
+    <div class="bf-row">
+      <label class="bf-fecha">EMPIEZA <input type="datetime-local" class="modal-input" id="bfInicio"></label>
+      <label class="bf-fecha">TERMINA <input type="datetime-local" class="modal-input" id="bfFin"></label>
+      <button type="button" class="btn-bf" id="btnBfProgramar">PROGRAMAR</button>
+      <button type="button" class="btn-modal-cancel" id="btnBfDesprogramar">QUITAR PROGRAMACIÓN</button>
+    </div>
+    <div class="bf-estado bf-prog" id="bfProgEstado"></div>
     <div class="bf-confirm" id="bfConfirm">
       <div id="bfConfirmTexto"></div>
       <div class="bf-row">
@@ -1444,7 +1470,7 @@
   // ═══════════════════════════════════════════════════
   // Todo sale dentro del panel, justo debajo del botón: estado,
   // confirmación, avance y resultado. Nada en ventanas aparte.
-  let campana = { cargada: false, activa: false, productos: 0, porcentaje: null, error: false };
+  let campana = { cargada: false, activa: false, productos: 0, porcentaje: null, error: false, programada: null, programacionOk: true };
   let campanaOcupada = false;
   let campanaAccionPendiente = null; // 'aplicar' | 'terminar'
 
@@ -1459,8 +1485,53 @@
     confirmTexto: document.getElementById('bfConfirmTexto'),
     confirmar: document.getElementById('btnBfConfirmar'),
     cancelar: document.getElementById('btnBfCancelar'),
-    msg: document.getElementById('bfMsg')
+    msg: document.getElementById('bfMsg'),
+    // v3.12.0: programación por fechas
+    inicio: document.getElementById('bfInicio'),
+    fin: document.getElementById('bfFin'),
+    programar: document.getElementById('btnBfProgramar'),
+    desprogramar: document.getElementById('btnBfDesprogramar'),
+    progEstado: document.getElementById('bfProgEstado')
   };
+
+  // v3.12.0: fecha legible en la hora del navegador del salón.
+  function fmtFechaCampana(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('es-ES', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  // v3.12.0: ISO → valor de un campo datetime-local (hora local).
+  function isoACampoFecha(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const dos = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}T${dos(d.getHours())}:${dos(d.getMinutes())}`;
+  }
+
+  function pintarProgramacion() {
+    const pr = campana.programada;
+    if (!campana.programacionOk) {
+      bf.progEstado.textContent = 'No se pudo leer la programación. Recarga la página; si sigue igual, avisa a soporte.';
+    } else if (!pr) {
+      bf.progEstado.textContent = 'Sin programación. Elige cuándo empieza y cuándo termina: la campaña entra y sale sola, con hasta 20 minutos de margen.';
+    } else {
+      const periodo = `<strong>-${fmtPctCampana(pr.porcentaje)}%</strong> del ${esc(fmtFechaCampana(pr.inicio))} al ${esc(fmtFechaCampana(pr.fin))}`;
+      let texto;
+      if (pr.estado === 'ACTIVA') texto = `En marcha: ${periodo}.`;
+      else if (pr.estado === 'TERMINADA') texto = `Terminada: ${periodo}.`;
+      else texto = `Programada: ${periodo}.`;
+      if (pr.resultado) texto += ` ${esc(pr.resultado)}`;
+      bf.progEstado.innerHTML = texto;
+      if (!bf.inicio.value && pr.inicio) bf.inicio.value = isoACampoFecha(pr.inicio);
+      if (!bf.fin.value && pr.fin) bf.fin.value = isoACampoFecha(pr.fin);
+    }
+    const listo = campana.cargada && !campana.error && campana.programacionOk;
+    bf.programar.disabled = campanaOcupada || !listo;
+    bf.desprogramar.disabled = campanaOcupada || !listo || !pr;
+    bf.inicio.disabled = campanaOcupada;
+    bf.fin.disabled = campanaOcupada;
+  }
 
   // Porcentaje con coma decimal, como en el resto del widget.
   function fmtPctCampana(n) {
@@ -1486,6 +1557,8 @@
     bf.terminar.disabled = campanaOcupada || !listo || !campana.activa;
     bf.pct.disabled = campanaOcupada;
     if (campana.activa && !bf.pct.value) bf.pct.value = campana.porcentaje;
+    if (!campana.activa && !bf.pct.value && campana.programada && campana.programada.porcentaje) bf.pct.value = campana.programada.porcentaje;
+    pintarProgramacion();
   }
 
   function pedirEstadoCampana() {
@@ -1510,6 +1583,32 @@
       bf.confirmTexto.innerHTML = campana.activa
         ? `Ya hay una campaña al <strong>-${fmtPctCampana(campana.porcentaje)}%</strong>. Todos los productos pasarán al <strong>-${fmtPctCampana(pct)}%</strong>. Las ofertas que tenían antes siguen guardadas y se devuelven al terminar la campaña.`
         : `Se pondrá un <strong>-${fmtPctCampana(pct)}%</strong> a todos los productos de la tienda, también a los que ya tienen oferta. Esas ofertas se guardan y se devuelven al terminar la campaña. Los productos de uso interno del salón quedan fuera.`;
+    } else if (accion === 'programar') {
+      const pct = Number(bf.pct.value);
+      if (!isFinite(pct) || pct <= 0 || pct >= 100) {
+        bf.msg.innerHTML = '<span class="ko">Escribe un porcentaje mayor que 0 y menor que 100.</span>';
+        return;
+      }
+      const ini = new Date(bf.inicio.value);
+      const fin = new Date(bf.fin.value);
+      if (!bf.inicio.value || !bf.fin.value || isNaN(ini.getTime()) || isNaN(fin.getTime())) {
+        bf.msg.innerHTML = '<span class="ko">Indica el día y la hora en que empieza y en que termina.</span>';
+        return;
+      }
+      if (fin <= ini) {
+        bf.msg.innerHTML = '<span class="ko">El fin tiene que ser posterior al inicio.</span>';
+        return;
+      }
+      if (fin <= new Date()) {
+        bf.msg.innerHTML = '<span class="ko">El fin ya ha pasado. Elige una fecha de fin futura.</span>';
+        return;
+      }
+      bf.confirmTexto.innerHTML = `La campaña del <strong>-${fmtPctCampana(pct)}%</strong> empezará sola el ${esc(fmtFechaCampana(ini.toISOString()))} y terminará sola el ${esc(fmtFechaCampana(fin.toISOString()))}, con hasta 20 minutos de margen. Al terminar, cada producto recupera la oferta que tenía antes.` +
+        (campana.programada ? ' Sustituye a la programación que hay ahora.' : '');
+    } else if (accion === 'desprogramar') {
+      bf.confirmTexto.innerHTML = (campana.activa
+        ? 'Se borrarán las fechas. La campaña que está en marcha <strong>seguirá activa</strong> hasta que pulses TERMINAR CAMPAÑA.'
+        : 'Se borrarán las fechas y la campaña no empezará sola.');
     } else {
       bf.confirmTexto.innerHTML = `Se quitará el <strong>-${fmtPctCampana(campana.porcentaje)}%</strong> y cada producto recuperará la oferta que tenía antes. Si durante la campaña se cambió a mano la oferta de algún producto, ese cambio se respeta.`;
     }
@@ -1523,6 +1622,8 @@
   });
   bf.aplicar.addEventListener('click', () => pedirConfirmacionCampana('aplicar'));
   bf.terminar.addEventListener('click', () => pedirConfirmacionCampana('terminar'));
+  bf.programar.addEventListener('click', () => pedirConfirmacionCampana('programar'));
+  bf.desprogramar.addEventListener('click', () => pedirConfirmacionCampana('desprogramar'));
   bf.cancelar.addEventListener('click', () => {
     campanaAccionPendiente = null;
     bf.confirm.classList.remove('open');
@@ -1537,6 +1638,18 @@
     bf.msg.textContent = 'Preparando…';
     if (accion === 'aplicar') {
       parent.postMessage({ type: 'campana-aplicar', payload: { porcentaje: Number(bf.pct.value) } }, '*');
+    } else if (accion === 'programar') {
+      // v3.12.0: las fechas viajan en ISO, calculadas en la hora del navegador del salón.
+      parent.postMessage({
+        type: 'campana-programar',
+        payload: {
+          porcentaje: Number(bf.pct.value),
+          inicio: new Date(bf.inicio.value).toISOString(),
+          fin: new Date(bf.fin.value).toISOString()
+        }
+      }, '*');
+    } else if (accion === 'desprogramar') {
+      parent.postMessage({ type: 'campana-desprogramar' }, '*');
     } else {
       parent.postMessage({ type: 'campana-terminar' }, '*');
     }
@@ -2419,8 +2532,26 @@
         activa: e.ok === true && e.activa === true,
         productos: e.productos || 0,
         porcentaje: e.porcentaje,
-        error: e.ok !== true
+        error: e.ok !== true,
+        // v3.12.0
+        programada: e.programada || null,
+        programacionOk: e.programacionOk !== false
       };
+      pintarCampana();
+    }
+    // v3.12.0: programación por fechas
+    if (msg.type === 'campanaProgramada') {
+      campanaOcupada = false;
+      bf.msg.innerHTML = '<span class="ok">✓ Campaña programada.</span>';
+      bf.inicio.value = '';
+      bf.fin.value = '';
+      pintarCampana();
+    }
+    if (msg.type === 'campanaDesprogramada') {
+      campanaOcupada = false;
+      bf.msg.innerHTML = '<span class="ok">✓ Programación quitada.</span>';
+      bf.inicio.value = '';
+      bf.fin.value = '';
       pintarCampana();
     }
     if (msg.type === 'campanaProgreso') {

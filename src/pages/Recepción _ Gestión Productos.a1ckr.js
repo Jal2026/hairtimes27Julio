@@ -4,7 +4,7 @@
 // Página: Recepción | Tienda Productos (renombrada
 // internamente a "Alta y Edición Productos")
 // Elemento: #widgetTienda (HtmlComponent)
-// Versión: 3.8
+// Versión: 3.9
 // =====================================================
 // v1.4: + metodoPago, generarFacturaProducto, obtenerHistorialVentas
 // v2.0: + edición productos (tiendaEdicionLogic.web.js)
@@ -86,6 +86,16 @@
 //      incluido en el reporte de errores parciales.
 // =====================================================
 
+// v3.9 (24 Nov 2026): + CAMPAÑA PROGRAMADA POR FECHAS.
+//      · NUEVOS imports: programarCampanaDescuento,
+//        quitarProgramacionCampana, cerrarProgramacionCampana
+//        (tiendaEdicionLogic v1.6.0).
+//      · NUEVOS handlers: 'campana-programar' y 'campana-desprogramar'.
+//        Tras cada uno se manda al widget el estado actualizado.
+//      · TERMINAR CAMPAÑA a mano cierra también la programación si ya
+//        había empezado, para que la tarea programada no la vuelva a
+//        aplicar.
+//
 // v3.8 (23 Nov 2026): + CAMPAÑA DE DESCUENTO (botón BLACK FRIDAY).
 //      · NUEVOS imports: estadoCampanaDescuento,
 //        prepararCampanaDescuento, aplicarCampanaDescuentoLote,
@@ -146,7 +156,10 @@ import {
   prepararCampanaDescuento,
   aplicarCampanaDescuentoLote,
   terminarCampanaDescuentoLote,
-  refrescarCorreosTrasCampana
+  refrescarCorreosTrasCampana,
+  programarCampanaDescuento,
+  quitarProgramacionCampana,
+  cerrarProgramacionCampana
 } from 'backend/tiendaEdicionLogic.web';
 
 // v3.8: productos por llamada al backend en la campaña de descuento.
@@ -186,6 +199,8 @@ $w.onReady(function () {
     if (msg.type === 'campana-estado') { await campanaEstadoHandler(); }
     if (msg.type === 'campana-aplicar') { await campanaAplicarHandler(msg.payload); }
     if (msg.type === 'campana-terminar') { await campanaTerminarHandler(); }
+    if (msg.type === 'campana-programar') { await campanaProgramarHandler(msg.payload); }
+    if (msg.type === 'campana-desprogramar') { await campanaDesprogramarHandler(); }
   });
 
   // ══════════════════════════════════════════════════
@@ -764,6 +779,13 @@ $w.onReady(function () {
         widget.postMessage({ type: 'campanaProgreso', payload: { fase: 'terminar', hechos: Math.min(hechos, total), total } });
       }
 
+      // v3.9: si había una campaña programada ya empezada, se cierra.
+      try {
+        await cerrarProgramacionCampana();
+      } catch (e) {
+        console.error('[AltaEdicion] cerrar programación:', e.message || e);
+      }
+
       await refrescarCorreosTrasCampana();
 
       widget.postMessage({
@@ -778,6 +800,40 @@ $w.onReady(function () {
       widget.postMessage({ type: 'campanaError', payload: { error: ERROR_CAMPANA } });
     } finally {
       campanaEnCurso = false;
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // v3.9 — CAMPAÑA PROGRAMADA POR FECHAS
+  // ══════════════════════════════════════════════════
+  async function campanaProgramarHandler(payload) {
+    try {
+      const { porcentaje, inicio, fin } = payload || {};
+      const r = await programarCampanaDescuento(Number(porcentaje), inicio, fin);
+      if (!r.ok) {
+        widget.postMessage({ type: 'campanaError', payload: { error: r.error || ERROR_CAMPANA } });
+        return;
+      }
+      widget.postMessage({ type: 'campanaProgramada', payload: { programada: r.programada } });
+      await campanaEstadoHandler();
+    } catch (e) {
+      console.error('[AltaEdicion] campana-programar:', e.message || e);
+      widget.postMessage({ type: 'campanaError', payload: { error: ERROR_CAMPANA } });
+    }
+  }
+
+  async function campanaDesprogramarHandler() {
+    try {
+      const r = await quitarProgramacionCampana();
+      if (!r.ok) {
+        widget.postMessage({ type: 'campanaError', payload: { error: r.error || ERROR_CAMPANA } });
+        return;
+      }
+      widget.postMessage({ type: 'campanaDesprogramada', payload: {} });
+      await campanaEstadoHandler();
+    } catch (e) {
+      console.error('[AltaEdicion] campana-desprogramar:', e.message || e);
+      widget.postMessage({ type: 'campanaError', payload: { error: ERROR_CAMPANA } });
     }
   }
 });

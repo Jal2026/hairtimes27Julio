@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.5.0
+// Versión: 1.6.0
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -227,6 +227,23 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.6.0 (24 Nov 2026): + CAMPAÑA PROGRAMADA POR FECHAS.
+//         · NEW programarCampanaDescuento(porcentaje, inicioISO, finISO),
+//           quitarProgramacionCampana() y cerrarProgramacionCampana().
+//           La programación vive en KamisuiteCampanaProgramada (una
+//           sola fila: porcentaje, inicio, fin, estado, resultado).
+//         · NEW ejecutarCampanaProgramada() (Permissions.Admin) — la
+//           llama la tarea programada campanaDescuentoJob.js: aplica al
+//           llegar el inicio y termina al llegar el fin, con un
+//           presupuesto de tiempo por ejecución y continuación en la
+//           siguiente vuelta.
+//         · estadoCampanaDescuento() devuelve también la programación.
+//         · La lógica de aplicar y terminar pasa a funciones internas
+//           que comparten el gestor y la tarea. Al aplicar se salta el
+//           producto que ya tiene la campaña con ese porcentaje.
+//         · Los webMethods de la v1.5.0 mantienen nombre, parámetros y
+//           respuesta.
+//
 // v1.5.0 (23 Nov 2026): + CAMPAÑA DE DESCUENTO EN TODA LA TIENDA
 //         (botón BLACK FRIDAY del gestor de productos).
 //         · NEW prepararCampanaDescuento() — lista los productos que
@@ -397,7 +414,7 @@ import { mediaManager } from 'wix-media-backend';
 import { invalidarCacheCatalogo } from 'backend/sugerenciasProductosLogic.web.js';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -1130,7 +1147,7 @@ export const desactivarPromocionProducto = webMethod(
 );
 
 // =====================================================
-// 2d. CAMPAÑA DE DESCUENTO EN TODA LA TIENDA (v1.5.0)
+// 2d. CAMPAÑA DE DESCUENTO EN TODA LA TIENDA (v1.5.0 · v1.6.0)
 // =====================================================
 // Pone el mismo porcentaje a todos los productos de la tienda (botón
 // BLACK FRIDAY del gestor) y, al terminar, devuelve a cada producto la
@@ -1149,9 +1166,23 @@ export const desactivarPromocionProducto = webMethod(
 //   categorías con el prefijo de almacén. Un producto que además está
 //   en una categoría de venta entra en la campaña (mismo criterio de
 //   doble categoría que almacenLogic).
-// · El trabajo va por lotes que orquesta el page code.
+// · Desde el gestor, el trabajo va por lotes que orquesta el page code.
+//
+// v1.6.0 — CAMPAÑA PROGRAMADA POR FECHAS
+// · La programación vive en KamisuiteCampanaProgramada (una sola fila):
+//   porcentaje, inicio, fin, estado (PROGRAMADA → ACTIVA → TERMINADA)
+//   y resultado (texto para el panel).
+// · La ejecuta la tarea programada campanaDescuentoJob.js con cuatro
+//   ticks por hora. Al llegar el inicio aplica la campaña y al llegar
+//   el fin la termina.
+// · Cada ejecución trabaja como mucho PRESUPUESTO_TAREA_MS. La
+//   documentación de la plataforma no fija la duración máxima de una
+//   tarea programada: si una ejecución se corta o se queda sin tiempo,
+//   la siguiente continúa donde se quedó, porque aplicar y terminar se
+//   pueden repetir sin efectos dobles.
 // =====================================================
 const COL_CAMPANA = 'KamisuiteCampanaDescuento';
+const COL_CAMPANA_PROGRAMADA = 'KamisuiteCampanaProgramada';
 
 // Mismo prefijo que PREFIJO_ALMACEN de almacenLogic.web.js. Si allí
 // cambia, hay que cambiarlo también aquí.
@@ -1159,6 +1190,11 @@ const PREFIJO_USO_INTERNO = 'USO SALON-';
 
 // Tope de productos por llamada, por si llega un lote mayor del previsto.
 const MAX_LOTE_CAMPANA = 25;
+
+// v1.6.0: tarea programada — tiempo máximo de trabajo por ejecución y
+// productos por lote.
+const PRESUPUESTO_TAREA_MS = 4 * 60 * 1000;
+const LOTE_TAREA = 10;
 
 function esSoloUsoInterno(prod) {
   const cols = Array.isArray(prod?.collections) ? prod.collections : [];
@@ -1208,9 +1244,200 @@ async function filaCampana(productId) {
   return (r.items || [])[0] || null;
 }
 
+// v1.6.0: lógica común del gestor y de la tarea programada.
+// Ids de los productos que entran en la campaña. Misma lectura
+// paginada que listarProductosParaEdicion (con ocultos y categorías).
+async function idsCampanaInterno() {
+  let items = [];
+  let skip = 0;
+  const PAGE = 100;
+  let hasMore = true;
+
+  while (hasMore) {
+    const result = await wixData.query("Stores/Products")
+      .include("collections")
+      .limit(PAGE)
+      .skip(skip)
+      .find({
+        suppressAuth: true,
+        appOptions: { includeHiddenProducts: true }
+      });
+    const page = result.items || [];
+    items = items.concat(page);
+    hasMore = page.length === PAGE;
+    skip += PAGE;
+  }
+
+  const ids = [];
+  let excluidos = 0;
+  for (const prod of items) {
+    if (!prod || !prod._id) continue;
+    if (esSoloUsoInterno(prod)) { excluidos++; continue; }
+    ids.push(prod._id);
+  }
+
+  console.log(`${TAG} 🏷 Campaña: entran ${ids.length} productos, ${excluidos} de uso interno quedan fuera (de ${items.length})`);
+  return { ids, excluidos };
+}
+
+// Por producto: 1) guarda su oferta anterior si aún no está guardada;
+// 2) escribe el descuento de la campaña. Si el paso 2 falla, la fila
+// queda guardada y el producto sin tocar: al terminar la campaña se ve
+// que no tiene el porcentaje de la campaña y se deja como está.
+// v1.6.0: si el producto ya tiene la campaña con este porcentaje, se
+// salta (reintentos y reanudaciones de la tarea programada).
+async function aplicarLoteCampanaInterno(pct, lote) {
+  const elevatedUpdate = elevate(storesProducts.updateProduct);
+  let actualizados = 0;
+  let yaEstaban = 0;
+  const errores = [];
+
+  for (const productId of lote) {
+    let nombre = '';
+    try {
+      const prod = await leerProductoCampana(productId);
+      if (!prod) throw new Error('Producto no encontrado en Stores/Products');
+      nombre = prod.nombre;
+
+      const fila = await filaCampana(productId);
+      if (fila && Number(fila.valorCampana) === pct && tieneDescuentoCampana(prod.discount, pct)) {
+        yaEstaban++;
+        actualizados++;
+        continue;
+      }
+
+      // 1) Guardar la oferta que tenía, una sola vez por campaña.
+      if (!fila) {
+        const previo = descuentoNormalizado(prod.discount);
+        await wixData.insert(COL_CAMPANA, {
+          productId,
+          tipoAnterior: previo.type,
+          valorAnterior: previo.value,
+          valorCampana: pct
+        }, { suppressAuth: true });
+      } else if (Number(fila.valorCampana) !== pct) {
+        // Campaña ya en marcha con otro porcentaje: la oferta
+        // original guardada se conserva y solo cambia el de la
+        // campaña. READ-MERGE-UPDATE.
+        const merged = { ...fila, valorCampana: pct };
+        await wixData.update(COL_CAMPANA, merged, { suppressAuth: true });
+      }
+
+      // 2) Escribir el descuento de la campaña.
+      await elevatedUpdate(productId, {
+        discount: { type: 'PERCENT', value: pct }
+      });
+      actualizados++;
+
+    } catch (err) {
+      console.error(`${TAG} ❌ Campaña: no se pudo aplicar a ${nombre || productId}:`, err.message);
+      errores.push({ productId, nombre, error: 'No se pudo poner el descuento' });
+    }
+  }
+
+  console.log(`${TAG} 🏷 Campaña -${pct}%: lote de ${lote.length} → ${actualizados} con la campaña (${yaEstaban} ya estaban), ${errores.length} con error`);
+  return { procesados: lote.length, actualizados, yaEstaban, errores };
+}
+
+// Por fila: si el producto sigue con el porcentaje de la campaña, se le
+// devuelve la oferta anterior (o se le quita si no tenía); si no, se
+// deja como está. En los dos casos se borra la fila. Si algo falla, la
+// fila se queda para poder reintentarlo. Se lee por orden de creación,
+// así que las filas que fallan van delante y se saltan con `saltar`.
+async function terminarLoteCampanaInterno(limite, saltar) {
+  const r = await wixData.query(COL_CAMPANA)
+    .ascending('_createdDate')
+    .skip(saltar)
+    .limit(limite)
+    .find({ suppressAuth: true });
+  const filas = r.items || [];
+
+  const elevatedUpdate = elevate(storesProducts.updateProduct);
+  let restaurados = 0;
+  let respetados = 0;
+  let sinProducto = 0;
+  const errores = [];
+
+  for (const fila of filas) {
+    let nombre = '';
+    try {
+      const prod = await leerProductoCampana(fila.productId);
+      if (!prod) {
+        // El producto se eliminó durante la campaña.
+        sinProducto++;
+      } else {
+        nombre = prod.nombre;
+        if (tieneDescuentoCampana(prod.discount, fila.valorCampana)) {
+          const tipo = String(fila.tipoAnterior || 'NONE').toUpperCase();
+          const valor = Number(fila.valorAnterior);
+          const discount = ((tipo === 'PERCENT' || tipo === 'AMOUNT') && Number.isFinite(valor) && valor > 0)
+            ? { type: tipo, value: valor }
+            : { type: 'NONE', value: 0 };
+          await elevatedUpdate(fila.productId, { discount });
+          restaurados++;
+        } else {
+          respetados++;
+        }
+      }
+      await wixData.remove(COL_CAMPANA, fila._id, { suppressAuth: true });
+
+    } catch (err) {
+      console.error(`${TAG} ❌ Campaña: no se pudo devolver la oferta de ${nombre || fila.productId}:`, err.message);
+      errores.push({ productId: fila.productId, nombre, error: 'No se pudo devolver su oferta' });
+    }
+  }
+
+  console.log(`${TAG} 🏷 Fin de campaña: lote de ${filas.length} → ${restaurados} restaurados, ${respetados} respetados, ${sinProducto} sin producto, ${errores.length} con error`);
+  return { procesados: filas.length, restaurados, respetados, sinProducto, errores };
+}
+
+// v1.6.0: la fila de la programación (o null).
+async function leerProgramacion() {
+  const r = await wixData.query(COL_CAMPANA_PROGRAMADA)
+    .limit(1)
+    .find({ suppressAuth: true });
+  return (r.items || [])[0] || null;
+}
+
+function fechaISO(valor) {
+  if (!valor) return null;
+  const d = new Date(valor);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function programacionParaWidget(p) {
+  if (!p) return null;
+  return {
+    porcentaje: Number(p.porcentaje) || null,
+    inicio: fechaISO(p.inicio),
+    fin: fechaISO(p.fin),
+    estado: String(p.estado || '').toUpperCase(),
+    resultado: p.resultado || ''
+  };
+}
+
+// La tarea programada solo escribe si la programación sigue siendo la
+// misma con la que empezó (el salón podría haberla cambiado mientras
+// tanto). READ-MERGE-UPDATE sobre la fila recién leída.
+async function guardarResultadoProgramacion(original, cambios) {
+  const fresca = await leerProgramacion();
+  if (!fresca || fresca._id !== original._id) return false;
+  const misma = fechaISO(fresca.inicio) === fechaISO(original.inicio)
+    && fechaISO(fresca.fin) === fechaISO(original.fin)
+    && Number(fresca.porcentaje) === Number(original.porcentaje)
+    && String(fresca.estado || '') === String(original.estado || '');
+  if (!misma) return false;
+  const merged = { ...fresca, ...cambios };
+  await wixData.update(COL_CAMPANA_PROGRAMADA, merged, { suppressAuth: true });
+  return true;
+}
+
 /**
  * ESTADO DE LA CAMPAÑA
  * Hay campaña mientras quede alguna fila en KamisuiteCampanaDescuento.
+ * v1.6.0: devuelve también la programación por fechas, si la hay. Si la
+ * colección de la programación no se puede leer, la campaña manual
+ * sigue funcionando y `programacionOk` va a false.
  */
 export const estadoCampanaDescuento = webMethod(
   Permissions.SiteMember,
@@ -1222,11 +1449,23 @@ export const estadoCampanaDescuento = webMethod(
       const filas = r.items || [];
       const total = r.totalCount || filas.length;
       const primera = filas[0] || null;
+
+      let programada = null;
+      let programacionOk = true;
+      try {
+        programada = programacionParaWidget(await leerProgramacion());
+      } catch (eProg) {
+        programacionOk = false;
+        console.error(`${TAG} ❌ estadoCampanaDescuento (programación) FAIL:`, eProg.message);
+      }
+
       return {
         ok: true,
         activa: total > 0,
         productos: total,
         porcentaje: primera ? (Number(primera.valorCampana) || null) : null,
+        programada,
+        programacionOk,
         version: VERSION
       };
     } catch (e) {
@@ -1238,44 +1477,14 @@ export const estadoCampanaDescuento = webMethod(
 
 /**
  * PREPARAR CAMPAÑA
- * Devuelve los ids de los productos que entran. Misma lectura paginada
- * que listarProductosParaEdicion (con ocultos y con categorías).
+ * Devuelve los ids de los productos que entran.
  */
 export const prepararCampanaDescuento = webMethod(
   Permissions.SiteMember,
   async () => {
     try {
-      let items = [];
-      let skip = 0;
-      const PAGE = 100;
-      let hasMore = true;
-
-      while (hasMore) {
-        const result = await wixData.query("Stores/Products")
-          .include("collections")
-          .limit(PAGE)
-          .skip(skip)
-          .find({
-            suppressAuth: true,
-            appOptions: { includeHiddenProducts: true }
-          });
-        const page = result.items || [];
-        items = items.concat(page);
-        hasMore = page.length === PAGE;
-        skip += PAGE;
-      }
-
-      const ids = [];
-      let excluidos = 0;
-      for (const prod of items) {
-        if (!prod || !prod._id) continue;
-        if (esSoloUsoInterno(prod)) { excluidos++; continue; }
-        ids.push(prod._id);
-      }
-
-      console.log(`${TAG} 🏷 Campaña: entran ${ids.length} productos, ${excluidos} de uso interno quedan fuera (de ${items.length})`);
+      const { ids, excluidos } = await idsCampanaInterno();
       return { ok: true, ids, total: ids.length, excluidos, version: VERSION };
-
     } catch (e) {
       console.error(`${TAG} ❌ prepararCampanaDescuento FAIL:`, e.message);
       return { ok: false, error: 'No se pudo leer el catálogo para preparar la campaña.', version: VERSION };
@@ -1288,11 +1497,6 @@ export const prepararCampanaDescuento = webMethod(
  *
  * @param {number} porcentaje  Mayor que 0 y menor que 100.
  * @param {string[]} ids       Ids de producto (máx. MAX_LOTE_CAMPANA).
- *
- * Por producto: 1) guarda su oferta anterior si aún no está guardada;
- * 2) escribe el descuento de la campaña. Si el paso 2 falla, la fila
- * queda guardada y el producto sin tocar: al terminar la campaña se ve
- * que no tiene el porcentaje de la campaña y se deja como está.
  */
 export const aplicarCampanaDescuentoLote = webMethod(
   Permissions.SiteMember,
@@ -1303,51 +1507,8 @@ export const aplicarCampanaDescuentoLote = webMethod(
         return { ok: false, error: 'El porcentaje debe ser mayor que 0 y menor que 100.', version: VERSION };
       }
       const lote = (Array.isArray(ids) ? ids : []).filter(Boolean).slice(0, MAX_LOTE_CAMPANA);
-
-      const elevatedUpdate = elevate(storesProducts.updateProduct);
-      let actualizados = 0;
-      const errores = [];
-
-      for (const productId of lote) {
-        let nombre = '';
-        try {
-          const prod = await leerProductoCampana(productId);
-          if (!prod) throw new Error('Producto no encontrado en Stores/Products');
-          nombre = prod.nombre;
-
-          // 1) Guardar la oferta que tenía, una sola vez por campaña.
-          const fila = await filaCampana(productId);
-          if (!fila) {
-            const previo = descuentoNormalizado(prod.discount);
-            await wixData.insert(COL_CAMPANA, {
-              productId,
-              tipoAnterior: previo.type,
-              valorAnterior: previo.value,
-              valorCampana: pct
-            }, { suppressAuth: true });
-          } else if (Number(fila.valorCampana) !== pct) {
-            // Campaña ya en marcha con otro porcentaje: la oferta
-            // original guardada se conserva y solo cambia el de la
-            // campaña. READ-MERGE-UPDATE.
-            const merged = { ...fila, valorCampana: pct };
-            await wixData.update(COL_CAMPANA, merged, { suppressAuth: true });
-          }
-
-          // 2) Escribir el descuento de la campaña.
-          await elevatedUpdate(productId, {
-            discount: { type: 'PERCENT', value: pct }
-          });
-          actualizados++;
-
-        } catch (err) {
-          console.error(`${TAG} ❌ Campaña: no se pudo aplicar a ${nombre || productId}:`, err.message);
-          errores.push({ productId, nombre, error: 'No se pudo poner el descuento' });
-        }
-      }
-
-      console.log(`${TAG} 🏷 Campaña -${pct}%: lote de ${lote.length} → ${actualizados} actualizados, ${errores.length} con error`);
-      return { ok: true, procesados: lote.length, actualizados, errores, version: VERSION };
-
+      const r = await aplicarLoteCampanaInterno(pct, lote);
+      return { ok: true, procesados: r.procesados, actualizados: r.actualizados, errores: r.errores, version: VERSION };
     } catch (e) {
       console.error(`${TAG} ❌ aplicarCampanaDescuentoLote FAIL:`, e.message);
       return { ok: false, error: 'No se pudo aplicar el descuento a este grupo de productos.', version: VERSION };
@@ -1359,14 +1520,7 @@ export const aplicarCampanaDescuentoLote = webMethod(
  * TERMINAR CAMPAÑA — un lote de filas
  *
  * @param {number} limite  Filas a procesar (máx. MAX_LOTE_CAMPANA).
- * @param {number} saltar  Filas a saltar: las que fallaron en lotes
- *                         anteriores siguen en la colección y van
- *                         primero, porque se lee por orden de creación.
- *
- * Por fila: si el producto sigue con el porcentaje de la campaña, se le
- * devuelve la oferta anterior (o se le quita si no tenía); si no, se
- * deja como está. En los dos casos se borra la fila. Si algo falla, la
- * fila se queda para poder reintentarlo.
+ * @param {number} saltar  Filas que fallaron en lotes anteriores.
  */
 export const terminarCampanaDescuentoLote = webMethod(
   Permissions.SiteMember,
@@ -1374,52 +1528,8 @@ export const terminarCampanaDescuentoLote = webMethod(
     try {
       const lim = Math.min(Math.max(parseInt(limite, 10) || 10, 1), MAX_LOTE_CAMPANA);
       const sk = Math.max(parseInt(saltar, 10) || 0, 0);
-
-      const r = await wixData.query(COL_CAMPANA)
-        .ascending('_createdDate')
-        .skip(sk)
-        .limit(lim)
-        .find({ suppressAuth: true });
-      const filas = r.items || [];
-
-      const elevatedUpdate = elevate(storesProducts.updateProduct);
-      let restaurados = 0;
-      let respetados = 0;
-      let sinProducto = 0;
-      const errores = [];
-
-      for (const fila of filas) {
-        let nombre = '';
-        try {
-          const prod = await leerProductoCampana(fila.productId);
-          if (!prod) {
-            // El producto se eliminó durante la campaña.
-            sinProducto++;
-          } else {
-            nombre = prod.nombre;
-            if (tieneDescuentoCampana(prod.discount, fila.valorCampana)) {
-              const tipo = String(fila.tipoAnterior || 'NONE').toUpperCase();
-              const valor = Number(fila.valorAnterior);
-              const discount = ((tipo === 'PERCENT' || tipo === 'AMOUNT') && Number.isFinite(valor) && valor > 0)
-                ? { type: tipo, value: valor }
-                : { type: 'NONE', value: 0 };
-              await elevatedUpdate(fila.productId, { discount });
-              restaurados++;
-            } else {
-              respetados++;
-            }
-          }
-          await wixData.remove(COL_CAMPANA, fila._id, { suppressAuth: true });
-
-        } catch (err) {
-          console.error(`${TAG} ❌ Campaña: no se pudo devolver la oferta de ${nombre || fila.productId}:`, err.message);
-          errores.push({ productId: fila.productId, nombre, error: 'No se pudo devolver su oferta' });
-        }
-      }
-
-      console.log(`${TAG} 🏷 Fin de campaña: lote de ${filas.length} → ${restaurados} restaurados, ${respetados} respetados, ${sinProducto} sin producto, ${errores.length} con error`);
-      return { ok: true, procesados: filas.length, restaurados, respetados, sinProducto, errores, version: VERSION };
-
+      const r = await terminarLoteCampanaInterno(lim, sk);
+      return { ok: true, ...r, version: VERSION };
     } catch (e) {
       console.error(`${TAG} ❌ terminarCampanaDescuentoLote FAIL:`, e.message);
       return { ok: false, error: 'No se pudo terminar la campaña en este grupo de productos.', version: VERSION };
@@ -1436,6 +1546,207 @@ export const refrescarCorreosTrasCampana = webMethod(
   async () => {
     const ok = await invalidarCacheCorreos('campaña de descuento');
     return { ok: true, cacheInvalidada: ok, version: VERSION };
+  }
+);
+
+/**
+ * v1.6.0 — PROGRAMAR CAMPAÑA POR FECHAS
+ *
+ * @param {number} porcentaje  Mayor que 0 y menor que 100.
+ * @param {string} inicioISO   Fecha y hora de inicio (ISO).
+ * @param {string} finISO      Fecha y hora de fin (ISO), posterior al
+ *                             inicio y a ahora.
+ *
+ * Una sola programación: si ya hay una, se sustituye y vuelve a
+ * PROGRAMADA. Si el inicio ya pasó, la tarea programada la aplica en su
+ * siguiente vuelta.
+ */
+export const programarCampanaDescuento = webMethod(
+  Permissions.SiteMember,
+  async (porcentaje, inicioISO, finISO) => {
+    try {
+      const pct = porcentajeCampana(porcentaje);
+      if (pct === null) {
+        return { ok: false, error: 'El porcentaje debe ser mayor que 0 y menor que 100.', version: VERSION };
+      }
+      const inicio = new Date(inicioISO);
+      const fin = new Date(finISO);
+      if (isNaN(inicio.getTime()) || isNaN(fin.getTime())) {
+        return { ok: false, error: 'Indica el día y la hora de inicio y de fin.', version: VERSION };
+      }
+      if (fin <= inicio) {
+        return { ok: false, error: 'El fin tiene que ser posterior al inicio.', version: VERSION };
+      }
+      if (fin <= new Date()) {
+        return { ok: false, error: 'El fin ya ha pasado. Elige una fecha de fin futura.', version: VERSION };
+      }
+
+      const datos = { porcentaje: pct, inicio, fin, estado: 'PROGRAMADA', resultado: '' };
+      const existente = await leerProgramacion();
+      let guardada;
+      if (existente) {
+        const merged = { ...existente, ...datos };
+        guardada = await wixData.update(COL_CAMPANA_PROGRAMADA, merged, { suppressAuth: true });
+      } else {
+        guardada = await wixData.insert(COL_CAMPANA_PROGRAMADA, datos, { suppressAuth: true });
+      }
+
+      console.log(`${TAG} 🗓 Campaña programada: -${pct}% del ${inicio.toISOString()} al ${fin.toISOString()}`);
+      return { ok: true, programada: programacionParaWidget(guardada), version: VERSION };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ programarCampanaDescuento FAIL:`, e.message);
+      return { ok: false, error: 'No se pudo guardar la programación.', version: VERSION };
+    }
+  }
+);
+
+/**
+ * v1.6.0 — QUITAR PROGRAMACIÓN
+ * Borra las fechas. No toca los productos: si la campaña ya está en
+ * marcha, sigue hasta que se pulse TERMINAR CAMPAÑA.
+ */
+export const quitarProgramacionCampana = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    try {
+      const existente = await leerProgramacion();
+      if (existente) {
+        await wixData.remove(COL_CAMPANA_PROGRAMADA, existente._id, { suppressAuth: true });
+      }
+      return { ok: true, version: VERSION };
+    } catch (e) {
+      console.error(`${TAG} ❌ quitarProgramacionCampana FAIL:`, e.message);
+      return { ok: false, error: 'No se pudo quitar la programación.', version: VERSION };
+    }
+  }
+);
+
+/**
+ * v1.6.0 — Tras TERMINAR CAMPAÑA a mano: si la programación ya había
+ * empezado, se da por terminada para que la tarea programada no la
+ * vuelva a aplicar. Una programación con el inicio aún por llegar se
+ * conserva.
+ */
+export const cerrarProgramacionCampana = webMethod(
+  Permissions.SiteMember,
+  async () => {
+    try {
+      const existente = await leerProgramacion();
+      if (!existente) return { ok: true, cerrada: false, version: VERSION };
+      const estado = String(existente.estado || '').toUpperCase();
+      const inicio = new Date(existente.inicio);
+      if (estado === 'TERMINADA' || isNaN(inicio.getTime()) || inicio > new Date()) {
+        return { ok: true, cerrada: false, version: VERSION };
+      }
+      const merged = { ...existente, estado: 'TERMINADA', resultado: 'Se terminó a mano desde el gestor.' };
+      await wixData.update(COL_CAMPANA_PROGRAMADA, merged, { suppressAuth: true });
+      return { ok: true, cerrada: true, version: VERSION };
+    } catch (e) {
+      console.error(`${TAG} ❌ cerrarProgramacionCampana FAIL:`, e.message);
+      return { ok: false, error: 'No se pudo cerrar la programación.', version: VERSION };
+    }
+  }
+);
+
+/**
+ * v1.6.0 — TAREA PROGRAMADA (campanaDescuentoJob.js)
+ *
+ * Permissions.Admin, como ejecutarResumenDiarioProgramado: la llama la
+ * tarea programada, no el gestor.
+ *
+ * · Fin alcanzado → termina la campaña (aunque no se llegara a aplicar
+ *   entera) y deja la programación en TERMINADA.
+ * · Inicio alcanzado y estado PROGRAMADA → aplica la campaña y la deja
+ *   en ACTIVA. Si se queda sin tiempo, sigue en PROGRAMADA y la
+ *   siguiente vuelta continúa saltándose lo ya hecho.
+ * · En cualquier otro caso no hace nada.
+ */
+export const ejecutarCampanaProgramada = webMethod(
+  Permissions.Admin,
+  async () => {
+    const t0 = Date.now();
+    const quedaTiempo = () => (Date.now() - t0) < PRESUPUESTO_TAREA_MS;
+    try {
+      const prog = await leerProgramacion();
+      if (!prog) return { ok: true, accion: 'sin programación', version: VERSION };
+
+      const estado = String(prog.estado || '').toUpperCase();
+      if (estado === 'TERMINADA') return { ok: true, accion: 'terminada', version: VERSION };
+
+      const ahora = new Date();
+      const inicio = new Date(prog.inicio);
+      const fin = new Date(prog.fin);
+      if (isNaN(inicio.getTime()) || isNaN(fin.getTime())) {
+        console.error(`${TAG} ❌ Campaña programada con fechas no válidas`);
+        return { ok: false, accion: 'fechas no válidas', version: VERSION };
+      }
+
+      // 1) Fin alcanzado: terminar.
+      if (ahora >= fin) {
+        let saltar = 0;
+        let restaurados = 0;
+        let respetados = 0;
+        let fallidos = 0;
+        let completo = false;
+        while (quedaTiempo()) {
+          const r = await terminarLoteCampanaInterno(LOTE_TAREA, saltar);
+          if (!r.procesados) { completo = true; break; }
+          restaurados += r.restaurados;
+          respetados += r.respetados;
+          fallidos += r.errores.length;
+          saltar += r.errores.length;
+        }
+        await invalidarCacheCorreos('campaña programada: fin');
+
+        if (completo) {
+          const resultado = fallidos
+            ? `${fallidos} producto(s) no pudieron recuperar su oferta: pulsa TERMINAR CAMPAÑA para reintentarlo.`
+            : 'Cada producto ha recuperado la oferta que tenía antes.';
+          await guardarResultadoProgramacion(prog, { estado: 'TERMINADA', resultado });
+        } else {
+          await guardarResultadoProgramacion(prog, { resultado: 'Terminando la campaña. Continúa en la siguiente vuelta.' });
+        }
+        console.log(`${TAG} 🗓 Tarea: fin de campaña → ${restaurados} restaurados, ${respetados} respetados, ${fallidos} con error, completo=${completo}`);
+        return { ok: true, accion: 'terminar', completo, version: VERSION };
+      }
+
+      // 2) Inicio alcanzado y aún sin aplicar entera: aplicar.
+      if (estado === 'PROGRAMADA' && ahora >= inicio) {
+        const pct = porcentajeCampana(prog.porcentaje);
+        if (pct === null) {
+          await guardarResultadoProgramacion(prog, { resultado: 'El porcentaje programado no es válido. Vuelve a programar la campaña.' });
+          return { ok: false, accion: 'porcentaje no válido', version: VERSION };
+        }
+
+        const { ids } = await idsCampanaInterno();
+        let actualizados = 0;
+        let fallidos = 0;
+        let i = 0;
+        for (; i < ids.length && quedaTiempo(); i += LOTE_TAREA) {
+          const r = await aplicarLoteCampanaInterno(pct, ids.slice(i, i + LOTE_TAREA));
+          actualizados += r.actualizados;
+          fallidos += r.errores.length;
+        }
+        const completo = i >= ids.length;
+        await invalidarCacheCorreos('campaña programada: inicio');
+
+        if (completo) {
+          const resultado = `Aplicada a ${actualizados} de ${ids.length} productos` + (fallidos ? `; ${fallidos} con error.` : '.');
+          await guardarResultadoProgramacion(prog, { estado: 'ACTIVA', resultado });
+        } else {
+          await guardarResultadoProgramacion(prog, { resultado: `Aplicando: ${Math.min(i, ids.length)} de ${ids.length} productos. Continúa en la siguiente vuelta.` });
+        }
+        console.log(`${TAG} 🗓 Tarea: inicio de campaña -${pct}% → ${actualizados} de ${ids.length}, ${fallidos} con error, completo=${completo}`);
+        return { ok: true, accion: 'aplicar', completo, version: VERSION };
+      }
+
+      return { ok: true, accion: 'esperando', version: VERSION };
+
+    } catch (e) {
+      console.error(`${TAG} ❌ ejecutarCampanaProgramada FAIL:`, e.message);
+      return { ok: false, error: e.message, version: VERSION };
+    }
   }
 );
 
