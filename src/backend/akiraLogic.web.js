@@ -1,8 +1,24 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.10.0
+ * VERSION:  1.10.1
  * FECHA:    24 Noviembre 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.10.0 → v1.10.1 — EL MOTIVO DE UN BLOQUEO NO SE INTERPRETA
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   Primera respuesta real tras v1.10.0 (Hair-Times, 24-Nov): los cuatro
+ *   bloqueos de Ricardo, bien y con su hora. Pero cerró con «parecen
+ *   reservas manuales para esas personas, posiblemente clientes sin cita
+ *   formal» sobre el motivo «raul Y JESUS», y reescribió los motivos
+ *   («Raúl y Jesús», «Lavado»). Es invención: el sistema no tiene más dato
+ *   que ese texto. La empujaba la regla de asesor de aportar siempre una
+ *   conclusión.
+ *
+ *   Una regla en el bloque de datos: el motivo es texto libre del salón, se
+ *   cita tal cual y no se interpreta. Manda sobre la de aportar conclusiones.
+ *   Solo cambia el prompt; el motor de datos no se toca.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.9.0 → v1.10.0 — EL PROFESIONAL SE LEE POR IDENTIFICADOR Y CADA
@@ -527,7 +543,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '1.10.0';
+const VERSION = '1.10.1';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -2591,7 +2607,11 @@ function _buildSystemBlocks(ctx) {
     'profesional): úsalos para decir a qué hora es cada cosa. Para preguntas sobre',
     'bloqueos (descansos, comidas, ausencias) usa incluirBloqueos: llegan en `bloqueos`',
     'con su hora y su motivo. Si la herramienta no trae bloqueos, di que no constan; no',
-    'afirmes que el sistema no tiene ninguno sin haberlos pedido con incluirBloqueos.'
+    'afirmes que el sistema no tiene ninguno sin haberlos pedido con incluirBloqueos.',
+    'El MOTIVO de un bloqueo es texto libre que escribe el salón: cítalo tal cual, sin',
+    'corregirlo, traducirlo ni cambiar mayúsculas o tildes. No lo interpretes: no',
+    'deduzcas quién es, para qué es el hueco ni qué debería hacerse con él, porque no',
+    'hay más dato que ese texto. Esta regla manda sobre la de aportar conclusiones.'
   ].join('\n'));
 
   // ── REGLAS DE USO DE LA HERRAMIENTA ──
