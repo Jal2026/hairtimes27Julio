@@ -1,8 +1,59 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.9.0
- * FECHA:    20 Agosto 2026
+ * VERSION:  1.10.0
+ * FECHA:    24 Noviembre 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.9.0 → v1.10.0 — EL PROFESIONAL SE LEE POR IDENTIFICADOR Y CADA
+ *                             SERVICIO CUENTA PARA QUIEN LO HACE
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   EL FALLO (Hair-Times, 24-Nov-2026, en directo):
+ *   «¿Qué bloqueos tiene Ricardo el próximo viernes?» → «ninguno», con
+ *   cuatro bloqueos suyos pintados en Recepción PRO, y «3 citas» cuando
+ *   en su columna había 5. Comprobado contra el CMS del viernes 27:
+ *
+ *   1) BLOQUEOS INVISIBLES POR PROFESIONAL. crearBloqueo graba el
+ *      profesional en `staffId` y deja `staffName` VACÍO (los 11 bloqueos
+ *      del día, de los tres). El filtro `staffName` comparaba el texto de
+ *      la fila → «bloqueos de X» devolvía SIEMPRE cero, en cualquier salón.
+ *   2) TRAMOS MOVIDOS DE COLUMNA. Una fase arrastrada a otra columna lleva
+ *      su propio `staffId` (moverFase). El motor atribuía la cita entera
+ *      al titular: los dos «Corte Mujer (Complemento)» de Ricardo (dentro
+ *      de citas de Raquel y de Angela) contaban para ellas. Afectaba a
+ *      reservas, cobros, servicios y conversión — a toda la productividad
+ *      por profesional.
+ *   3) SIN HORA. La muestra traía la fecha pero no la hora: AKIRA no podía
+ *      decir «a las 14:20» aunque viera el dato.
+ *   4) minutosOcupados / minutosProceso SIEMPRE A 0 en citas V2. Se leía
+ *      la duración de la fase de `durationMin` / `duracion`, pero las fases
+ *      la guardan en `dur` (crearBloqueo, moverFase y todas las fases del
+ *      CMS). La ocupación real nunca llegaba al modelo.
+ *
+ *   EL ARREGLO (regla de atribución del cierre del día,
+ *   cierreLogicExtendido v1.1.6+ repartirLineasPorStaff):
+ *   · Profesional por IDENTIFICADOR contra StaffConfig (wixResourceId ‖
+ *     _id → displayName ‖ canonicalName sin prefijo de orden). El texto
+ *     `staffName` queda solo como respaldo. Arregla los bloqueos viejos y
+ *     nuevos sin migrar nada.
+ *   · Cada tramo de agenda (fase que ocupa) es de su profesional: el de su
+ *     `staffId` si lo lleva, el titular si no.
+ *   · Importes: cada línea de servicio se cruza con su fase (mismo label,
+ *     por ocurrencia). Las demás personas reciben su parte y el titular se
+ *     queda el resto, así que la suma cuadra con la cita / el cobro. En
+ *     cobros, la parte es tarifa × factor neto/bruto (el del cierre).
+ *   · Solo cuando la pregunta es POR PROFESIONAL (filtro staffName o
+ *     agruparPor 'staff') cada cita se desdobla en una fila por persona que
+ *     trabaja en ella. El resto de preguntas siguen contando citas y
+ *     cobros enteros: los totales no cambian.
+ *   · Cada fila de la muestra trae hora y tramos (inicio, fin, servicio,
+ *     profesional). Con incluirBloqueos llega además `bloqueos`: TODOS los
+ *     del periodo con hora, profesional y motivo, sin el tope de 40.
+ *   · Duración de fase: `dur` → (end − start) → campos antiguos.
+ *
+ *   Sin cambios de CMS, de widget ni de page code. No se toca la segunda
+ *   herramienta (configuración) ni el plano AYUDA.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.8.0 → v1.9.0 — SESIÓN ANTES DE PREGUNTAR (arregla el 504 de la
@@ -476,7 +527,7 @@ import { getSecret } from 'wix-secrets-backend';
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
 
-const VERSION = '1.9.0';
+const VERSION = '1.10.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -686,6 +737,167 @@ async function findAll(query, limite) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v1.10.0 — PROFESIONAL POR IDENTIFICADOR Y REPARTO POR TRAMO
+// ═══════════════════════════════════════════════════════════════════════════
+// Regla del cierre del día (cierreLogicExtendido v1.1.6+): en la agenda cada
+// fase lleva su profesional; una fase sin `staffId` propio es del titular.
+
+// Valores de PaymentReservations.staff que NO son personas (ventas de
+// producto y ESPECIALES). Copia de cierreLogicExtendido / estadisticas.
+const MARCADORES_NO_PERSONA = new Set(['TIENDA', 'TIENDA_POS', 'ESPECIALES']);
+
+// Copia literal de cierreLogicExtendido.nombreStaffLimpio: el prefijo 'C_'
+// es de ordenación y no forma parte del nombre.
+function nombreStaffLimpio(v) {
+  return String(v || '').trim().replace(/^[A-Z]_/, '').trim();
+}
+
+// Copia literal de cierreLogicExtendido.horaMadrid.
+function horaMadrid(d) {
+  if (!d) return '';
+  const dd = (d instanceof Date) ? d : new Date(d);
+  return dd.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Europe/Madrid' });
+}
+
+/**
+ * Duración de una fase en minutos. Las fases del CMS la guardan en `dur`
+ * (crearBloqueo, moverFase…). Si falta, se mide con end − start, como hace
+ * moverFase. Los campos que leía v1.9.0 quedan como último respaldo.
+ */
+function _durFase(f) {
+  if (!f) return 0;
+  const d = Number(f.dur);
+  if (Number.isFinite(d) && d > 0) return d;
+  if (f.start && f.end) {
+    const ms = new Date(f.end).getTime() - new Date(f.start).getTime();
+    if (Number.isFinite(ms) && ms > 0) return Math.round(ms / 60000);
+  }
+  const legado = Number(f.durationMin != null ? f.durationMin : f.duracion);
+  return Number.isFinite(legado) && legado > 0 ? legado : 0;
+}
+
+// wixResourceId → nombre del profesional. Es el identificador que guardan
+// la cita (`staffId`) y sus fases. `wixResourceId || _id`, como resuelve
+// recepcionProLogic el id del profesional. Sin filtro `active`: el
+// histórico puede nombrar a alguien que ya no está. Caché corta, como el
+// mapa del catálogo.
+let _staffPorRid = null;
+let _staffPorRidTs = 0;
+const _STAFF_TTL_MS = 5 * 60 * 1000;
+
+async function _getStaffPorResourceId() {
+  const ahora = Date.now();
+  if (_staffPorRid && (ahora - _staffPorRidTs) < _STAFF_TTL_MS) return _staffPorRid;
+  const mapa = {};
+  try {
+    const res = await wixData.query(C_STAFF).limit(100).find(AUTH);
+    for (const s of (res.items || [])) {
+      const nombre = nombreStaffLimpio(s.displayName || s.canonicalName);
+      const rid = String(s.wixResourceId || s._id || '').trim();
+      if (rid && nombre) mapa[rid] = nombre;
+    }
+  } catch (e) {
+    console.warn(`${TAG} _getStaffPorResourceId fallo:`, e.message);
+    return mapa;   // sin cachear el fallo
+  }
+  _staffPorRid = mapa;
+  _staffPorRidTs = ahora;
+  return mapa;
+}
+
+/** Citas por _id, en lotes de 50 (patrón de estadisticas.titularPorReserva). */
+async function _cargarReservasPorId(ids) {
+  const lista = Array.from(new Set(Array.from(ids || []).map(x => String(x || '').trim()).filter(Boolean)));
+  const out = {};
+  for (let i = 0; i < lista.length; i += 50) {
+    const lote = lista.slice(i, i + 50);
+    try {
+      const r = await wixData.query(C_RESERVAS).hasSome('_id', lote).limit(50).find(AUTH);
+      for (const it of (r.items || [])) out[it._id] = it;
+    } catch (e) {
+      console.warn(`${TAG} _cargarReservasPorId lote ${i}:`, e.message);
+    }
+  }
+  return out;
+}
+
+/**
+ * Líneas de servicio de la cita con el profesional que ejecuta cada una.
+ * MISMA REGLA que repartirLineasPorStaff del cierre del día: la línea de
+ * serviciosDetail se cruza con la fase `tipo:'servicio'` del mismo label; si
+ * el servicio se repite, por número de ocurrencia. El staffId de esa fase se
+ * resuelve contra StaffConfig. Sin staffId propio → `quien: null` (titular).
+ * Fuera, como en el cierre: productos 🛒, [EXTRA] y descuentos. Las líneas a
+ * 0 € entran para que la ocurrencia se alinee con todas las fases.
+ */
+function _lineasConProfesional(reserva, staffMap) {
+  const fasesSvc = jsonIn(reserva.fases, 'items').filter(f => f && f.tipo === 'servicio');
+  const vistas = {};
+  const out = [];
+  const items = String(reserva.serviciosDetail || '').split(';;').filter(Boolean);
+  for (const raw of items) {
+    const t = raw.trim();
+    if (!t) continue;
+    const [labelRaw, priceRaw, cantRaw] = t.split('|');
+    const label = (labelRaw || '').trim();
+    if (!label) continue;
+    if (label.startsWith('🛒') || label.startsWith('[EXTRA]')) continue;
+    if (label.toLowerCase().includes('descuento') || label.startsWith('[DESC]')) continue;
+    const precio = parseFloat(String(priceRaw || '0').replace(',', '.')) || 0;
+    const cantidad = parseInt(cantRaw || '1', 10) || 1;
+
+    const occ = vistas[label] || 0;
+    vistas[label] = occ + 1;
+
+    let quien = null;
+    let seen = 0;
+    for (const f of fasesSvc) {
+      if (String(f.label || '').trim() !== label) continue;
+      if (seen === occ) {
+        const sid = String(f.staffId || '').trim();
+        if (sid && staffMap[sid]) quien = staffMap[sid];
+        break;
+      }
+      seen++;
+    }
+    out.push({ nombre: label, precio, cantidad, quien });
+  }
+  return out;
+}
+
+/**
+ * Bruto de la cita para el factor neto/bruto de un cobro: servicios (> 0 €)
+ * + extras + productos de serviciosDetail. Mismo cálculo que el cierre del
+ * día (parsearServiciosDetail + brutoLineas).
+ */
+function _brutoLineasCita(detalle) {
+  let bruto = 0;
+  const items = String(detalle || '').split(';;').filter(Boolean);
+  for (const raw of items) {
+    const t = raw.trim();
+    if (!t) continue;
+    const [labelRaw, priceRaw, cantRaw] = t.split('|');
+    const label = (labelRaw || '').trim();
+    const price = parseFloat(String(priceRaw || '0').replace(',', '.')) || 0;
+    const cant  = parseInt(cantRaw || '1', 10) || 1;
+    if (label.startsWith('🛒')) bruto += Math.round(price * cant * 100) / 100;
+    else if (label.startsWith('[EXTRA]')) bruto += price;
+    else if (label.toLowerCase().includes('descuento') || label.startsWith('[DESC]')) continue;
+    else if (price > 0) bruto += price * cant;
+  }
+  return bruto;
+}
+
+function _mismoProfesional(a, b) {
+  return nombreStaffLimpio(a).toLowerCase() === nombreStaffLimpio(b).toLowerCase();
+}
+
+/** ¿La pregunta es por profesional? Solo entonces se desdobla por persona. */
+function _esConsultaPorProfesional(f) {
+  return !!(f && ((f.staffName && String(f.staffName).trim()) || f.agruparPor === 'staff'));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MOTOR DE CONSULTA — TRES MODOS, FILTROS ORTOGONALES
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -701,38 +913,131 @@ async function findAll(query, limite) {
 // → JS filtra, agrega y divide. Sonnet solo narra el resultado.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Normaliza una fila de KamisuiteReservations a la forma que usa el motor. */
-function normalizarReserva(r) {
+/**
+ * Normaliza una fila de KamisuiteReservations a la forma que usa el motor.
+ * v1.10.0 — `staffMap` (wixResourceId → nombre) resuelve el titular por
+ * identificador y el profesional de cada tramo. Añade hora, tramos, minutos
+ * por profesional y el reparto del precio entre quienes trabajan la cita.
+ */
+function normalizarReserva(r, staffMap) {
+  const sm = staffMap || {};
   const fecha = fechaISOenMadrid(r.fechaReserva);
   const fasesArr = jsonIn(r.fases, 'items');
+  const esBloqueo = r.family === FAMILY_BLOQUEO;
+
+  // v1.10.0 — titular por IDENTIFICADOR. Los bloqueos se graban con
+  // staffName vacío: el texto solo es respaldo.
+  const titular = sm[String(r.staffId || '').trim()] || nombreStaffLimpio(r.staffName) || '';
+
   // PROCESO = fases con ocupa:false. NO ocupan al estilista (Conceptos
   // Fundacionales §1). Se separan para poder medir ocupación real.
+  // v1.10.0 — duración real de la fase (`dur`), y cada fase que ocupa es un
+  // TRAMO de su profesional.
   let minOcupa = 0, minProceso = 0;
+  const tramos = [];
+  const minPorProfesional = {};
   for (const f of fasesArr) {
-    const dur = Number(f && f.durationMin != null ? f.durationMin : (f && f.duracion) || 0) || 0;
-    if (f && f.ocupa === false) minProceso += dur;
-    else minOcupa += dur;
+    if (!f) continue;
+    const dur = _durFase(f);
+    if (f.ocupa === false) { minProceso += dur; continue; }
+    minOcupa += dur;
+    const sid = String(f.staffId || '').trim();
+    const deFase = sid ? sm[sid] : '';
+    const profesional = (deFase && !_mismoProfesional(deFase, titular)) ? deFase : titular;
+    minPorProfesional[profesional] = (minPorProfesional[profesional] || 0) + dur;
+    tramos.push({
+      inicio: horaMadrid(f.start),
+      fin: horaMadrid(f.end),
+      servicio: f.label || '',
+      profesional,
+      _ms: f.start ? new Date(f.start).getTime() : 0
+    });
   }
+  tramos.sort((a, b) => a._ms - b._ms);
+
+  // v1.10.0 — reparto del precio: las líneas que hace otra persona son
+  // suyas; el titular se queda el resto (la suma es el precio de la cita).
+  const precio = Number(r.precioTotal) || 0;
+  const cuotas = {};
+  let resto = precio;
+  for (const l of _lineasConProfesional(r, sm)) {
+    if (!l.quien || _mismoProfesional(l.quien, titular) || l.precio <= 0) continue;
+    const imp = l.precio * l.cantidad;
+    cuotas[l.quien] = (cuotas[l.quien] || 0) + imp;
+    resto -= imp;
+  }
+  cuotas[titular] = (cuotas[titular] || 0) + resto;
+
   return {
     id: r._id,
     fecha,
+    hora: horaMadrid(r.fechaReserva),
     dow: dowMadrid(r.fechaReserva),
     family: r.family || '',
     group: r.group || '',
     status: r.status || '',
-    precio: Number(r.precioTotal) || 0,
+    precio,
     duracion: Number(r.duracionTotal) || 0,
     minOcupa,
     minProceso,
     staffId: r.staffId || '',
-    staffName: r.staffName || '',
+    staffName: titular,
     cliente: r.clientName || '',
     contactId: r.contactId || '',
     telefono: r.clientPhone || '',
     origenRecepcion: r.origenRecepcion === true,
     servicios: r.serviciosDetail || '',
-    titulo: r.title || ''
+    titulo: r.title || '',
+    esBloqueo,
+    motivo: esBloqueo ? (r.title || '') : '',
+    tramos,
+    minPorProfesional,
+    cuotas
   };
+}
+
+/** Personas que trabajan en una cita: las que tienen tramo o importe. */
+function _participantes(r) {
+  const set = new Set(Object.keys(r.minPorProfesional || {}));
+  for (const [k, v] of Object.entries(r.cuotas || {})) {
+    if (Math.abs(Number(v) || 0) > 0.000001) set.add(k);
+  }
+  if (!set.size) set.add(r.staffName);
+  return Array.from(set);
+}
+
+/**
+ * v1.10.0 — Desdobla cada cita en una fila por profesional que trabaja en
+ * ella: su parte del precio, sus minutos y sus tramos. El proceso queda con
+ * el titular. `precioCita` conserva el precio entero (lo usa conversión).
+ */
+function _expandirPorProfesional(filas) {
+  const out = [];
+  for (const r of filas) {
+    const personas = _participantes(r);
+    for (const quien of personas) {
+      const tramos = (r.tramos || []).filter(t => t.profesional === quien);
+      out.push({
+        ...r,
+        staffName: quien,
+        precio: Number(r.cuotas && r.cuotas[quien]) || 0,
+        precioCita: r.precio,
+        minOcupa: (r.minPorProfesional && r.minPorProfesional[quien]) || 0,
+        minProceso: quien === r.staffName ? r.minProceso : 0,
+        tramos,
+        hora: tramos.length ? tramos[0].inicio : r.hora,
+        titularCita: r.staffName,
+        compartida: personas.length > 1
+      });
+    }
+  }
+  out.sort((a, b) => (`${a.fecha} ${a.hora}`).localeCompare(`${b.fecha} ${b.hora}`));
+  return out;
+}
+
+/** Forma de un tramo en la respuesta al modelo. */
+function _tramosSalida(tramos) {
+  return (tramos || []).map(t => ({ inicio: t.inicio, fin: t.fin, servicio: t.servicio, profesional: t.profesional }));
 }
 
 /** Normaliza una fila de PaymentReservations. */
@@ -779,7 +1084,9 @@ function aplicarFiltros(filas, f, campoDow) {
     out = out.filter(r => ids.indexOf(r.staffId) !== -1);
   }
   if (f.staffName) {
-    const n = String(f.staffName).toLowerCase();
+    // v1.10.0 — sin el prefijo de orden ('A_Ricardo' → 'ricardo'): el modelo
+    // puede copiar el nombre tal cual aparece en StaffConfig.
+    const n = nombreStaffLimpio(f.staffName).toLowerCase();
     out = out.filter(r => String(r.staffName || r.staff || '').toLowerCase().indexOf(n) !== -1);
   }
   if (Array.isArray(f.diasSemana) && f.diasSemana.length > 0) {
@@ -856,7 +1163,8 @@ async function consultarReservas(f) {
   q = q.ascending('fechaReserva');
 
   const raw = await findAll(q, f.limite);
-  let filas = raw.map(normalizarReserva);
+  const staffMap = await _getStaffPorResourceId();   // v1.10.0
+  let filas = raw.map(r => normalizarReserva(r, staffMap));
 
   // Recorte exacto por día de Madrid (la query va en UTC y puede desbordar).
   if (f.desde) filas = filas.filter(r => r.fecha >= f.desde);
@@ -868,20 +1176,63 @@ async function consultarReservas(f) {
   if (!f.incluirBloqueos) filas = filas.filter(r => r.family !== FAMILY_BLOQUEO);
   if (f.status) filas = filas.filter(r => r.status === f.status);
 
+  // v1.10.0 — pregunta por profesional: una fila por persona y cita, con
+  // su parte, sus minutos y sus tramos.
+  const porProfesional = _esConsultaPorProfesional(f);
+  if (porProfesional) filas = _expandirPorProfesional(filas);
+
   filas = aplicarFiltros(filas, f, 'dow');
 
   const res = agregar(filas, 'precio', f.agruparPor);
   if (raw._truncado) {
     res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más registros de los que se pueden leer de una vez. Advierte al usuario de que las cifras son parciales y sugiérele acotar el periodo.';
   }
+  if (porProfesional) {
+    res.REPARTO = 'Por profesional: cada servicio cuenta para quien lo hace (su columna en la agenda), aunque la cita sea de otra persona. numRegistros = citas en las que trabaja; importeTotal = su parte de esas citas; minutosOcupados = sus tramos.';
+  }
   res.minutosOcupados = filas.reduce((s, r) => s + r.minOcupa, 0);
   res.minutosProceso  = filas.reduce((s, r) => s + r.minProceso, 0);
-  res.clientesUnicos  = new Set(filas.map(r => r.contactId || r.cliente).filter(Boolean)).size;
-  res.muestra = filas.slice(0, 40).map(r => ({
-    fecha: r.fecha, family: r.family, staff: r.staffName, cliente: r.cliente,
-    precio: r.precio, duracion: r.duracion, status: r.status,
-    origen: r.origenRecepcion ? 'recepción' : 'web', servicios: r.servicios
-  }));
+  // v1.10.0 — un bloqueo no es una clienta.
+  res.clientesUnicos  = new Set(filas.filter(r => !r.esBloqueo).map(r => r.contactId || r.cliente).filter(Boolean)).size;
+
+  // v1.10.0 — bloqueos completos (sin el tope de la muestra), con hora.
+  if (f.incluirBloqueos) {
+    const bloqueos = filas.filter(r => r.esBloqueo);
+    res.numBloqueos = bloqueos.length;
+    res.bloqueos = bloqueos.slice(0, 200).map(r => ({
+      fecha: r.fecha,
+      inicio: r.tramos.length ? r.tramos[0].inicio : r.hora,
+      fin: r.tramos.length ? r.tramos[r.tramos.length - 1].fin : '',
+      profesional: r.staffName,
+      motivo: r.motivo,
+      duracionMin: r.minOcupa
+    }));
+  }
+
+  res.muestra = filas.slice(0, 40).map(r => {
+    const m = {
+      fecha: r.fecha, hora: r.hora,
+      tipo: r.esBloqueo ? 'bloqueo' : 'cita',
+      staff: r.staffName
+    };
+    if (r.esBloqueo) {
+      m.motivo = r.motivo;
+    } else {
+      m.family = r.family;
+      m.cliente = r.cliente;
+      m.precio = round2(r.precio);
+      m.status = r.status;
+      m.origen = r.origenRecepcion ? 'recepción' : 'web';
+      m.servicios = r.servicios;
+    }
+    m.duracion = r.duracion;
+    m.tramos = _tramosSalida(r.tramos);
+    if (porProfesional && r.titularCita && r.titularCita !== r.staffName) m.titularCita = r.titularCita;
+    return m;
+  });
+  if (filas.length > 40) {
+    res.muestraParcial = `La muestra enseña 40 de ${filas.length} filas. Los totales sí cubren todas; para el detalle completo acota el periodo o el profesional.`;
+  }
   return res;
 }
 
@@ -1040,9 +1391,11 @@ async function consultarServicios(f) {
   if (f.hasta) cobros = cobros.filter(r => r.fechaPago <= f.hasta);
   // Productos de tienda POS no son servicios (Guía V2.0 §D.2: staff='TIENDA_POS').
   cobros = cobros.filter(r => String(r.staff || '').toUpperCase() !== 'TIENDA_POS');
-  // Filtros de cobro que también aplican al servicio (staff, día, cliente…).
+  // Filtros de cobro que también aplican al servicio (día, cliente…).
   // family/group se filtran DESPUÉS, a nivel de servicio individual.
-  cobros = aplicarFiltros(cobros, { ...f, family: undefined, group: undefined }, 'dowPago');
+  // v1.10.0 — staffName también: el profesional es el de CADA servicio, no
+  // el titular del cobro.
+  cobros = aplicarFiltros(cobros, { ...f, family: undefined, group: undefined, staffName: undefined }, 'dowPago');
 
   const gruposPedidos = f.group
     ? (Array.isArray(f.group) ? f.group : [f.group]).map(normalizarGroup)
@@ -1065,7 +1418,9 @@ async function consultarServicios(f) {
         dow: c.dowPago,
         staffName: c.staff,
         cliente: c.cliente,
-        _catalogado: group !== ''
+        _catalogado: group !== '',
+        _cobroId: c.id,
+        _reservaId: c.reservaId
       });
     }
   }
@@ -1073,6 +1428,41 @@ async function consultarServicios(f) {
   // Filtro por categoría (group) a nivel de SERVICIO, no de cobro.
   if (gruposPedidos) {
     servicios = servicios.filter(s => gruposPedidos.indexOf(normalizarGroup(s.group)) !== -1);
+  }
+
+  // v1.10.0 — PROFESIONAL DE CADA SERVICIO. El cobro guarda al titular de la
+  // cita; quién hizo cada línea está en las fases de la cita (KRI_<id>).
+  // Pregunta por profesional → se resuelven todas; si no, solo las que van
+  // en la muestra (una lectura, no una por cobro del periodo).
+  const porProfesional = _esConsultaPorProfesional(f);
+  const objetivo = porProfesional ? servicios : servicios.slice(0, 40);
+  const idsCita = new Set(objetivo
+    .filter(s => s._reservaId && !MARCADORES_NO_PERSONA.has(String(s.staffName || '').trim().toUpperCase()))
+    .map(s => s._reservaId));
+  if (idsCita.size > 0) {
+    const staffMap = await _getStaffPorResourceId();
+    const citas = await _cargarReservasPorId(idsCita);
+    const colasPorCobro = {};
+    for (const s of objetivo) {
+      const cita = s._reservaId ? citas[s._reservaId] : null;
+      if (!cita) continue;
+      if (!colasPorCobro[s._cobroId]) {
+        // Solo líneas > 0 €: _parsearDescripcionCobro descarta las de 0 €.
+        const colas = {};
+        for (const l of _lineasConProfesional(cita, staffMap)) {
+          if (l.precio <= 0) continue;
+          if (!colas[l.nombre]) colas[l.nombre] = [];
+          colas[l.nombre].push(l.quien || s.staffName);
+        }
+        colasPorCobro[s._cobroId] = colas;
+      }
+      const cola = colasPorCobro[s._cobroId][s.nombre];
+      if (cola && cola.length) s.staffName = cola.shift();
+    }
+  }
+  if (f.staffName) {
+    const n = nombreStaffLimpio(f.staffName).toLowerCase();
+    servicios = servicios.filter(s => String(s.staffName || '').toLowerCase().indexOf(n) !== -1);
   }
 
   const totalImporte = servicios.reduce((s, x) => s + x.precio, 0);
@@ -1134,18 +1524,76 @@ async function consultarCobros(f) {
   if (f.desde) filas = filas.filter(r => r.fechaPago >= f.desde);
   if (f.hasta) filas = filas.filter(r => r.fechaPago <= f.hasta);
 
+  // v1.10.0 — pregunta por profesional: cada cobro de cita se reparte entre
+  // quienes la trabajaron (regla del cierre del día).
+  const porProfesional = _esConsultaPorProfesional(f);
+  if (porProfesional) filas = await _repartirCobrosPorProfesional(filas);
+
   filas = aplicarFiltros(filas, f, 'dowPago');
 
   const res = agregar(filas, 'importe', f.agruparPor);
   if (raw._truncado) {
     res.AVISO = 'Los datos están INCOMPLETOS: el periodo tiene más registros de los que se pueden leer de una vez. Advierte al usuario de que las cifras son parciales y sugiérele acotar el periodo.';
   }
+  if (porProfesional) {
+    res.REPARTO = 'Por profesional: cada servicio cobrado cuenta para quien lo hizo, aunque el cobro sea de una cita de otra persona (con el descuento repartido en proporción). El titular de la cita se queda el resto del cobro.';
+  }
   res.clientesUnicos = new Set(filas.map(r => r.contactId || r.cliente).filter(Boolean)).size;
-  res.muestra = filas.slice(0, 40).map(r => ({
-    fechaPago: r.fechaPago, importe: r.importe, tipoPago: r.tipoPago,
-    staff: r.staff, cliente: r.cliente, descripcion: r.descripcion
-  }));
+  // v1.10.0 — sin reparto, `staff` del cobro es el TITULAR de la cita, no
+  // quien hizo cada servicio: se le llama por su nombre.
+  res.muestra = filas.slice(0, 40).map(r => {
+    const m = {
+      fechaPago: r.fechaPago, importe: round2(r.importe), tipoPago: r.tipoPago,
+      cliente: r.cliente, descripcion: r.descripcion
+    };
+    if (porProfesional) {
+      m.staff = r.staff;
+      if (r.titularCita && !_mismoProfesional(r.titularCita, r.staff)) m.titularCita = r.titularCita;
+    } else {
+      m.titularCita = r.staff;
+    }
+    return m;
+  });
   return res;
+}
+
+/**
+ * v1.10.0 — Reparte cada cobro de cita entre quienes la trabajaron.
+ * Importe de cada línea = tarifa × factor neto/bruto del cobro (cierre del
+ * día). Las demás personas reciben su parte en una fila propia; el titular
+ * se queda el resto, así que la suma de las filas es el cobro. Cobros sin
+ * cita enlazada o de venta (TIENDA, ESPECIALES…) quedan como están.
+ */
+async function _repartirCobrosPorProfesional(filas) {
+  const conCita = filas.filter(c => c.reservaId && !MARCADORES_NO_PERSONA.has(String(c.staff || '').trim().toUpperCase()));
+  if (!conCita.length) return filas;
+  const staffMap = await _getStaffPorResourceId();
+  const citas = await _cargarReservasPorId(conCita.map(c => c.reservaId));
+
+  const out = [];
+  for (const c of filas) {
+    const cita = c.reservaId ? citas[c.reservaId] : null;
+    if (!cita || MARCADORES_NO_PERSONA.has(String(c.staff || '').trim().toUpperCase())) { out.push(c); continue; }
+
+    const bruto = _brutoLineasCita(cita.serviciosDetail);
+    const factor = bruto > 0 ? (c.importe / bruto) : 1;
+    const cuotas = {};
+    let resto = c.importe;
+    for (const l of _lineasConProfesional(cita, staffMap)) {
+      if (!l.quien || _mismoProfesional(l.quien, c.staff) || l.precio <= 0) continue;
+      const imp = l.precio * l.cantidad * factor;
+      cuotas[l.quien] = (cuotas[l.quien] || 0) + imp;
+      resto -= imp;
+    }
+    if (!Object.keys(cuotas).length) { out.push(c); continue; }
+
+    // Si todo lo hizo otra persona, el titular no trabajó en ese cobro.
+    if (Math.abs(resto) >= 0.005) out.push({ ...c, importe: resto, titularCita: c.staff });
+    for (const [quien, imp] of Object.entries(cuotas)) {
+      out.push({ ...c, staff: quien, importe: imp, titularCita: c.staff });
+    }
+  }
+  return out;
 }
 
 // ── MODO 3: CONVERSIÓN (el delta reservado → cobrado) ──────────────────────
@@ -1157,10 +1605,13 @@ async function consultarConversion(f) {
   if (f.hasta) q = q.le('fechaReserva', new Date(`${f.hasta}T23:59:59.999Z`));
   const rawR = await findAll(q, f.limite);
 
-  let reservas = rawR.map(normalizarReserva);
+  const staffMap = await _getStaffPorResourceId();   // v1.10.0
+  let reservas = rawR.map(r => normalizarReserva(r, staffMap));
   if (f.desde) reservas = reservas.filter(r => r.fecha >= f.desde);
   if (f.hasta) reservas = reservas.filter(r => r.fecha <= f.hasta);
   reservas = reservas.filter(r => r.family !== FAMILY_BLOQUEO);
+  // v1.10.0 — por profesional: una fila por persona y cita (su parte).
+  if (_esConsultaPorProfesional(f)) reservas = _expandirPorProfesional(reservas);
   reservas = aplicarFiltros(reservas, fReservas, 'dow');
 
   // Cobros del periodo (por fecha de RESERVA: así el cruce es del mismo lote).
@@ -1177,13 +1628,22 @@ async function consultarConversion(f) {
     cobradoPorReserva[c.reservaId] += c.importe;
   }
 
+  // v1.10.0 — en una fila por profesional, lo cobrado se reparte en la
+  // misma proporción que el precio de la cita (su parte / precio entero).
+  const cobradoDe = (r) => {
+    const c = cobradoPorReserva[r.id];
+    if (c == null) return null;
+    if (r.precioCita != null && Number(r.precioCita) !== 0) return c * (r.precio / r.precioCita);
+    return c;
+  };
+
   const canceladas = reservas.filter(r => r.status === STATUS_CANCELADA);
   const vivas      = reservas.filter(r => r.status !== STATUS_CANCELADA);
   const cobradas   = vivas.filter(r => cobradoPorReserva[r.id] != null);
   const sinCobrar  = vivas.filter(r => cobradoPorReserva[r.id] == null);
 
   const valorComprometido = vivas.reduce((s, r) => s + r.precio, 0);
-  const valorCobrado      = cobradas.reduce((s, r) => s + (cobradoPorReserva[r.id] || 0), 0);
+  const valorCobrado      = cobradas.reduce((s, r) => s + (cobradoDe(r) || 0), 0);
   const valorPerdido      = sinCobrar.reduce((s, r) => s + r.precio, 0);
   const valorCancelado    = canceladas.reduce((s, r) => s + r.precio, 0);
 
@@ -1211,7 +1671,7 @@ async function consultarConversion(f) {
       mapa[k].comprometido += r.precio;
       if (cobradoPorReserva[r.id] != null) {
         mapa[k].cobradas++;
-        mapa[k].cobrado += cobradoPorReserva[r.id];
+        mapa[k].cobrado += cobradoDe(r);
       }
     }
     res.desglose = Object.values(mapa).map(g => ({
@@ -1225,8 +1685,8 @@ async function consultarConversion(f) {
   }
 
   res.muestraSinCobrar = sinCobrar.slice(0, 25).map(r => ({
-    fecha: r.fecha, cliente: r.cliente, staff: r.staffName,
-    family: r.family, precio: r.precio, status: r.status
+    fecha: r.fecha, hora: r.hora, cliente: r.cliente, staff: r.staffName,
+    family: r.family, precio: round2(r.precio), status: r.status
   }));
   return res;
 }
@@ -1241,7 +1701,7 @@ async function ejecutarConsulta(filtros) {
   else if (modo === 'conversion') datos = await consultarConversion(f);
   else if (modo === 'servicios')  datos = await consultarServicios(f);
   else                            datos = await consultarReservas(f);
-  console.log(`${TAG} consulta modo=${modo} desde=${f.desde || '-'} hasta=${f.hasta || '-'} family=${f.family || '-'} group=${f.group || '-'} dow=[${(f.diasSemana || []).join(',')}] agrupa=${f.agruparPor || '-'} → ${Date.now() - t0}ms`);
+  console.log(`${TAG} consulta modo=${modo} desde=${f.desde || '-'} hasta=${f.hasta || '-'} family=${f.family || '-'} group=${f.group || '-'} staff=${f.staffName || '-'} bloqueos=${f.incluirBloqueos ? 'sí' : 'no'} dow=[${(f.diasSemana || []).join(',')}] agrupa=${f.agruparPor || '-'} → ${Date.now() - t0}ms`);
   return { modo, filtrosAplicados: f, ...datos };
 }
 
@@ -1684,7 +2144,7 @@ const TOOL_CONSULTAR = {
         type: 'array', items: { type: 'string' },
         description: 'Eje TÉCNICO secundario (naturaleza del servicio: simple, coloracion, tratamiento, externo, medida). Para categorías comerciales usa `group`, no esto. Vacío = todas.'
       },
-      staffName: { type: 'string', description: 'Filtra por nombre de profesional (coincidencia parcial).' },
+      staffName: { type: 'string', description: 'Filtra por profesional (coincidencia parcial del nombre). Cada servicio cuenta para quien lo hace —la columna en la que está en la agenda—, aunque la cita sea de otra persona: importes, minutos y servicios llegan ya repartidos así. Los bloqueos de agenda también se atribuyen a su profesional. Úsalo en cualquier pregunta sobre la agenda, el trabajo o la productividad de una persona.' },
       diasSemana: {
         type: 'array', items: { type: 'number' },
         description: 'Días de la semana: 0=domingo, 1=lunes … 6=sábado. Ej: [1,2] = lunes y martes.'
@@ -1695,10 +2155,10 @@ const TOOL_CONSULTAR = {
       agruparPor: {
         type: 'string',
         enum: ['ninguno', 'staff', 'family', 'group', 'dia', 'diaSemana', 'mes', 'tipoPago', 'cliente', 'origen', 'status', 'servicio'],
-        description: 'Eje de desglose del resultado. "group" desglosa por categoría. "servicio" (solo modo servicios) desglosa por nombre de servicio. "ninguno" devuelve solo los totales.'
+        description: 'Eje de desglose del resultado. "group" desglosa por categoría. "staff" desglosa por profesional, con cada servicio para quien lo hace. "servicio" (solo modo servicios) desglosa por nombre de servicio. "ninguno" devuelve solo los totales.'
       },
       incluirCanceladas: { type: 'boolean', description: 'Por defecto false. true para analizar cancelaciones.' },
-      incluirBloqueos: { type: 'boolean', description: 'Por defecto false. true solo para analizar bloqueos de agenda.' }
+      incluirBloqueos: { type: 'boolean', description: 'Por defecto false. true para ver los bloqueos de agenda (descansos, comidas, ausencias, huecos reservados a mano). Solo modo reservas: llegan en `bloqueos` con fecha, hora de inicio y fin, profesional y motivo.' }
     },
     required: ['modo']
   }
@@ -2080,7 +2540,7 @@ function _buildSystemBlocks(ctx) {
   if (conHerramientas) {
     if (staff && staff.length > 0) {
       ctxSalon.push('Profesionales activos: ' +
-        staff.map(s => s.displayName || s.canonicalName).filter(Boolean).join(', '));
+        staff.map(s => nombreStaffLimpio(s.displayName || s.canonicalName)).filter(Boolean).join(', '));
     }
     if (familias && familias.length > 0) {
       ctxSalon.push('Familias de servicio disponibles: ' + familias.join(', '));
@@ -2121,7 +2581,17 @@ function _buildSystemBlocks(ctx) {
     '',
     'origenRecepcion distingue si la reserva la creó el salón (recepción) o la clienta',
     'desde la web. Las reservas de familia BLOQUEO no son actividad comercial: son',
-    'huecos bloqueados en agenda, y quedan excluidas salvo que se pidan explícitamente.'
+    'huecos bloqueados en agenda, y quedan excluidas salvo que se pidan explícitamente.',
+    '',
+    'PROFESIONAL: en la agenda cada tramo de una cita tiene su profesional. Un',
+    'complemento puede hacerlo otra persona distinta de la titular de la cita (p. ej.',
+    'el corte dentro de unas mechas). Cuando filtras por profesional (staffName) o',
+    'agrupas por staff, los datos llegan ya repartidos: cada servicio cuenta para quien',
+    'lo hace. Cada fila de la muestra trae su hora y sus tramos (inicio, fin, servicio,',
+    'profesional): úsalos para decir a qué hora es cada cosa. Para preguntas sobre',
+    'bloqueos (descansos, comidas, ausencias) usa incluirBloqueos: llegan en `bloqueos`',
+    'con su hora y su motivo. Si la herramienta no trae bloqueos, di que no constan; no',
+    'afirmes que el sistema no tiene ninguno sin haberlos pedido con incluirBloqueos.'
   ].join('\n'));
 
   // ── REGLAS DE USO DE LA HERRAMIENTA ──

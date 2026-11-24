@@ -1,6 +1,52 @@
 // =====================================================
-// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.8.1
+// BACKEND estadisticas.web.js — KAMISUITE Estadísticas v2.9.0
 // =====================================================
+// v2.9.0 (24 nov 2026): PRODUCTIVIDAD POR TRAMO — CADA SERVICIO PARA QUIEN
+//   LO HACE.
+//
+//   DEFECTO. El reparto por profesional ("Por Staff" y "Productividad")
+//   imputaba el cobro ENTERO al titular de la cita (PaymentReservations.
+//   staff = staffName de la cita). Pero en la agenda cada tramo lleva su
+//   propio profesional: arrastrar un complemento a otra columna lo
+//   reasigna. Caso real Hair-Times, viernes 27-nov-2026: el «Corte Mujer
+//   (Complemento)» de Rosa García (23 €) y el de Ana Castaño (23 €) están
+//   en la columna de Ricardo, dentro de citas tituladas a Raquel y a
+//   Angela. El informe se los daba a ellas: euros, minutos y nº de
+//   servicios. Productividad falsa — inservible para pagar comisiones.
+//   El cierre del día ya repartía bien desde cierreLogicExtendido v1.1.6
+//   (repartirLineasPorStaff); el informe del periodo no.
+//
+//   REGLA (la del cierre del día). Cada línea de serviciosDetail de la
+//   cita se cruza con su fase `tipo:'servicio'` del mismo label (si el
+//   servicio se repite, por número de ocurrencia). El staffId de esa fase
+//   se resuelve contra StaffConfig. Sin staffId propio → titular.
+//   · EUROS: precio de tarifa de la línea × factor neto/bruto del cobro,
+//     igual que el cierre: el descuento se reparte en proporción. Las
+//     demás personas reciben su parte y el titular se queda el RESTO, de
+//     modo que la suma por persona cuadra al céntimo con el cobro. Extras,
+//     propinas y productos dentro del cobro siguen con el titular.
+//   · MINUTOS Y Nº DE SERVICIOS: línea a línea, para quien la ejecutó.
+//   · TRABAJO CONTRA BONO (canjes): para quien sirvió el servicio del bono
+//     en la cita (fase con el mismo setupUid). Hasta ahora iba al titular
+//     que manda el widget al canjear.
+//
+//   SIN MIGRAR DATOS. El cobro enlaza la cita por bookingId = KRI_<id> y
+//   la cita cobrada conserva sus fases, así que el histórico V2 se lee
+//   bien tal cual. Los cobros sin cita enlazada (histórico anterior a la
+//   migración) siguen con el profesional del cobro: no hay otro dato.
+//
+//   NO CAMBIA: totales del periodo, por método, por botón, IVA, desglose
+//   por categoría, ranking de servicios, externos (las líneas EXTERNAS
+//   dentro de una cita interna no se reparten: se siguen descontando del
+//   titular como en v2.7.1), productos/ESPECIALES (regla v2.8.0) ni la
+//   forma del objeto de retorno. El widget no se toca.
+//
+//   FIX DE PASO — MINUTOS DOBLES EN LÍNEAS A 0 €. Una línea a 0 € (p. ej.
+//   «Tamaño Pelo & Planchado Longitud de Pelo M (0€)» o un servicio
+//   servido contra bono) sumaba sus minutos y su servicio DOS veces: una
+//   en el bloque común y otra en la rama `precio <= 0`. Se quita la
+//   segunda suma.
+//
 // v2.8.1 (31 ago 2026): TOTAL DE DESCUENTOS EN EL RETORNO.
 //   Nuevo campo `totalDescuentos`: suma de los descuentos aplicados en los
 //   cobros internos del período, parseando el token "🏷️ Descuento ..." de
@@ -267,7 +313,7 @@ import { orders } from 'wix-ecom-backend';
 import { elevate } from 'wix-auth';
 import wixData from 'wix-data';
 
-const VERSION = '2.8.1';
+const VERSION = '2.9.0';
 const TAG = `[Stats v${VERSION}]`;
 const COLECCION_PAGOS = 'PaymentReservations';
 const CMS_RESERVAS = 'KamisuiteReservations';
@@ -355,6 +401,111 @@ function normalizarBoton(tipoPago) {
   if (u.includes('MIXTO')) return 'Mixto';
   if (u.includes('CANJE')) return 'Canje';
   return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v2.9.0 — PRODUCTIVIDAD POR TRAMO: QUIÉN HACE CADA SERVICIO
+// ═══════════════════════════════════════════════════════════════════════════
+// Regla de atribución del cierre del día (cierreLogicExtendido v1.1.6+,
+// repartirLineasPorStaff), para que el informe del periodo reparta igual
+// que el del día.
+
+// PaymentReservations.bookingId de un cobro de cita interna = KRI_<reservaId>
+// (recepcionProLogic.marcarPagadoReserva).
+const PREFIJO_PAGO_INTERNO = 'KRI_';
+
+// Copia literal de cierreLogicExtendido.nombreStaffLimpio: el prefijo 'C_'
+// es de ordenación y no forma parte del nombre.
+function nombreStaffLimpio(v) {
+  return String(v || '').trim().replace(/^[A-Z]_/, '').trim();
+}
+
+// Copia literal de cierreLogicExtendido.itemsDe: campo JSON del CMS que
+// puede llegar como objeto {items:[...]}, como string JSON o como array.
+function itemsDe(v, key) {
+  if (!v) return [];
+  let o = v;
+  if (typeof o === 'string') {
+    try { o = JSON.parse(o); } catch (_) { return []; }
+  }
+  if (Array.isArray(o)) return o;
+  if (o && Array.isArray(o[key])) return o[key];
+  return [];
+}
+
+// Copia literal de cierreLogicExtendido.parsearServiciosDetail. Aquí se usa
+// para el bruto de la cita (servicios + extras + productos), que es la base
+// del factor neto/bruto, exactamente como en el cierre.
+function parsearServiciosDetail(detalle) {
+  if (!detalle) return { servicios: [], productos: [], extras: [], descuento: 0 };
+  const servicios = [];
+  const productos = [];
+  const extras = [];
+  let descuento = 0;
+  const items = String(detalle).split(';;').filter(Boolean);
+  for (const raw of items) {
+    const t = raw.trim();
+    if (!t) continue;
+    const [labelRaw, priceRaw, cantRaw] = t.split('|');
+    const label = (labelRaw || '').trim();
+    const price = parseFloat(String(priceRaw || '0').replace(',', '.')) || 0;
+    const cant  = parseInt(cantRaw || '1', 10) || 1;
+    if (label.startsWith('🛒')) {
+      productos.push({ nombre: label.replace(/^🛒\s*/, '').trim(), precio: price, cantidad: cant, subtotal: Math.round(price * cant * 100) / 100 });
+    } else if (label.startsWith('[EXTRA]')) {
+      extras.push({ concepto: label.replace(/^\[EXTRA\]\s*/, '').trim(), importe: price });
+    } else if (label.toLowerCase().includes('descuento') || label.startsWith('[DESC]')) {
+      descuento += Math.abs(price);
+    } else {
+      if (price > 0) servicios.push({ nombre: label, precio: price, cantidad: cant });
+    }
+  }
+  return { servicios, productos, extras, descuento };
+}
+
+// Líneas de servicio de la cita con el profesional que ejecuta cada una.
+//   MISMA REGLA que repartirLineasPorStaff del cierre del día: la línea se
+//   cruza con la fase `tipo:'servicio'` del mismo label; si el servicio se
+//   repite en la cita, se alinean por número de ocurrencia. El staffId de
+//   esa fase se resuelve contra StaffConfig. Sin staffId propio (nadie la
+//   movió de columna) → `quien: null` = titular de la cita.
+//   Se excluyen las mismas líneas que en el cierre (productos 🛒, [EXTRA],
+//   descuentos). A diferencia del cierre, entran también las líneas a 0 €:
+//   no suman dinero, pero sí minutos y nº de servicios, y contarlas hace
+//   que la ocurrencia de cada label se alinee con TODAS sus fases.
+function lineasConProfesional(reserva, staffPorResourceId) {
+  const fasesSvc = itemsDe(reserva.fases, 'items').filter(f => f && f.tipo === 'servicio');
+  const vistas = {};
+  const out = [];
+  const items = String(reserva.serviciosDetail || '').split(';;').filter(Boolean);
+  for (const raw of items) {
+    const t = raw.trim();
+    if (!t) continue;
+    const [labelRaw, priceRaw, cantRaw] = t.split('|');
+    const label = (labelRaw || '').trim();
+    if (!label) continue;
+    if (label.startsWith('🛒') || label.startsWith('[EXTRA]')) continue;
+    if (label.toLowerCase().includes('descuento') || label.startsWith('[DESC]')) continue;
+    const price = parseFloat(String(priceRaw || '0').replace(',', '.')) || 0;
+    const cant  = parseInt(cantRaw || '1', 10) || 1;
+
+    const occ = vistas[label] || 0;
+    vistas[label] = occ + 1;
+
+    let quien = null;
+    let seen = 0;
+    for (const f of fasesSvc) {
+      if (String(f.label || '').trim() !== label) continue;
+      if (seen === occ) {
+        const sid = String(f.staffId || '').trim();
+        if (sid && staffPorResourceId[sid]) quien = staffPorResourceId[sid];
+        break;
+      }
+      seen++;
+    }
+    out.push({ nombre: label, precio: price, cantidad: cant, quien });
+  }
+  return out;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -696,6 +847,105 @@ export const obtenerEstadisticas = webMethod(
       };
 
       // ══════════════════════════════════════════════════════════════
+      // 2·ter. v2.9.0 — CITAS DE LOS COBROS + PERSONAL (reparto por tramo)
+      // ══════════════════════════════════════════════════════════════
+      //    El cobro guarda como `staff` al titular de la cita. Quién hizo
+      //    cada servicio vive en las fases de la cita, que se conservan
+      //    tras el cobro. Se leen solo las citas de los cobros de servicio
+      //    del periodo (y, más abajo, las de los canjes de bono).
+
+      // wixResourceId → nombre. Es el identificador que guardan las fases
+      // en `staffId`. `wixResourceId || _id`, como resuelve recepcionProLogic
+      // el id del profesional. Sin filtro `active`: el histórico puede
+      // nombrar a alguien que ya no trabaja en el salón.
+      const staffPorResourceId = {};
+      try {
+        const rSt = await wixData.query(CMS_STAFF).limit(100).find({ suppressAuth: true });
+        for (const s of (rSt.items || [])) {
+          const nombre = nombreStaffLimpio(s.displayName || s.canonicalName);
+          const rid = String(s.wixResourceId || s._id || '').trim();
+          if (rid && nombre) staffPorResourceId[rid] = nombre;
+        }
+      } catch (eSt) {
+        console.warn(`${TAG} v2.9.0 — StaffConfig: ${eSt.message}`);
+      }
+
+      // Citas por _id, en lotes de 50 (mismo patrón que titularPorReserva).
+      const reservaPorId = {};
+      const cargarReservas = async (ids) => {
+        const lista = Array.from(ids).filter(id => id && !reservaPorId[id]);
+        for (let i = 0; i < lista.length; i += 50) {
+          const lote = lista.slice(i, i + 50);
+          try {
+            const rRes = await wixData.query(CMS_RESERVAS)
+              .hasSome('_id', lote)
+              .limit(50)
+              .find({ suppressAuth: true });
+            for (const it of (rRes.items || [])) reservaPorId[it._id] = it;
+          } catch (eRes) {
+            console.warn(`${TAG} v2.9.0 — citas lote ${i}: ${eRes.message}`);
+          }
+        }
+      };
+      {
+        const ids = new Set();
+        for (const p of pagos) {
+          const raw = String(p.staff || '').trim().toUpperCase();
+          if (MARCADORES_NO_PERSONA.has(raw)) continue;
+          const bid = String(p.bookingId || '');
+          if (bid.startsWith(PREFIJO_PAGO_INTERNO)) ids.add(bid.slice(PREFIJO_PAGO_INTERNO.length));
+        }
+        await cargarReservas(ids);
+        console.log(`${TAG} v2.9.0 — citas enlazadas a cobros: ${Object.keys(reservaPorId).length}/${ids.size} · personal: ${Object.keys(staffPorResourceId).length}`);
+      }
+
+      // Reparto de UN cobro de cita entre quienes la trabajaron.
+      //   null → nada que repartir (sin cita enlazada, o todas las líneas
+      //          son del titular): el cobro entero sigue con el titular,
+      //          exactamente como hasta v2.8.1.
+      //   { cuotas, colas }:
+      //     cuotas → Map persona → importe, SOLO personas distintas del
+      //              titular. El titular se queda el resto del cobro.
+      //     colas  → { label: [persona, …] } en orden de aparición, para
+      //              dar minutos y nº de servicios línea a línea.
+      //   Importe de cada línea = tarifa × factor neto/bruto del cobro (el
+      //   del cierre). En una fila de anulación el importe es negativo y el
+      //   factor también: la anulación deshace el reparto en la misma
+      //   proporción. Las líneas EXTERNAS no se reparten (bloque 3 las
+      //   descuenta del titular, v2.7.1).
+      const repartirCobroPorTramo = (p, titular, importe) => {
+        const bid = String(p.bookingId || '');
+        if (!bid.startsWith(PREFIJO_PAGO_INTERNO)) return null;
+        const reserva = reservaPorId[bid.slice(PREFIJO_PAGO_INTERNO.length)];
+        if (!reserva) return null;
+
+        const lineas = lineasConProfesional(reserva, staffPorResourceId);
+        if (!lineas.length) return null;
+        if (!lineas.some(l => l.quien && normalizarStaff(l.quien) !== titular)) return null;
+
+        const parsed = parsearServiciosDetail(reserva.serviciosDetail || '');
+        const brutoSvc    = parsed.servicios.reduce((acc, sv) => acc + sv.precio * sv.cantidad, 0);
+        const brutoExtras = parsed.extras.reduce((acc, e) => acc + e.importe, 0);
+        const brutoProd   = parsed.productos.reduce((acc, pr) => acc + pr.subtotal, 0);
+        const brutoLineas = brutoSvc + brutoExtras + brutoProd;
+        const factor = brutoLineas > 0 ? (importe / brutoLineas) : 1;
+
+        const cuotas = new Map();
+        const colas = {};
+        for (const l of lineas) {
+          const persona = l.quien ? normalizarStaff(l.quien) : titular;
+          if (!colas[l.nombre]) colas[l.nombre] = [];
+          colas[l.nombre].push(persona);
+          if (persona === titular) continue;
+          if (l.precio <= 0) continue;
+          const nombreExt = l.nombre.replace(/^[^\p{L}\d]+/u, '').trim().toLowerCase();
+          if (labelsExternos.has(nombreExt)) continue;
+          cuotas.set(persona, (cuotas.get(persona) || 0) + l.precio * l.cantidad * factor);
+        }
+        return { cuotas, colas };
+      };
+
+      // ══════════════════════════════════════════════════════════════
       // 3. PROCESAR PAGOS
       // ══════════════════════════════════════════════════════════════
       let totalIngresos = 0;
@@ -736,6 +986,20 @@ export const obtenerEstadisticas = webMethod(
         desglosePorCat[catKey][key].importe += precio;
       };
 
+      // v2.9.0 — misma fila inicial que hasta v2.8.1, ahora para cualquier
+      // persona que trabaje en un cobro (no solo el titular).
+      const asegurarProductividad = (persona) => {
+        if (!productividadPorStaff[persona]) {
+          productividadPorStaff[persona] = {
+            ingresos: 0,
+            ingresosServicios: 0,
+            ingresosProducto: 0,
+            minutos: 0,
+            servicios: 0
+          };
+        }
+      };
+
       for (const p of pagos) {
         const importe = Number(p.importeTotal || 0);
         totalIngresos += importe;
@@ -772,20 +1036,34 @@ export const obtenerEstadisticas = webMethod(
         const esVenta = MARCADORES_NO_PERSONA.has(staffRaw);   // producto o especial
         const staff = resolverPersona(p);
 
-        porStaff[staff] = (porStaff[staff] || 0) + importe;
-
-        if (!productividadPorStaff[staff]) {
-          productividadPorStaff[staff] = {
-            ingresos: 0,
-            ingresosServicios: 0,
-            ingresosProducto: 0,
-            minutos: 0,
-            servicios: 0
-          };
+        // ── v2.9.0 · REPARTO POR TRAMO ────────────────────────────────
+        //    Los servicios que hizo otra persona salen del titular y van a
+        //    quien los hizo. El titular se queda el resto: la suma por
+        //    persona sigue siendo exactamente el importe del cobro.
+        const reparto = esVenta ? null : repartirCobroPorTramo(p, staff, importe);
+        let importeTitular = importe;
+        if (reparto) {
+          for (const [quien, cuota] of reparto.cuotas) {
+            importeTitular -= cuota;
+            porStaff[quien] = (porStaff[quien] || 0) + cuota;
+            asegurarProductividad(quien);
+            productividadPorStaff[quien].ingresos += cuota;
+            productividadPorStaff[quien].ingresosServicios += cuota;
+          }
         }
-        productividadPorStaff[staff].ingresos += importe;
-        if (esVenta) productividadPorStaff[staff].ingresosProducto += importe;
-        else productividadPorStaff[staff].ingresosServicios += importe;
+        // Quién ejecutó una línea de servicio de ESTE cobro (para minutos y
+        // nº de servicios). Sin reparto, o línea no encontrada → titular.
+        const personaDeLinea = (nombreLinea) => {
+          const cola = reparto ? reparto.colas[nombreLinea] : null;
+          return (cola && cola.length) ? cola.shift() : staff;
+        };
+
+        porStaff[staff] = (porStaff[staff] || 0) + importeTitular;
+
+        asegurarProductividad(staff);
+        productividadPorStaff[staff].ingresos += importeTitular;
+        if (esVenta) productividadPorStaff[staff].ingresosProducto += importeTitular;
+        else productividadPorStaff[staff].ingresosServicios += importeTitular;
 
         if (staffRaw === 'TIENDA_POS') {
           const desc = (p.descripcion || '').trim();
@@ -877,10 +1155,13 @@ export const obtenerEstadisticas = webMethod(
               }
             }
           } else {
+            // v2.9.0 — minutos y servicio para quien ejecutó esta línea.
+            const persona = personaDeLinea(nombre);
+            asegurarProductividad(persona);
             const duracion = buscarDuracion(nombre);
             if (duracion > 0) {
-              productividadPorStaff[staff].minutos += duracion;
-              productividadPorStaff[staff].servicios++;
+              productividadPorStaff[persona].minutos += duracion;
+              productividadPorStaff[persona].servicios++;
             }
 
             if (precio > 0) {
@@ -909,13 +1190,11 @@ export const obtenerEstadisticas = webMethod(
                   complementosSTMap[nTop].importe += precio;
                 }
               }
-            } else {
-              const duracion0 = buscarDuracion(nombre);
-              if (duracion0 > 0) {
-                productividadPorStaff[staff].minutos += duracion0;
-                productividadPorStaff[staff].servicios++;
-              }
             }
+            // v2.9.0 — Aquí había una rama `else` (precio <= 0) que volvía
+            // a sumar los minutos y el servicio de la línea, ya sumados en
+            // el bloque de arriba para TODA línea de servicio. Retirada:
+            // las líneas a 0 € contaban doble.
           }
         }
       }
@@ -1252,6 +1531,20 @@ export const obtenerEstadisticas = webMethod(
         const porServicioCanje = {};
         const porStaffCanje = {};
 
+        // v2.9.0 — Quién sirvió el servicio del bono: la fase de la cita con
+        // el mismo setupUid. Sin cita, sin fase o sin staffId propio → el
+        // `staff` grabado en el canje (titular de la cita), como hasta ahora.
+        await cargarReservas(new Set(canjes.map(c => String(c.reservationId || '').trim())));
+        const profesionalDelCanje = (c) => {
+          const reserva = reservaPorId[String(c.reservationId || '').trim()];
+          const uid = String(c.serviceSetupUid || '').trim();
+          if (!reserva || !uid) return '';
+          const fase = itemsDe(reserva.fases, 'items')
+            .find(f => f && f.tipo === 'servicio' && String(f.setupUid || '').trim() === uid);
+          const sid = fase ? String(fase.staffId || '').trim() : '';
+          return (sid && staffPorResourceId[sid]) ? normalizarStaff(staffPorResourceId[sid]) : '';
+        };
+
         for (const c of canjes) {
           // amountSaved = precio de la línea EN EL MOMENTO de servirla.
           // Si el catálogo sube después, el canje viejo conserva su precio
@@ -1267,7 +1560,7 @@ export const obtenerEstadisticas = webMethod(
           porServicioCanje[nombreSvc].cantidad++;
           porServicioCanje[nombreSvc].valor += valor;
 
-          const staffCanje = normalizarStaff(c.staff) || 'Sin staff';
+          const staffCanje = profesionalDelCanje(c) || normalizarStaff(c.staff) || 'Sin staff';
           if (!porStaffCanje[staffCanje]) porStaffCanje[staffCanje] = { nombre: staffCanje, cantidad: 0, valor: 0 };
           porStaffCanje[staffCanje].cantidad++;
           porStaffCanje[staffCanje].valor += valor;
