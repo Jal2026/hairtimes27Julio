@@ -2,7 +2,7 @@
 // KAMISUITE - Edición Catálogo Productos (Backend)
 // =====================================================
 // Archivo: tiendaEdicionLogic.web.js
-// Versión: 1.7.0
+// Versión: 1.7.1
 // =====================================================
 // v1.0.0: Versión inicial — 7 funciones CRUD productos
 // v1.0.1: FIX brand minLength + createCollection wix-stores.v2
@@ -227,6 +227,13 @@
 //           leyendo los bloques desde la collection Stores/Products,
 //           que es de solo lectura y por eso nunca se escribe ahí).
 //         · Sin cambios en stock, coste, imágenes ni categorías.
+// v1.7.1 (24 Nov 2026): porcentajeDescuento tiene en cuenta el redondeo al
+//         céntimo. Wix guarda el PERCENT como AMOUNT y el porcentaje se
+//         deduce de los precios: con 40,56 € al 20 % (32,45 €) salía -19 %.
+//         Si la diferencia con un entero es solo ese redondeo, se enseña el
+//         entero; si no, se sigue truncando. Mismo cambio en tiendaProductos
+//         v1.5.17 y sugerenciasProductosLogic v1.2.1.
+//
 // v1.7.0 (24 Nov 2026): + PROCESO EN CURSO VISIBLE.
 //         · Colección KamisuiteCampanaProceso (una fila): fase
 //           (aplicar/terminar), origen (manual/programada), hechos,
@@ -441,7 +448,7 @@ import { mediaManager } from 'wix-media-backend';
 import { invalidarCacheCatalogo } from 'backend/sugerenciasProductosLogic.web.js';
 
 const TAG = '[TiendaEdicion]';
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 
 // =====================================================
 // UTILIDAD: Detectar MIME type del base64 o extensión
@@ -1008,7 +1015,17 @@ function porcentajeDescuento(precio, precioDescontado, discount) {
   const p = Number(precio);
   const d = Number(precioDescontado);
   if (!Number.isFinite(p) || !Number.isFinite(d) || p <= 0 || d <= 0 || d >= p) return 0;
-  return Math.floor(((1 - (d / p)) * 100) + 1e-9);
+  // 24-nov-2026: Wix guarda el PERCENT convertido a AMOUNT, así que casi
+  // siempre se llega aquí. El precio de oferta va redondeado al céntimo y
+  // el porcentaje real puede quedar a unas milésimas de un entero (20 % de
+  // 40,56 € = 32,448 → 32,45 € → 19,995 %). Si el entero más cercano está
+  // dentro de ese redondeo (medio céntimo sobre el precio), se enseña el
+  // entero; si no, se trunca como siempre: nunca más rebaja de la que hay.
+  const real = (1 - (d / p)) * 100;
+  const entero = Math.round(real);
+  const margen = (0.005 / p) * 100 + 1e-9;
+  if (entero > 0 && Math.abs(real - entero) <= margen) return entero;
+  return Math.floor(real + 1e-9);
 }
 
 // Redondeo a dos decimales sin arrastrar el error del binario.

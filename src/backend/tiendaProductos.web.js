@@ -2,7 +2,7 @@
 // KAMISUITE - Tienda Productos (Backend)
 // =====================================================
 // Archivo: tiendaProductos.web.js
-// Versión: 1.5.16
+// Versión: 1.5.17
 // =====================================================
 // v1.1: wixData Stores/Products + generalInfo pickup
 // v1.2: + contactos + buyerInfo + addPayments (order visible)
@@ -81,6 +81,13 @@
 //       NO se tocan registrarVenta, generarFacturaProducto,
 //       obtenerHistorialVentas, cargarContactosTienda ni el bloque
 //       CMS-first de PaymentReservations.
+// v1.5.17 (24 Nov 2026): porcentajeDescuento tiene en cuenta el redondeo al
+//         céntimo. Wix guarda el PERCENT como AMOUNT y el porcentaje se
+//         deduce de los precios: con 40,56 € al 20 % (32,45 €) salía -19 %
+//         en Recepción PRO y en la Tienda. Si la diferencia con un entero es
+//         solo ese redondeo, se enseña el entero; si no, se sigue truncando.
+//         Mismo cambio en tiendaEdicionLogic v1.7.1 y
+//         sugerenciasProductosLogic v1.2.1.
 // v1.5.16 (13 Sep 2026): + descuentoPct en el listado. El porcentaje que
 //         se enseña se toma del descuento guardado cuando Wix lo tiene en
 //         PERCENT, en vez de deducirlo de los precios: con precio 19,85 y
@@ -176,7 +183,7 @@ import { invoices } from 'wix-billing-backend';
 import { getProductVariants } from 'wix-stores-backend';
 
 const TAG = '[TiendaProductos]';
-const VERSION = "1.5.16";
+const VERSION = "1.5.17";
 
 // AppId de Wix Stores para catalogReference en eCommerce
 const STORES_APP_ID = '215238eb-22a5-4c36-9e7b-e7c08025e04e';
@@ -255,7 +262,17 @@ function porcentajeDescuento(precio, precioDescontado, discount) {
   const p = Number(precio);
   const d = Number(precioDescontado);
   if (!Number.isFinite(p) || !Number.isFinite(d) || p <= 0 || d <= 0 || d >= p) return 0;
-  return Math.floor(((1 - (d / p)) * 100) + 1e-9);
+  // 24-nov-2026: Wix guarda el PERCENT convertido a AMOUNT, así que casi
+  // siempre se llega aquí. El precio de oferta va redondeado al céntimo y
+  // el porcentaje real puede quedar a unas milésimas de un entero (20 % de
+  // 40,56 € = 32,448 → 32,45 € → 19,995 %). Si el entero más cercano está
+  // dentro de ese redondeo (medio céntimo sobre el precio), se enseña el
+  // entero; si no, se trunca como siempre: nunca más rebaja de la que hay.
+  const real = (1 - (d / p)) * 100;
+  const entero = Math.round(real);
+  const margen = (0.005 / p) * 100 + 1e-9;
+  if (entero > 0 && Math.abs(real - entero) <= margen) return entero;
+  return Math.floor(real + 1e-9);
 }
 
 function normalizarVariante(v, precioProducto) {

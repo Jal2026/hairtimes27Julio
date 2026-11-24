@@ -9,7 +9,15 @@
   <link href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ═══════════════════════════════════════════════════
-       KAMISUITE — Tienda Productos Widget v1.4.2
+       KAMISUITE — Tienda Productos Widget v1.4.3
+       v1.4.3 (24 Nov 2026): el porcentaje de la etiqueta de oferta ya
+              no se calcula aquí: se usa el `descuentoPct` que manda
+              el backend (tiendaProductos v1.5.17), el mismo que ven
+              Recepción PRO, el gestor y los correos. Con 40,56 € al
+              20 % (32,45 €) esta pantalla decía -19 %. El cálculo
+              local queda solo de respaldo si el backend no lo manda.
+              Además, el rótulo de versión de la cabecera, que seguía
+              en v1.4.1, pasa a v1.4.3.
        Dark theme (same as Catálogo / Checkout)
        v1.4.2 (13 Sep 2026): PRECIO PROMOCIONAL. Cuando el producto
              está de oferta, la tarjeta enseña el precio anterior
@@ -681,7 +689,7 @@
   <!-- HEADER -->
   <div class="header">
     <span class="header-brand">KAMISUITE · Tienda Productos</span>
-    <span class="header-version">v1.4.1</span>
+    <span class="header-version">v1.4.3</span>
   </div>
 
   <!-- TAB BAR (v1.3) -->
@@ -1015,11 +1023,15 @@
         const textoAnterior = (!selVar && p.formattedPrecioOriginal)
           ? p.formattedPrecioOriginal
           : anterior.toFixed(2) + ' €';
-        // Tolerancia por el error de coma flotante: 23,00 a 20,70 da
-        // 9,999999999999998 y sin ella se pintaría -9% en vez de -10%.
-        const pct = Math.floor(((1 - (actual / anterior)) * 100) + 1e-9);
+        // v1.4.3: porcentaje resuelto por el backend (vale también para
+        // las variantes: en V1 el descuento es del producto). Respaldo:
+        // cálculo local con tolerancia de coma flotante.
+        const pctBackend = Number(p.descuentoPct);
+        const pct = (isFinite(pctBackend) && pctBackend > 0)
+          ? pctBackend
+          : Math.floor(((1 - (actual / anterior)) * 100) + 1e-9);
         promoAnteriorHTML = `<span class="prod-price-old">${esc(textoAnterior)}</span>`;
-        if (pct > 0) promoChipHTML = `<span class="promo-chip">-${pct}%</span>`;
+        if (pct > 0) promoChipHTML = `<span class="promo-chip">-${String(pct).replace('.', ',')}%</span>`;
       }
     }
 

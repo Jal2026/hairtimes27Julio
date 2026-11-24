@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════════════════════════════════╗
 // ║  sugerenciasProductosLogic.web.js — Sugerencias de producto     ║
-// ║  KAMISUITE · v1.2.0 · 13 Septiembre 2026                        ║
+// ║  KAMISUITE · v1.2.1 · 24 Noviembre 2026                         ║
 // ╚══════════════════════════════════════════════════════════════════╝
 //
 // FUNCIÓN: construye el bloque HTML de sugerencias de producto que se
@@ -60,6 +60,12 @@
 //     widgetPublicoLogic.web.js v0.9.2 (claveGrupo).
 //
 // CHANGELOG:
+//   v1.2.1 (24-Nov-2026) — porcentajeDescuento tiene en cuenta el redondeo
+//     al céntimo. Wix guarda el PERCENT como AMOUNT y el porcentaje se
+//     deduce de los precios: con 40,56 € al 20 % (32,45 €) salía -19 %. Si
+//     la diferencia con un entero es solo ese redondeo, se anuncia el
+//     entero; si no, se sigue truncando. Mismo cambio en tiendaEdicionLogic
+//     v1.7.1 y tiendaProductos v1.5.17.
 //   v1.2.0 (13-Sep-2026) — El porcentaje del anuncio se lee del descuento
 //     guardado en vez de deducirse de los precios. Con precio 19,85 y un
 //     10%, Wix cobra 17,87 y la rebaja real es del 9,97: el correo decía
@@ -107,7 +113,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const TAG = `[SugerenciasProductos][${VERSION}]`;
 
 const CMS_CATEGORIAS   = 'HairSalonServices';
@@ -223,7 +229,17 @@ function porcentajeDescuento(precio, precioDescontado, discount) {
   const p = Number(precio);
   const d = Number(precioDescontado);
   if (!Number.isFinite(p) || !Number.isFinite(d) || p <= 0 || d <= 0 || d >= p) return 0;
-  return Math.floor(((1 - (d / p)) * 100) + 1e-9);
+  // 24-nov-2026: Wix guarda el PERCENT convertido a AMOUNT, así que casi
+  // siempre se llega aquí. El precio de oferta va redondeado al céntimo y
+  // el porcentaje real puede quedar a unas milésimas de un entero (20 % de
+  // 40,56 € = 32,448 → 32,45 € → 19,995 %). Si el entero más cercano está
+  // dentro de ese redondeo (medio céntimo sobre el precio), se enseña el
+  // entero; si no, se trunca como siempre: nunca más rebaja de la que hay.
+  const real = (1 - (d / p)) * 100;
+  const entero = Math.round(real);
+  const margen = (0.005 / p) * 100 + 1e-9;
+  if (entero > 0 && Math.abs(real - entero) <= margen) return entero;
+  return Math.floor(real + 1e-9);
 }
 
 function preciosVisibles(prod) {
