@@ -1,8 +1,38 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.11.0
+ * VERSION:  1.12.0
  * FECHA:    24 Noviembre 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.11.0 → v1.12.0 — NO CONTESTAR SIN LEER Y MEMORIA DE LO ÚLTIMO
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   PRUEBA DE JAL EN HAIR-TIMES (24-Nov-2026), comprobada contra AkiraLog y
+ *   el CMS:
+ *   · «¿Quiénes han firmado la LOPD?» → 6 de 7 nombres inventados, con
+ *     consultas: 0. En ClientLopdSignatures hay 2 clientes reales y 5 filas
+ *     de ejemplo de Wix (C001–C005).
+ *   · «¿Qué smart pricing está vigente?» → «lunes a miércoles 10-14», con
+ *     consultas: 0. No existe en ninguna versión.
+ *   · Discutida una respuesta correcta («Martes completo -10 %», 738 citas,
+ *     todo en la versión vigente), confesó haberla inventado.
+ *   · Desde la pregunta 11 negó haber hablado de smart pricing: _getHistorial
+ *     devolvía los 10 PRIMEROS turnos (ascending + limit).
+ *   · Dijo que el smart pricing se aplica a todos los servicios: solo a los
+ *     que tienen smartPricing = true (en Hair-Times, la Nanoplastia).
+ *
+ *   EL CAMBIO:
+ *   · _getHistorial: los 10 ÚLTIMOS turnos (descending + reverse) y la
+ *     conversación siempre empieza por el usuario.
+ *   · ASESOR: tool_choice {type:'any'} en la primera vuelta. Ninguna
+ *     respuesta sale sin haber leído datos. Coste: en un saludo o una
+ *     pregunta de criterio hace una lectura de más. ASISTENTE no se toca
+ *     (sus herramientas incluyen acciones).
+ *   · Regla 1c: si se discute un dato, volver a leerlo antes de mantenerlo o
+ *     corregirlo; decir de dónde sale; para datos de una pregunta anterior,
+ *     volver a leerlos (el historial guarda texto, no datos).
+ *   · Descripción de la fuente smartPricing: dónde se aplica de verdad.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.10.1 → v1.11.0 — ACCESO TOTAL A LA INFORMACIÓN DE KAMISUITE
@@ -594,7 +624,7 @@ import { obtenerEstadisticas } from 'backend/estadisticas.web';
 import { elevate } from 'wix-auth';
 import { collections } from 'wix-data.v2';
 
-const VERSION = '1.11.0';
+const VERSION = '1.12.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -2361,7 +2391,7 @@ const FUENTES_CONFIG = {
 
   smartPricing: {
     coleccion: 'SmartPricingVersiones',
-    descripcion: 'Versiones de smart pricing (ofertas por día y hora en la reserva online): cuál está vigente y qué descuentos aplica cada una.',
+    descripcion: 'Smart pricing (ofertas por día y hora en la reserva online). Cada fila es un análisis de ocupación con sus propuestas; la que tiene vigente = true es la que se aplica, con sus reglas (días, horas, porcentaje y días de antelación). OJO: solo funciona si el interruptor general está encendido (smartPricingActivo en salon) y SOLO se aplica a los servicios que tienen smart pricing activado en el catálogo (campo smartPricing en servicios); no a todos. Nunca se suma a la promo del servicio: solo se aplica si la supera. Para decir a qué servicios se aplica, consulta servicios.',
     campoFecha: '_createdDate',
     limite: 100,
     campos: null,
@@ -3019,7 +3049,7 @@ async function _postAnthropic(apiKey, body, timeoutMs, label) {
  * Bucle de tool use. Sonnet pide datos → JS ejecuta el motor → Sonnet narra.
  * Máx. 4 vueltas: permite comparativas (dos periodos) sin bucle infinito.
  */
-async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages, timeoutMs, conTools) {
+async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages, timeoutMs, conTools, forzarLectura) {
   const startMs = Date.now();
   const convo = messages.slice();
   let cacheStats = { hit: 0, create: 0, input: 0, output: 0 };
@@ -3036,6 +3066,10 @@ async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages,
     // v1.7.0 — sin herramientas en el plano AYUDA. `tools` se omite del body
     // en lugar de mandarse vacío: un array vacío es un error de la API.
     if (usaTools) payload.tools = [TOOL_CONSULTAR, _buildToolConfig()];
+    // v1.12.0 — en ASESOR la primera vuelta OBLIGA a leer datos (tool_choice
+    // «any»): ninguna respuesta sale sin haber consultado. Las siguientes
+    // vueltas quedan libres para contestar. Ver cabecera.
+    if (usaTools && forzarLectura && vuelta === 0) payload.tool_choice = { type: 'any' };
 
     const data = await _postAnthropic(apiKey, payload, timeoutMs, model);
 
@@ -3090,15 +3124,15 @@ async function _callClaudeConHerramientas(model, apiKey, systemBlocks, messages,
   return { respuesta, timeMs: Date.now() - startMs, cacheStats, consultas };
 }
 
-async function _callClaudeConFallback(apiKey, systemBlocks, messages, usarHerramientas) {
+async function _callClaudeConFallback(apiKey, systemBlocks, messages, usarHerramientas, forzarLectura) {
   const conTools = usarHerramientas !== false;   // por defecto, como hasta v1.6.0
   try {
-    const r = await _callClaudeConHerramientas(MODEL_PRIMARY, apiKey, systemBlocks, messages, PRIMARY_TIMEOUT_MS, conTools);
+    const r = await _callClaudeConHerramientas(MODEL_PRIMARY, apiKey, systemBlocks, messages, PRIMARY_TIMEOUT_MS, conTools, forzarLectura);
     return { ...r, modeloUsado: MODEL_PRIMARY };
   } catch (err1) {
     console.warn(`${TAG} Sonnet falló, cayendo a Haiku: ${err1.message}`);
     try {
-      const r = await _callClaudeConHerramientas(MODEL_FALLBACK, apiKey, systemBlocks, messages, FALLBACK_TIMEOUT_MS, conTools);
+      const r = await _callClaudeConHerramientas(MODEL_FALLBACK, apiKey, systemBlocks, messages, FALLBACK_TIMEOUT_MS, conTools, forzarLectura);
       return { ...r, modeloUsado: MODEL_FALLBACK };
     } catch (err2) {
       throw new Error(`Sonnet:[${err1.message}] Haiku:[${err2.message}]`);
@@ -3445,6 +3479,14 @@ function _buildSystemBlocks(ctx) {
     '   no está en ninguna fuente, dilo así: «eso no lo tengo en KAMISUITE».',
     '   Los identificadores internos (contactId, ids) son para tus consultas:',
     '   no los recites al usuario.',
+    '   Si el usuario discute o niega un dato que has dado, VUELVE A LEERLO',
+    '   antes de contestar: si los datos lo confirman, mantenlo y di de dónde',
+    '   sale; si no, corrígelo con el dato bueno. Nunca digas que te lo has',
+    '   inventado sin haberlo comprobado. Si te preguntan de dónde sale un',
+    '   dato, dilo en lenguaje de negocio (qué registro de KAMISUITE has leído).',
+    '   El historial de la conversación solo guarda tus respuestas, no los',
+    '   datos que leíste: para dar nombres, cifras o listas de una pregunta',
+    '   anterior, vuelve a leerlos.',
     '2. NUNCA calcules fechas. Copia las de la tabla FECHAS de este system.',
     '3. Si necesitas comparar dos periodos, llama a la herramienta dos veces.',
     '4. Si la herramienta devuelve numRegistros 0, dilo con claridad: no hay datos',
@@ -3621,15 +3663,23 @@ export async function crearSesionCore({ userId, userName, query } = {}) {
 }
 
 async function _getHistorial(sessionId) {
+  // v1.12.0 — las ÚLTIMAS HISTORY_LIMIT preguntas, no las primeras. Con
+  // ascending + limit llegaban los 10 primeros turnos: desde la pregunta 11
+  // AKIRA no veía lo que acababa de decir (24-Nov: negó haber hablado de
+  // smart pricing dos turnos después de hacerlo).
   const res = await wixData.query(C_MESSAGES)
     .eq('sessionRef', sessionId)
-    .ascending('orden')
+    .descending('orden')
     .limit(HISTORY_LIMIT * 2)
     .find(AUTH);
-  return (res.items || []).map(m => ({
+  const msgs = (res.items || []).slice().reverse().map(m => ({
     role: m.rol === 'user' ? 'user' : 'assistant',
     content: m.contenido
   }));
+  // La conversación que va a Anthropic tiene que empezar por el usuario: si
+  // el corte deja una respuesta suelta al principio, fuera.
+  while (msgs.length && msgs[0].role !== 'user') msgs.shift();
+  return msgs;
 }
 
 /**
@@ -3806,7 +3856,7 @@ export async function askAkiraCore({ sessionId, query, userId, userName, modo })
     // ── ANTHROPIC con tool use + failover ──
     let r;
     try {
-      r = await _callClaudeConFallback(apiKey, systemBlocks, messages, usarHerramientas);
+      r = await _callClaudeConFallback(apiKey, systemBlocks, messages, usarHerramientas, plano === 'asesor');
     } catch (err) {
       console.error(`${TAG} ambos modelos fallaron:`, err.message);
       try { await sessionPromise; } catch (_) {}
