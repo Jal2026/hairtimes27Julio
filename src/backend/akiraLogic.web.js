@@ -1,8 +1,47 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * KAMISUITE — AKIRA Backend (Wix Velo)
  * Archivo:  backend/akiraLogic.web.js
- * VERSION:  1.10.1
+ * VERSION:  1.11.0
  * FECHA:    24 Noviembre 2026
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * CAMBIOS v1.10.1 → v1.11.0 — ACCESO TOTAL A LA INFORMACIÓN DE KAMISUITE
+ * ───────────────────────────────────────────────────────────────────────────
+ *
+ *   EL FALLO (24-Nov-2026): «¿los productos tienen algún
+ *   descuento?» → contestó con servicios y, al insistir, «ninguno de los 6
+ *   productos del almacén tiene descuento». Falso: AKIRA no tenía ninguna
+ *   lectura de la tienda. Su única fuente «productos» era KamisuiteWarehouse,
+ *   el almacén que stockLogic.web.js abandonó en agosto (el almacén vivo es
+ *   KamisuiteStock). Y en vez de decir que no lo veía, afirmó que no había.
+ *
+ *   PETICIÓN DE JAL (24-Nov): acceso total de AKIRA a toda la información
+ *   que reside en KAMISUITE.
+ *
+ *   EL CAMBIO (solo registro de fuentes, motor de configuración, descripción
+ *   de la herramienta y una regla del prompt; consultar_datos_salon, las
+ *   acciones y el resto del archivo no se tocan):
+ *   · Inventario de las colecciones del código de los repos de Hair-Times y
+ *     Salón KAMI. Fuentes nuevas: tienda, almacén vivo (KamisuiteStock) y
+ *     sus movimientos, ficha completa del CRM, notas y fichas técnicas,
+ *     cuidado y salud, LOPD, bonos y canjes, PRIME, tarjetas, campañas,
+ *     smart pricing, campaña de tienda, B2B, reservas y cobros registro a
+ *     registro, cobros de externos, histórico de externos, ventas del TPV,
+ *     Estadísticas, facturas, caja y movimientos, fichajes, accesos a
+ *     Recepción, comunicaciones, recordatorios, cambios del catálogo e
+ *     histórico del programa anterior.
+ *   · Fuente `coleccion`: cualquier otra colección del sitio, también las
+ *     que se creen mañana (listado en tiempo real, patrón de
+ *     cmsFieldReader.listarColeccionesV2).
+ *   · `campos: null` = todos los campos del registro (decisión del
+ *     19-Jul-2026 para el catálogo). Fuera solo PIN, tokens, secretos,
+ *     contraseñas y claves de API, por regla estructural, y `_owner`.
+ *   · `desde`/`hasta` sobre el campo de fecha que ya usa el backend de cada
+ *     colección; `incluirInactivos`; techo de tamaño con modo compacto y
+ *     AVISO cuando el resultado no es completo.
+ *   · Regla 1c: antes de afirmar que algo no existe, leer la fuente que lo
+ *     guarda; nunca contestar con otra fuente; si no está, decirlo.
+ *   · clientes: el contactId viaja al modelo para encadenar consultas.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * CAMBIOS v1.10.0 → v1.10.1 — EL MOTIVO DE UN BLOQUEO NO SE INTERPRETA
@@ -542,8 +581,20 @@ import { getSecret } from 'wix-secrets-backend';
 // resuelve — NO se reimplementa la API de contactos. recepcionLogic.web.js es
 // "backend que NO se toca en V2" (Checklist V1↔V2 §244): reutilizable al 100%.
 import { cargarTodosContactos } from 'backend/recepcionLogic.web';
+// v1.11.0 — ACCESO TOTAL. AKIRA lee lo mismo que las pantallas llamando a los
+// backends de producción que las alimentan; no reimplementa ninguna lectura.
+//   · Tienda: gestor de productos + Tienda Productos (variantes).
+//   · Ficha Cliente del CRM y su historial.
+//   · Historial de ventas del TPV y pantalla Estadísticas.
+//   · Listado de colecciones: patrón de cmsFieldReader.listarColeccionesV2.
+import { listarProductos, obtenerHistorialVentas } from 'backend/tiendaProductos.web';
+import { listarProductosParaEdicion } from 'backend/tiendaEdicionLogic.web';
+import { getFichaCliente, getHistorialCliente } from 'backend/fichaClienteLogic.web';
+import { obtenerEstadisticas } from 'backend/estadisticas.web';
+import { elevate } from 'wix-auth';
+import { collections } from 'wix-data.v2';
 
-const VERSION = '1.10.1';
+const VERSION = '1.11.0';
 const TAG = `[AkiraLogic][${VERSION}]`;
 const AUTH = { suppressAuth: true };
 
@@ -1748,9 +1799,8 @@ async function ejecutarConsulta(filtros) {
 // El input_schema de la herramienta se GENERA desde Object.keys(FUENTES_CONFIG),
 // así que el modelo ve la fuente nueva automáticamente, sin tocar el prompt.
 //
-// El salón tiene 53 colecciones propias. Abrirlas todas de golpe degradaría
-// las respuestas y quemaría tokens: cada fuente es contexto que el modelo debe
-// digerir. Se arranca con 5 y se amplía cuando Jal lo pida.
+// v1.11.0: abiertas todas (petición de Jal, 24-Nov-2026). El coste se contiene
+// con los techos de filas y de tamaño, el modo compacto y `busqueda`/fechas.
 //
 // ───────────────────────────────────────────────────────────────────────────
 // ANATOMÍA DE UNA FUENTE
@@ -1761,14 +1811,15 @@ async function ejecutarConsulta(filtros) {
 //   filtroDefecto — { campo: valor } aplicado siempre (p.ej. active:true)
 //   orden         — campo de ordenación ascendente (opcional)
 //   limite        — techo de filas
-//   campos        — WHITELIST. Solo estos llegan al modelo. Lo no declarado
-//                   no viaja: ahorra tokens y evita fugas.
+//   campos        — WHITELIST, o null = TODOS los campos del registro
+//                   (v1.11.0). Los sensibles nunca viajan en ningún caso.
 //   objetos       — { campo: claveDesenvuelto } → jsonIn (patrón producción)
 //   sensibles     — campos que NUNCA llegan al modelo aunque estén en `campos`
 //   transform     — (fila) => fila. Traducción de formatos ilegibles.
 //   filaUnica     — true si la colección tiene una sola fila (SalonConfig)
-//   loader        — async () => filas[]. Para fuentes que NO son CMS sino API
-//                   nativa de Wix (Contacts, Stores, Loyalty…). Si se declara,
+//   loader        — async (params) => filas[] | { filas, nota, aviso }. Para
+//                   fuentes que NO son CMS (Contacts, tienda, ficha CRM,
+//                   Estadísticas…): llama al backend de la pantalla. Si se declara,
 //                   sustituye a `coleccion`/`filtroDefecto`/`orden`. El resto
 //                   del motor (whitelist, sensibles, búsqueda) se aplica igual.
 //   requiereBusqueda — true si la fuente tiene demasiadas filas para volcarla
@@ -1839,20 +1890,145 @@ function _transformHorario(fila) {
 }
 
 /**
- * Loader del CRM de Wix (Wix Contacts).
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ACCESO TOTAL (v1.11.0) — AKIRA LEE TODO LO QUE GUARDA KAMISUITE
+ * ═══════════════════════════════════════════════════════════════════════════
  *
- * Es la ÚNICA fuente que NO es una colección CMS: es una app nativa de Wix.
- * Por eso el registro admite `loader`: una función que devuelve las filas ya
- * normalizadas. El resto del motor (whitelist, sensibles, búsqueda) se aplica
- * igual. Añadir mañana otra fuente basada en API (Stores, Bookings, Loyalty)
- * = declarar su loader. La arquitectura no cambia.
+ * Tres vías, y ninguna reimplementa una lectura que ya exista:
+ *   1. Colecciones CMS declaradas abajo, con su descripción para el modelo.
+ *      Llegan TODOS los campos de cada registro (`campos: null`), como se
+ *      decidió el 19-Jul-2026 para el catálogo: la exclusión es por regla
+ *      estructural, no por lista de nombres.
+ *   2. Datos que no son CMS (tienda, ficha CRM completa, ventas del TPV,
+ *      Estadísticas): `loader` que llama a la MISMA función de backend que
+ *      alimenta la pantalla correspondiente.
+ *   3. Fuente `coleccion`: cualquier otra colección del sitio, también las
+ *      que se creen mañana, listadas en tiempo real con el patrón de
+ *      cmsFieldReader.listarColeccionesV2.
+ *
+ * Lo único que NUNCA viaja al modelo: PIN, tokens, secretos, contraseñas y
+ * claves de API (RE_CAMPO_SENSIBLE + `sensibles`) y `_owner`.
+ */
+
+// Regla estructural: vale para cualquier colección, también las futuras.
+// «pin» solo al principio del nombre o como palabra en camelCase (masterPin,
+// pinCode, pinMetaNActual), para no tocar nombres como «shipping».
+const RE_CAMPO_SENSIBLE = /(^pin|Pin($|[A-Z0-9_])|^PIN|token|Token|TOKEN|secret|Secret|SECRET|password|Password|PASSWORD|apikey|apiKey|ApiKey|APIKEY|api_key|API_KEY)/;
+const CAMPOS_SISTEMA_FUERA = new Set(['_owner']);
+const MAX_TEXTO_CAMPO     = 2000;    // texto más largo → se recorta
+const MAX_OBJETO_CAMPO    = 6000;    // objeto/lista más largo → se recorta
+const MAX_RESULTADO_CHARS = 120000;  // techo de lo que viaja al modelo por llamada
+const ESCANEO_BUSQUEDA    = 1000;    // filas leídas antes de aplicar `busqueda`
+// Modo compacto: si el resultado no cabe, primero se acortan textos y objetos
+// de TODOS los registros; solo si aun así no cabe se quitan registros.
+const MAX_TEXTO_COMPACTO  = 200;
+const MAX_OBJETO_COMPACTO = 800;
+
+function _esCampoSensible(campo, def) {
+  if ((def.sensibles || []).indexOf(campo) !== -1) return true;
+  return RE_CAMPO_SENSIBLE.test(String(campo));
+}
+
+/** Fecha → "AAAA-MM-DD HH:MM" en Madrid; texto u objeto largo → recortado. */
+function _valorParaModelo(v, def) {
+  if (v instanceof Date) {
+    const f = fechaISOenMadrid(v);
+    const h = horaMadrid(v);
+    return h ? `${f} ${h}` : f;
+  }
+  if (def.sinRecorte && !def.compacto) return v;
+  const maxTexto  = def.compacto ? MAX_TEXTO_COMPACTO  : MAX_TEXTO_CAMPO;
+  const maxObjeto = def.compacto ? MAX_OBJETO_COMPACTO : MAX_OBJETO_CAMPO;
+  if (typeof v === 'string') {
+    return v.length > maxTexto ? v.substring(0, maxTexto) + '… [texto recortado]' : v;
+  }
+  if (v && typeof v === 'object') {
+    let s;
+    try { s = JSON.stringify(v); } catch (e) { return '[no legible]'; }
+    if (s && s.length > maxObjeto) return s.substring(0, maxObjeto) + '… [recortado]';
+  }
+  return v;
+}
+
+/**
+ * Proyección de un registro. `campos` declarado = whitelist (comportamiento
+ * anterior); `campos: null` = todos los campos del registro. En los dos
+ * casos se aplican sensibles, OBJECT envueltos (jsonIn) y transform.
+ */
+function _proyectarFila(item, def) {
+  const out = {};
+  const src = item || {};
+  const objetos = (def.objetos && !Array.isArray(def.objetos)) ? def.objetos : {};
+  const campos = Array.isArray(def.campos) ? def.campos : Object.keys(src);
+  for (const campo of campos) {
+    if (CAMPOS_SISTEMA_FUERA.has(campo)) continue;
+    if (_esCampoSensible(campo, def)) continue;
+    if (Object.prototype.hasOwnProperty.call(objetos, campo)) continue; // se desenvuelve abajo
+    const v = src[campo];
+    if (v === undefined || v === null || v === '') continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[campo] = _valorParaModelo(v, def);
+  }
+  for (const [campo, clave] of Object.entries(objetos)) {
+    if (_esCampoSensible(campo, def)) continue;
+    const arr = jsonIn(src[campo], clave);
+    if (arr.length > 0) out[campo] = def.compacto ? _valorParaModelo(arr, def) : arr;
+  }
+  return def.transform ? def.transform(out) : out;
+}
+
+/** ¿Cae la fecha en [desde, hasta] (días de Madrid, inclusive)? */
+function _enRangoMadrid(valor, desde, hasta) {
+  if (!valor) return false;
+  const f = fechaISOenMadrid(valor);
+  if (!f) return false;
+  if (desde && f < desde) return false;
+  if (hasta && f > hasta) return false;
+  return true;
+}
+
+/**
+ * Lectura declarativa de una colección CMS. Con fecha: la query se abre un
+ * día por cada lado (va en UTC) y se recorta exacto por día de Madrid, como
+ * consultarReservas. Lo más reciente primero, para que el techo deje fuera
+ * lo más antiguo y no lo último.
+ */
+async function _leerColeccion(coleccion, def, p) {
+  let q = wixData.query(coleccion);
+  if (!p.incluirInactivos) {
+    for (const [campo, valor] of Object.entries(def.filtroDefecto || {})) {
+      q = q.eq(campo, valor);
+    }
+  }
+  const campoFecha = def.campoFecha || null;
+  const conRango = !!(campoFecha && (p.desde || p.hasta));
+  if (campoFecha) {
+    if (p.desde) q = q.ge(campoFecha, new Date(`${sumarDias(p.desde, -1)}T00:00:00.000Z`));
+    if (p.hasta) q = q.le(campoFecha, new Date(`${sumarDias(p.hasta, 1)}T23:59:59.999Z`));
+    q = q.descending(campoFecha);
+  } else if (def.orden) {
+    q = q.ascending(def.orden);
+  }
+  const limite = def.limite || 300;
+  const techo = p.busqueda ? Math.max(limite, def.escaneo || ESCANEO_BUSQUEDA) : limite;
+  const raw = await findAll(q, techo);
+  let filas = raw;
+  if (conRango) filas = raw.filter(it => _enRangoMadrid(it[campoFecha], p.desde, p.hasta));
+  return { filas, truncado: !!raw._truncado, techo };
+}
+
+// ── LOADERS (datos que no son CMS: misma función que la pantalla) ─────────
+
+/**
+ * Loader del CRM de Wix (Wix Contacts).
  *
  * CONTRATO VERIFICADO en producción (pagecode_recepcionPRO v2.1.5 línea 247):
  *   cargarTodosContactos() → { ok: true, clientes: [{ contactId, nombreCompleto, email, telefono }] }
  * NO devuelve un array pelado. `consoleIA` v3.5.8 hace `todosRaw?.clientes`.
  *
- * ⚠️ El teléfono es el ÚNICO identificador fiable de cliente en KAMISUITE.
- * NUNCA usar email ni contactId como clave única (Conceptos Fundacionales).
+ * v1.11.0: el contactId VIAJA al modelo (capa de datos ≠ capa de conversación,
+ * 19-Jul-2026): es la llave para pedir la ficha completa o buscar al cliente
+ * en bonos, notas, cuidado o LOPD. La regla 1c le prohíbe recitarlo.
  */
 async function _loaderClientes() {
   const res = await cargarTodosContactos();
@@ -1868,38 +2044,247 @@ async function _loaderClientes() {
   }));
 }
 
+const RE_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function _normBusqueda(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
 /**
- * Registro de fuentes de configuración.
- * AMPLIAR AQUÍ = añadir una entrada. Nada más.
+ * Ficha CRM completa de UN cliente: lo mismo que pinta la Ficha Cliente
+ * (getFichaCliente: contacto, puntos, PRIME, bonos, tarjetas, notas, CIF,
+ * fecha de nacimiento, facturado y visitas) más su historial de cobros
+ * (getHistorialCliente). Acepta contactId o texto (nombre, teléfono, email):
+ * si el texto da varios clientes, devuelve los candidatos para elegir.
+ * Nota: getFichaCliente sincroniza la caché ClientProfile, igual que al abrir
+ * la ficha en pantalla.
+ */
+async function _loaderFichaCliente(p) {
+  const texto = String(p.busqueda || '').trim();
+  let contactId = RE_GUID.test(texto) ? texto : '';
+
+  if (!contactId) {
+    const todos = await _loaderClientes();
+    const needle = _normBusqueda(texto);
+    const digitos = needle.replace(/[^\d]/g, '');
+    const match = todos.filter(c => {
+      const blob = _normBusqueda(`${c.nombreCompleto} ${c.email} ${c.telefono}`);
+      if (needle && blob.indexOf(needle) !== -1) return true;
+      if (digitos.length >= 6 && blob.replace(/[^\d]/g, '').indexOf(digitos) !== -1) return true;
+      return false;
+    });
+    if (match.length === 0) {
+      return { filas: [], nota: `No hay ningún cliente que coincida con "${texto}".` };
+    }
+    if (match.length > 1) {
+      return {
+        filas: match.slice(0, 25),
+        nota: `Hay ${match.length} clientes que coinciden con "${texto}". Pregunta cuál es o vuelve a llamar con su contactId.`
+      };
+    }
+    contactId = match[0].contactId;
+  }
+
+  const [ficha, historial] = await Promise.all([
+    getFichaCliente({ contactId }),
+    getHistorialCliente({ contactId })
+  ]);
+  if (!ficha || !ficha.ok) {
+    const msg = (ficha && ficha.error && (ficha.error.message || ficha.error)) || 'sin respuesta';
+    throw new Error('ficha no disponible: ' + msg);
+  }
+  const fila = { contactId, cliente: ficha.cliente, perfil: ficha.profile, avisos: ficha.warnings };
+  if (historial && historial.ok) {
+    fila.visitas = historial.visitas;
+    fila.comprasTienda = historial.ventasTienda;
+  }
+  return [fila];
+}
+
+// La tienda se lee dos veces por pregunta en el peor caso (el modelo puede
+// volver a pedirla): caché corta para no repetir el recorrido del catálogo.
+let _cacheTienda = null;
+let _cacheTiendaTs = 0;
+const TTL_TIENDA_MS = 3 * 60 * 1000;
+
+/**
+ * Productos de la TIENDA (Wix Stores), con lo mismo que ve el gestor de
+ * productos (listarProductosParaEdicion: ocultos incluidos, visibilidad,
+ * oferta, porcentaje, stock, marca, categorías) y las variantes con su
+ * precio de la pantalla Tienda Productos (listarProductos). Si las variantes
+ * fallan, el catálogo llega igual sin ellas.
+ */
+async function _loaderTienda(p) {
+  if (_cacheTienda && (Date.now() - _cacheTiendaTs) < TTL_TIENDA_MS) return _filasTiendaSegun(_cacheTienda, p);
+
+  const [ed, tpv] = await Promise.all([
+    listarProductosParaEdicion(),
+    listarProductos().catch(e => ({ ok: false, error: e.message }))
+  ]);
+  if (!ed || !ed.ok) throw new Error((ed && ed.error) || 'no se pudo leer la tienda');
+
+  const variantesPorId = new Map();
+  if (tpv && tpv.ok) {
+    for (const p of (tpv.productos || [])) {
+      if (p.manageVariants && Array.isArray(p.variants) && p.variants.length) {
+        variantesPorId.set(p.id, p.variants.map(v => ({
+          variante: v.label,
+          precioVenta: v.price,
+          precioOriginal: v.precioOriginal,
+          enOferta: v.enPromocion === true,
+          sku: v.sku || undefined,
+          enStock: v.inStock
+        })));
+      }
+    }
+  } else {
+    console.warn(`${TAG} _loaderTienda: variantes no disponibles (${tpv && tpv.error})`);
+  }
+
+  const filas = (ed.productos || []).map(p => {
+    const enOferta = p.enPromocion === true;
+    return {
+      id: p.id,
+      nombre: p.name,
+      marca: p.brand || undefined,
+      precioVenta: enOferta ? p.discountedPrice : p.price,
+      precioOriginal: p.price,
+      enOferta,
+      descuentoPct: enOferta ? p.descuentoPct : undefined,
+      descuentoGuardado: p.discount || undefined,
+      cinta: p.ribbon || undefined,
+      visibleEnLaWeb: p.visible,
+      enStock: p.inStock,
+      seguimientoStock: p.trackInventory,
+      unidadesEnStock: p.quantityInStock,
+      sku: p.sku || undefined,
+      tipo: p.productType,
+      categorias: (p.collections || []).map(c => c.name).filter(Boolean),
+      variantes: variantesPorId.get(p.id),
+      infoAdicional: (Array.isArray(p.additionalInfoSections) && p.additionalInfoSections.length)
+        ? p.additionalInfoSections : undefined,
+      descripcion: String(p.description || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+    };
+  });
+
+  _cacheTienda = filas;
+  _cacheTiendaTs = Date.now();
+  return _filasTiendaSegun(filas, p);
+}
+
+// Sin búsqueda viaja el catálogo entero: la descripción y la información
+// adicional (textos largos) solo cuando se pregunta por productos concretos.
+function _filasTiendaSegun(filas, p) {
+  if (p && p.busqueda) return filas;
+  return filas.map(f => {
+    const o = { ...f };
+    delete o.descripcion;
+    delete o.infoAdicional;
+    return o;
+  });
+}
+
+/** Ventas de productos en el TPV (pedidos de la tienda), como el historial de ventas. */
+// Search Orders devuelve 100 pedidos por página (docs de eCommerce); el
+// historial de ventas pide una sola página. Si llegan 100, puede haber más.
+async function _loaderVentasTpv(p) {
+  const res = await obtenerHistorialVentas({ fechaDesde: p.desde, fechaHasta: p.hasta, limit: 100 });
+  if (!res || !res.ok) throw new Error((res && res.error) || 'no se pudo leer el historial de ventas');
+  const ventas = res.ventas || [];
+  if (ventas.length >= 100) {
+    return { filas: ventas, aviso: 'Se han leído los 100 pedidos más recientes del periodo: puede haber más. Acota con desde/hasta.' };
+  }
+  return ventas;
+}
+
+/** Lo mismo que la pantalla Estadísticas para un periodo. */
+async function _loaderEstadisticas(p) {
+  const res = await obtenerEstadisticas({ fechaDesde: p.desde, fechaHasta: p.hasta });
+  if (!res || res.ok === false) throw new Error((res && res.error) || 'no se pudieron calcular las estadísticas');
+  if (res.hayDatos === false) return { filas: [], nota: 'No hay datos en ese periodo.' };
+  const out = { ...res };
+  delete out.ok;
+  return [out];
+}
+
+// Listado de colecciones del sitio: patrón LITERAL de
+// cmsFieldReader.listarColeccionesV2 (elevate + parseo del response).
+// Por defecto devuelve hasta 1000 colecciones (docs de List Data Collections).
+const listDataCollectionsElevated = elevate(collections.listDataCollections);
+let _cacheColecciones = null;
+let _cacheColeccionesTs = 0;
+
+async function _listarColeccionesSitio() {
+  if (_cacheColecciones && (Date.now() - _cacheColeccionesTs) < 10 * 60 * 1000) return _cacheColecciones;
+  const response = await listDataCollectionsElevated();
+  let rawList = [];
+  if (response && Array.isArray(response.collections)) {
+    rawList = response.collections;
+  } else if (response && Array.isArray(response.dataCollections)) {
+    rawList = response.dataCollections;
+  } else if (Array.isArray(response)) {
+    rawList = response;
+  } else if (response && Array.isArray(response.items)) {
+    rawList = response.items;
+  }
+  const lista = rawList.map(c => ({
+    id: c.id || c._id || c.dataCollectionId || '',
+    nombre: c.displayName || c.displayField || c.name || '',
+    tipo: (typeof c.collectionType !== 'undefined') ? c.collectionType
+        : (typeof c.type !== 'undefined') ? c.type : ''
+  })).filter(c => c.id);
+  _cacheColecciones = lista;
+  _cacheColeccionesTs = Date.now();
+  return lista;
+}
+
+/**
+ * Registro de fuentes.
+ * AMPLIAR AQUÍ = añadir una entrada. El enum de la herramienta y su
+ * descripción se generan desde este objeto.
+ *
+ *   campoFecha — campo de fecha por el que filtran `desde`/`hasta` (el que ya
+ *                usa el backend de producción de esa colección; si no hay
+ *                ninguno, `_createdDate`, que existe en todas).
+ *   escaneo    — filas que se leen antes de aplicar `busqueda`.
+ *   requiereFechas — la fuente exige `desde` y `hasta`.
+ *   sinRecorte — los textos y objetos largos no se recortan (informes).
+ *   toleraSinMatch — fuente pequeña de configuración: una búsqueda sin
+ *                coincidencias devuelve todo (comportamiento anterior). En
+ *                el resto, sin coincidencias es cero.
  */
 const FUENTES_CONFIG = {
 
+  // ── CONFIGURACIÓN Y CATÁLOGOS ─────────────────────────────────────────
+
   servicios: {
     coleccion: 'ServiceCatalog',
-    descripcion: 'Catálogo de servicios del salón: precio de tarifa, duración, familia, grupo, fases técnicas, complementos, variantes, bonos y descuentos promocionales configurados. Úsalo para saber a qué precio ESTÁ un servicio (tarifa), no cuánto se cobró (eso son los cobros).',
+    toleraSinMatch: true,
+    descripcion: 'Catálogo de servicios con TODOS sus datos: precio de tarifa, duración, familia, grupo, fases, complementos, variantes, bonos, descuentos promocionales, si se reserva por web o solo en recepción, pago anticipado, servicio enlazado, smart pricing… Para el precio al que ESTÁ un servicio (tarifa), no lo cobrado. Solo activos salvo incluirInactivos.',
     filtroDefecto: { active: true },
     orden: 'order',
-    limite: 300,
-    campos: [
-      'label', 'price', 'duration', 'minProceso', 'family', 'group', 'group1',
-      'tipo', 'uso', 'claseServicio', 'ordenFases', 'mandatory', 'hasVariants',
-      'bonoActivo', 'bonoNumero', 'bonoDescuento', 'descuentoActivo',
-      'descuentoPromo', 'cobroporPeso', 'precioGramo', 'advancePayment',
-      'advancePercent', 'descripcion', 'setupUid'
-    ],
+    limite: 400,
+    campos: null,
     objetos: { mapeoFases: 'items', complementos: 'items', variantes: 'items' },
+    sensibles: []
+  },
+
+  categorias: {
+    coleccion: 'HairSalonServices',
+    toleraSinMatch: true,
+    descripcion: 'Categorías del Tour de Servicios (agrupación comercial de los servicios en la web) y qué colecciones de la tienda se sugieren con cada una en los correos.',
+    limite: 200,
+    campos: null,
     sensibles: []
   },
 
   personal: {
     coleccion: 'StaffConfig',
-    descripcion: 'Profesionales del salón: horario semanal de trabajo, horas semanales, porcentaje de comisión, si es personal externo, y nivel de acceso. Úsalo para saber cuándo trabaja alguien o cuál es su capacidad horaria.',
+    toleraSinMatch: true,
+    descripcion: 'Profesionales del salón con todos sus datos: horario semanal, horas semanales, comisión, si es externo, nivel de acceso, foto, notas. Solo activos salvo incluirInactivos.',
     filtroDefecto: { active: true },
-    limite: 60,
-    campos: [
-      'canonicalName', 'displayName', 'workingHoursSessionIds', 'isExternal',
-      'externalModule', 'commissionPercentage', 'locationName', 'notes', 'accessLevel'
-    ],
+    limite: 100,
+    campos: null,
     objetos: {},
     // pinCode NUNCA llega al modelo: es el PIN de acceso a Recepción PRO.
     sensibles: ['pinCode'],
@@ -1908,69 +2293,536 @@ const FUENTES_CONFIG = {
 
   salon: {
     coleccion: 'SalonConfig',
-    descripcion: 'Configuración general del salón: nombre, IVA aplicable, horarios de apertura, módulos activos (tienda, fidelización, WhatsApp), datos fiscales y de contacto.',
+    toleraSinMatch: true,
+    descripcion: 'Configuración general del salón (todos los ajustes): nombre, datos fiscales y de contacto, IVA, horarios de apertura, módulos activos (tienda, fidelización, WhatsApp, email), plan contratado, avisos y textos configurados.',
     filaUnica: true,
     limite: 1,
-    campos: [
-      'brandName', 'legalName', 'address', 'phone', 'tier', 'vatRate',
-      'hoursMonday', 'hoursTuesday', 'hoursWednesday', 'hoursThursday',
-      'hoursFriday', 'hoursSaturday', 'hoursSunday', 'closingGraceMin',
-      'defaultProfessional', 'externalStaffName', 'externalStaffArea',
-      'shopActive', 'loyaltyActive', 'waActive', 'whatsappPro', 'emailActive',
-      'usersActivation', 'widgetSkin'
-    ],
+    campos: null,
     objetos: {},
     // masterPin y pinMetaNActual son credenciales. Nunca al modelo.
     sensibles: ['masterPin', 'pinMetaNActual', 'newnumbercommandMeta']
   },
 
-  productos: {
-    coleccion: 'KamisuiteWarehouse',
-    descripcion: 'Almacén de productos: nombre, tipo, coste unitario, cantidad en stock y stock mínimo. Úsalo para consultas de inventario, valor del almacén o productos bajo mínimos.',
-    filtroDefecto: { active: true },
-    orden: 'productName',
-    limite: 300,
-    campos: ['productName', 'type', 'unitCost', 'quantity', 'minStock'],
-    objetos: [],
+  externos: {
+    coleccion: 'ExternalServices',
+    toleraSinMatch: true,
+    descripcion: 'Catálogo de servicios externos (los que presta personal no propio) y el porcentaje que retiene el salón de cada uno.',
+    filtroDefecto: { activeStatus: true },
+    limite: 100,
+    campos: null,
+    objetos: {},
     sensibles: []
   },
+
+  tienda: {
+    fuenteApi: 'Tienda (catálogo de productos a la venta)',
+    descripcion: 'PRODUCTOS DE LA TIENDA (los que se venden a la clienta, online o en el salón), ocultos incluidos: precio de venta, precio original, si está EN OFERTA y con qué % de descuento, visibilidad en la web, stock y unidades, marca, categorías, variantes con su precio; la descripción y la información adicional llegan al buscar productos concretos. Úsala para cualquier pregunta de productos a la venta, precios de producto, ofertas o descuentos de producto. NO es el almacén de uso interno.',
+    loader: _loaderTienda,
+    limite: 1000,
+    campos: null,
+    sensibles: []
+  },
+
+  almacen: {
+    coleccion: 'KamisuiteStock',
+    toleraSinMatch: true,
+    descripcion: 'ALMACÉN DE USO EN EL SALÓN (productos que se consumen en cabina, no la tienda): botes cerrados en estantería, botes abiertos en uso, stock mínimo y máximo, coste unitario, precio de venta de referencia, proveedor, marca, categoría. Para productos bajo mínimos, valor del almacén o reposición. Solo activos salvo incluirInactivos.',
+    filtroDefecto: { active: true },
+    orden: 'productName',
+    limite: 1000,
+    campos: null,
+    sensibles: []
+  },
+
+  especialesConfig: {
+    coleccion: 'KamisuiteProductsConfig',
+    descripcion: 'Configuración de los productos especiales del salón (PRIME, bonos, tarjetas promocionales): si están activos, precio y duración de PRIME, validez de los bonos, beneficios.',
+    filaUnica: true,
+    limite: 1,
+    campos: null,
+    sensibles: []
+  },
+
+  campanasPromo: {
+    coleccion: 'KamisuitePromoCampaigns',
+    descripcion: 'Campañas de tarjetas promocionales definidas por el salón: tipo, precio, ventana de fechas, si están activas.',
+    limite: 200,
+    campos: null,
+    sensibles: []
+  },
+
+  tarjetasRegaloPromo: {
+    coleccion: 'PromoGiftCards',
+    descripcion: 'Promociones de tarjeta regalo publicadas: título, precio original, precio promocional, descripción, validez y si están activas.',
+    limite: 200,
+    campos: null,
+    sensibles: []
+  },
+
+  smartPricing: {
+    coleccion: 'SmartPricingVersiones',
+    descripcion: 'Versiones de smart pricing (ofertas por día y hora en la reserva online): cuál está vigente y qué descuentos aplica cada una.',
+    campoFecha: '_createdDate',
+    limite: 100,
+    campos: null,
+    sensibles: []
+  },
+
+  campanaTienda: {
+    coleccion: 'KamisuiteCampanaProgramada',
+    descripcion: 'Campañas de descuento para toda la tienda (p. ej. Black Friday) programadas por fechas: porcentaje, inicio, fin, estado (PROGRAMADA, ACTIVA, TERMINADA) y resultado.',
+    campoFecha: '_createdDate',
+    limite: 100,
+    campos: null,
+    sensibles: []
+  },
+
+  b2b: {
+    coleccion: 'B2BProfiles',
+    descripcion: 'Perfiles de clientes profesionales (B2B): empresa, CIF/NIF, dirección de facturación, código de descuento y productos habituales.',
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  // ── CLIENTES ──────────────────────────────────────────────────────────
 
   clientes: {
     fuenteApi: 'Wix Contacts (CRM)',
-    descripcion: 'Ficha de contacto de los clientes del salón: nombre completo, teléfono y email. Úsalo cuando pidan los datos de contacto de una persona ("dame el teléfono de X", "el email de Y"). SIEMPRE con `busqueda`: son cientos de contactos. Para el HISTORIAL de visitas o gasto de un cliente usa consultar_datos_salon con el filtro cliente, no esta fuente.',
+    descripcion: 'Contactos del salón: nombre completo, teléfono, email y su contactId. Úsalo para localizar a una persona (o su contactId para buscarla en otras fuentes). SIEMPRE con `busqueda`: son cientos de contactos. Para todo lo demás de un cliente usa fichaCliente.',
     loader: _loaderClientes,
     requiereBusqueda: true,
     limite: 25,
-    campos: ['nombreCompleto', 'telefono', 'email'],
-    objetos: {},
-    // contactId es un UUID interno: no aporta nada al modelo y gasta tokens.
-    sensibles: ['contactId']
-  },
-
-  externos: {
-    coleccion: 'ExternalServices',
-    descripcion: 'Catálogo de servicios externos (los que presta personal no propio del salón) y el porcentaje de comisión que el salón retiene de cada uno.',
-    filtroDefecto: { activeStatus: true },
-    limite: 60,
-    campos: ['serviceName', 'contactPerson', 'commissionPercentage'],
+    campos: ['nombreCompleto', 'telefono', 'email', 'contactId'],
     objetos: {},
     sensibles: []
-  }
+  },
 
-  // ── PARA AÑADIR UNA FUENTE NUEVA ──
-  // Copiar el patrón de arriba. NADA MÁS que tocar: el input_schema, el
-  // prompt del modelo y el router se generan solos desde este objeto.
-  //
-  // Diferidas hasta que Jal las pida (cada fuente abierta = más contexto que
-  // el modelo debe digerir, y peores respuestas si se abren todas de golpe):
-  //   Invoices · InvoiceCounters · KamisuiteVouchers · KamisuitePrimeMemberships
-  //   KamisuitePromoCards · KamisuiteProductsConfig · ClientCareProfile
-  //   CareVisitRecord · TimeClockRecords · CommunicationLog · CashRegister
-  //   CashMovements · HairSalonServices · MarketingCampaigns · B2BProfiles
+  fichaCliente: {
+    fuenteApi: 'Ficha Cliente del CRM',
+    descripcion: 'FICHA COMPLETA DE UN CLIENTE, la misma de la pantalla Ficha Cliente: datos de contacto, fecha de nacimiento, sexo, CIF y razón social, puntos de fidelización, PRIME, bonos y tarjetas activos, notas del salón, mensajes con la clienta, notas de color y tratamientos, total facturado, número de visitas, última visita y el historial de visitas y compras. `busqueda` = nombre, teléfono, email o contactId; si hay varios clientes devuelve los candidatos.',
+    loader: _loaderFichaCliente,
+    loaderBusca: true,   // la búsqueda la resuelve el propio loader
+    requiereBusqueda: true,
+    limite: 25,
+    campos: null,
+    sinRecorte: true,
+    sensibles: []
+  },
+
+  notasCliente: {
+    coleccion: 'KamisuiteClientRecords',
+    descripcion: 'Anotaciones de clientes, una fila por anotación: fichas técnicas de COLOR y TRATAMIENTO, notas generales, notas que la clienta deja al salón (NOTA_CLIENTE) y mensajes del salón a la clienta (MENSAJE_SALON). Busca por nombre o contactId.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  cuidadoPerfil: {
+    coleccion: 'ClientCareProfile',
+    descripcion: 'Perfil de Cuidado y Salud de cada cliente (uno por cliente): estado del cabello, piel, uñas o pestañas, notas y seguimiento. Busca por nombre o contactId.',
+    escaneo: 3000,
+    limite: 200,
+    campos: null,
+    sensibles: []
+  },
+
+  cuidadoVisitas: {
+    coleccion: 'CareVisitRecord',
+    descripcion: 'Historial de Cuidado y Salud por visita y zona: diagnósticos (también los de IA sobre foto), tratamientos y recomendaciones.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 200,
+    campos: null,
+    sensibles: []
+  },
+
+  lopd: {
+    coleccion: 'ClientLopdSignatures',
+    descripcion: 'Firmas de protección de datos (LOPD) de los clientes: fecha de firma y consentimientos aceptados, incluido el uso de imágenes del resultado del trabajo.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  bonos: {
+    coleccion: 'KamisuiteVouchers',
+    descripcion: 'Bonos vendidos: cliente, servicio, sesiones totales y restantes, descuento aplicado, estado, caducidad y si van ligados a PRIME.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 500,
+    campos: null,
+    sensibles: []
+  },
+
+  bonosCanjes: {
+    coleccion: 'KamisuiteVoucherRedemptions',
+    descripcion: 'Canjes de bonos: cada sesión de bono consumida, con su cliente, bono y fecha.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 500,
+    campos: null,
+    sensibles: []
+  },
+
+  prime: {
+    coleccion: 'KamisuitePrimeMemberships',
+    descripcion: 'Membresías PRIME emitidas: cliente, código, estado, fecha de alta y caducidad.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 500,
+    campos: null,
+    sensibles: []
+  },
+
+  tarjetasPromo: {
+    coleccion: 'KamisuitePromoCards',
+    descripcion: 'Tarjetas promocionales vendidas (una por venta), también las de regalo: comprador, beneficiario, importe, estado y caducidad.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 500,
+    campos: null,
+    sensibles: []
+  },
+
+  pedidosTarjetaRegalo: {
+    coleccion: 'GiftCardOrders',
+    descripcion: 'Pedidos de tarjetas regalo promocionales hechos en la web: promoción, quién la envía, destinatario, mensaje e importe.',
+    campoFecha: '_createdDate',
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  // ── ACTIVIDAD (todo con fechas: desde / hasta) ────────────────────────
+
+  reservasDetalle: {
+    coleccion: 'KamisuiteReservations',
+    descripcion: 'Reservas registro a registro con TODOS sus datos (notas, fases, tramos, origen, estado, precio, cliente, profesional). Para el detalle de citas concretas. Para totales, conteos y comparativas usa consultar_datos_salon.',
+    campoFecha: 'fechaReserva',
+    escaneo: 2000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  cobrosDetalle: {
+    coleccion: 'PaymentReservations',
+    descripcion: 'Cobros registro a registro con TODOS sus datos (descripción de lo cobrado, método de pago, importe, descuentos, propina, factura, cliente, profesional), también ventas de producto y de especiales. Para totales usa consultar_datos_salon.',
+    campoFecha: 'fechaPago',
+    escaneo: 2000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  cobrosExternos: {
+    coleccion: 'PagoreservasExternos',
+    descripcion: 'Cobros de servicios externos (personal no propio): servicio, cliente, importe y comisión.',
+    campoFecha: 'fechaPago',
+    escaneo: 2000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  externosHistorico: {
+    coleccion: 'SvExternalRecords',
+    descripcion: 'Registro histórico de citas de servicios externos del sistema anterior (lo siguen leyendo Estadísticas y la ficha del cliente).',
+    campoFecha: 'date',
+    escaneo: 2000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  ventasTpv: {
+    fuenteApi: 'Pedidos del TPV de la tienda',
+    descripcion: 'Ventas de productos hechas en el TPV de la tienda (pedidos), con producto, cantidad, importe, cliente, fecha y factura. Las ventas de producto cobradas en Recepción también están en cobrosDetalle.',
+    loader: _loaderVentasTpv,
+    loaderFechas: true,
+    limite: 1000,
+    campos: null,
+    sensibles: []
+  },
+
+  estadisticas: {
+    fuenteApi: 'Pantalla Estadísticas',
+    descripcion: 'Lo mismo que la pantalla Estadísticas para un periodo: ingresos, IVA, descuentos, propinas, ranking de servicios, por día, día de la semana, método de pago y profesional, productividad, extras, externos, PRODUCTOS VENDIDOS (web y TPV), bonos (canjes, trabajo y deuda) y tipos de cliente. Exige desde y hasta.',
+    loader: _loaderEstadisticas,
+    loaderFechas: true,
+    requiereFechas: true,
+    filaUnica: true,
+    limite: 1,
+    campos: null,
+    sinRecorte: true,
+    sensibles: []
+  },
+
+  facturas: {
+    coleccion: 'Invoices',
+    descripcion: 'Facturas emitidas a clientes: número, fecha, cliente, datos fiscales, líneas, base, IVA y total.',
+    campoFecha: '_createdDate',
+    escaneo: 2000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  caja: {
+    coleccion: 'CashRegister',
+    descripcion: 'Caja del día (una fila por día): apertura, fondo, arqueo de efectivo, cierre, y confirmación de datáfono y Bizum.',
+    campoFecha: 'registerDate',
+    limite: 400,
+    campos: null,
+    sensibles: []
+  },
+
+  cajaMovimientos: {
+    coleccion: 'CashMovements',
+    descripcion: 'Movimientos manuales de caja: entradas, salidas y retiradas de efectivo, con importe, motivo y quién lo hizo.',
+    campoFecha: 'registerDate',
+    escaneo: 2000,
+    limite: 500,
+    campos: null,
+    sensibles: []
+  },
+
+  almacenMovimientos: {
+    coleccion: 'KamisuiteStockMoves',
+    descripcion: 'Libro de movimientos del almacén de uso en el salón: entradas (compra, traspaso desde la tienda, devolución), salidas (consumo en servicio, rotura, caducidad), aperturas de bote y ajustes por recuento, con producto, cantidad, existencias antes y después y quién lo hizo.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 500,
+    campos: null,
+    sensibles: []
+  },
+
+  fichajes: {
+    coleccion: 'TimeClockRecords',
+    descripcion: 'Control horario del personal: fichajes de entrada, salida y pausas, con profesional, día y hora.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 600,
+    campos: null,
+    sensibles: []
+  },
+
+  accesosRecepcion: {
+    coleccion: 'ReceptionAccessLog',
+    descripcion: 'Registro de accesos y actividad en Recepción PRO: quién entró con su PIN, cuándo y qué hizo.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 500,
+    campos: null,
+    sensibles: []
+  },
+
+  comunicaciones: {
+    coleccion: 'CommunicationLog',
+    descripcion: 'Histórico de comunicaciones enviadas a clientes por WhatsApp y email (confirmaciones, recordatorios, cancelaciones, compras, campañas…): canal, evento, destinatario, resultado y estado de entrega.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 600,
+    campos: null,
+    sensibles: []
+  },
+
+  recordatorios: {
+    coleccion: 'ReminderLog',
+    descripcion: 'Recordatorios automáticos de cita enviados (24 h antes): a qué reserva y cuándo.',
+    campoFecha: '_createdDate',
+    escaneo: 3000,
+    limite: 600,
+    campos: null,
+    sensibles: []
+  },
+
+  campanasEmail: {
+    coleccion: 'EmailCampaigns',
+    descripcion: 'Campañas de email: asunto, lista de destinatarios, programación, estado y cifras de envío.',
+    campoFecha: '_createdDate',
+    limite: 200,
+    campos: null,
+    sensibles: []
+  },
+
+  campanasWhatsapp: {
+    coleccion: 'MarketingCampaigns',
+    descripcion: 'Campañas de WhatsApp guardadas: plantilla, contenido, último uso y número de veces usada.',
+    campoFecha: '_createdDate',
+    limite: 200,
+    campos: null,
+    sensibles: []
+  },
+
+  cambiosServicios: {
+    coleccion: 'ChangeLogServices',
+    descripcion: 'Registro de cambios hechos en el catálogo de servicios (qué se cambió, cuándo y valores anteriores).',
+    campoFecha: '_createdDate',
+    escaneo: 2000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  historicoMensualAnterior: {
+    coleccion: 'KamisuiteLegacyMensual',
+    descripcion: 'Histórico del programa anterior a KAMISUITE: una fila por mes con sus totales.',
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  ticketsAnteriores: {
+    coleccion: 'KamisuiteLegacyTickets',
+    descripcion: 'Tickets del programa anterior a KAMISUITE, uno por visita: fecha, cliente, profesional, servicios, productos e importes.',
+    campoFecha: 'fecha',
+    escaneo: 3000,
+    limite: 300,
+    campos: null,
+    sensibles: []
+  },
+
+  // ── CUALQUIER OTRA COLECCIÓN ──────────────────────────────────────────
+
+  coleccion: {
+    generica: true,
+    descripcion: 'CUALQUIER otra colección de datos del salón que no esté en esta lista. Sin `coleccion` devuelve el listado de todas las colecciones; con `coleccion` (su id exacto del listado) devuelve sus registros con todos los campos. Úsala antes de afirmar que un dato no existe.',
+    limite: 300,
+    campos: null,
+    sensibles: []
+  }
 };
 
 /**
- * Ejecuta una lectura de configuración. Genérica: NO conoce ninguna colección.
+ * Fuente `coleccion`: lee cualquier colección del sitio por su id. Sin id,
+ * devuelve el listado. Un id que no está en el listado no se lee.
+ */
+async function _consultarColeccionLibre(p, def, t0) {
+  const lista = await _listarColeccionesSitio();
+  const id = String(p.coleccion || '').trim();
+  if (!id) {
+    return { fuente: 'coleccion', numRegistros: lista.length, datos: lista,
+      nota: 'Llama otra vez con `coleccion` = el id de la que necesites.' };
+  }
+  const existe = lista.find(c => c.id === id) || lista.find(c => c.id.toLowerCase() === id.toLowerCase());
+  if (!existe) {
+    return { fuente: 'coleccion', error: `No existe ninguna colección "${id}" en este salón.`, colecciones: lista.map(c => c.id) };
+  }
+  const defLibre = { ...def, campoFecha: '_createdDate' };
+  const { filas, truncado, techo } = await _leerColeccion(existe.id, defLibre, p);
+  return _cerrarResultado('coleccion', defLibre, p, filas, { truncado, techo, t0, coleccion: existe.id });
+}
+
+/**
+ * Proyección + búsqueda + techos, común a todas las fuentes.
+ */
+function _cerrarResultado(clave, def, p, raw, extra) {
+  const ex = extra || {};
+  let pares = (raw || []).map(item => ({ raw: item, f: _proyectarFila(item, def) }));
+  const notas = [];
+  if (ex.nota) notas.push(ex.nota);
+  const avisos = [];
+  if (ex.aviso) avisos.push(ex.aviso);
+
+  const admiteFechas = !!(def.campoFecha || def.loaderFechas);
+  if ((p.desde || p.hasta) && !admiteFechas) {
+    notas.push('Esta fuente no tiene fechas: desde/hasta no se han aplicado.');
+  }
+
+  // ── Búsqueda libre sobre los campos ya proyectados ──
+  if (p.busqueda && !def.loaderBusca) {
+    const norm = (s) => String(s || '').toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const needle = norm(p.busqueda).trim();
+    // Si buscan un teléfono, comparar solo dígitos: en CRM está como
+    // "+34 617 37 89 84" y lo teclean como "617378984".
+    const soloDigitos = needle.replace(/[^\d]/g, '');
+    const esTelefono = soloDigitos.length >= 6;
+
+    const match = pares.filter(x => {
+      const blob = norm(JSON.stringify(x.f));
+      if (blob.indexOf(needle) !== -1) return true;
+      if (esTelefono && blob.replace(/[^\d]/g, '').indexOf(soloDigitos) !== -1) return true;
+      return false;
+    });
+
+    // En las fuentes pequeñas de configuración (catálogo, personal…), sin
+    // match se devuelve todo: mejor contexto de más que respuesta vacía por
+    // una búsqueda mal formulada. En el resto, sin match es CERO.
+    const toleraSinMatch = def.toleraSinMatch === true;
+    if (match.length > 0 || !toleraSinMatch) {
+      if (match.length === 0) {
+        console.log(`${TAG} config fuente=${clave} busqueda="${p.busqueda}" → 0 resultados`);
+        if (ex.truncado) {
+          avisos.push(`Solo se han revisado los ${ex.techo} registros más recientes: puede haber coincidencias más antiguas. Acota con desde/hasta.`);
+        }
+        const vacio = {
+          fuente: clave,
+          numRegistros: 0,
+          datos: [],
+          nota: [`No se ha encontrado ningún registro que coincida con "${p.busqueda}".`].concat(notas).join(' ')
+        };
+        if (avisos.length) vacio.AVISO = avisos.join(' ');
+        return vacio;
+      }
+      pares = match;
+    }
+  }
+
+  if (ex.truncado) {
+    avisos.push(`Hay más registros de los ${ex.techo} leídos: el resultado NO es completo. Acota con desde/hasta o busqueda antes de dar totales.`);
+  }
+
+  // Techo de filas tras filtrar: protege el contexto del modelo.
+  const limite = def.limite || 300;
+  if (pares.length > limite) {
+    avisos.push(`Se muestran ${limite} de ${pares.length} registros.`);
+    pares = pares.slice(0, limite);
+  }
+
+  // Techo de tamaño: lo que viaja a Anthropic en una sola llamada.
+  // 1) modo compacto (mismos registros, textos y objetos más cortos);
+  // 2) si aún no cabe, menos registros, avisándolo.
+  let datos = def.filaUnica ? (pares[0] ? pares[0].f : null) : pares.map(x => x.f);
+  if ((JSON.stringify(datos) || '').length > MAX_RESULTADO_CHARS) {
+    const defC = { ...def, compacto: true };
+    const compactos = pares.map(x => _proyectarFila(x.raw, defC));
+    datos = def.filaUnica ? (compactos[0] || null) : compactos;
+    const json = JSON.stringify(datos) || '';
+    if (json.length <= MAX_RESULTADO_CHARS) {
+      avisos.push('Por tamaño, los textos largos llegan acortados. Para el detalle completo de un registro, búscalo con busqueda.');
+    } else if (def.filaUnica || !Array.isArray(datos)) {
+      datos = json.substring(0, MAX_RESULTADO_CHARS) + '… [recortado]';
+      avisos.push('El resultado era demasiado grande y llega recortado.');
+    } else {
+      const total = datos.length;
+      while (datos.length > 1 && JSON.stringify(datos).length > MAX_RESULTADO_CHARS) {
+        datos = datos.slice(0, Math.max(1, Math.floor(datos.length * 0.8)));
+      }
+      avisos.push(`Resultado recortado por tamaño: se muestran ${datos.length} de ${total} registros. Acota con busqueda o con fechas antes de dar totales.`);
+    }
+  }
+
+  console.log(`${TAG} config fuente=${clave}${ex.coleccion ? '/' + ex.coleccion : ''} filas=${Array.isArray(datos) ? datos.length : 1} → ${Date.now() - (ex.t0 || Date.now())}ms`);
+
+  const out = { fuente: clave };
+  if (ex.coleccion) out.coleccion = ex.coleccion;
+  else if (def.coleccion) out.coleccion = def.coleccion;
+  if (def.filaUnica) out.datos = datos;
+  else { out.numRegistros = datos.length; out.datos = datos; }
+  if (notas.length) out.nota = notas.join(' ');
+  if (avisos.length) out.AVISO = avisos.join(' ');
+  return out;
+}
+
+/**
+ * Ejecuta una lectura. Genérica: NO conoce ninguna colección.
  * Todo su comportamiento sale del registro.
  */
 async function consultarConfig(params) {
@@ -1991,91 +2843,35 @@ async function consultarConfig(params) {
   // enteras al modelo reventaría el contexto y el coste.
   if (def.requiereBusqueda && !p.busqueda) {
     return {
-      error: `La fuente "${clave}" necesita un término de búsqueda (nombre, teléfono o email).`
+      error: `La fuente "${clave}" necesita un término de búsqueda (nombre, teléfono, email o contactId).`
+    };
+  }
+  if (def.requiereFechas && !(p.desde && p.hasta)) {
+    return {
+      error: `La fuente "${clave}" necesita las fechas desde y hasta. Cópialas de la tabla FECHAS.`
     };
   }
 
-  // ── Obtención: loader (API externa) o query CMS declarativa ──
-  let raw;
-  if (typeof def.loader === 'function') {
-    raw = await def.loader();
-  } else {
-    let q = wixData.query(def.coleccion);
-    for (const [campo, valor] of Object.entries(def.filtroDefecto || {})) {
-      q = q.eq(campo, valor);
+  try {
+    if (def.generica) return await _consultarColeccionLibre(p, def, t0);
+
+    if (typeof def.loader === 'function') {
+      const r = await def.loader(p);
+      const filas = Array.isArray(r) ? r : ((r && r.filas) || []);
+      const nota = (!Array.isArray(r) && r && r.nota) || null;
+      const aviso = (!Array.isArray(r) && r && r.aviso) || null;
+      return _cerrarResultado(clave, def, p, filas, { t0, nota, aviso });
     }
-    if (p.filtro && typeof p.filtro === 'object') {
-      for (const [campo, valor] of Object.entries(p.filtro)) {
-        // Solo campos declarados: evita filtrar por lo que no se expone.
-        if ((def.campos || []).indexOf(campo) !== -1) q = q.eq(campo, valor);
-      }
-    }
-    if (def.orden) q = q.ascending(def.orden);
-    raw = await findAll(q, def.limite || 200);
+
+    const { filas, truncado, techo } = await _leerColeccion(def.coleccion, def, p);
+    return _cerrarResultado(clave, def, p, filas, { truncado, techo, t0 });
+  } catch (e) {
+    console.warn(`${TAG} config fuente=${clave} falló:`, e.message);
+    return {
+      fuente: clave,
+      error: `No se ha podido leer "${clave}" en este salón: ${e.message}`
+    };
   }
-
-  // ── Proyección: whitelist + OBJECT + sensibles + transform ──
-  const sensibles = new Set(def.sensibles || []);
-  let filas = raw.map(item => {
-    const out = {};
-    for (const campo of (def.campos || [])) {
-      if (sensibles.has(campo)) continue;          // nunca al modelo
-      const v = item[campo];
-      if (v === undefined || v === null || v === '') continue;
-      out[campo] = v;
-    }
-    // Campos OBJECT envueltos {items:[...]} → jsonIn (patrón producción)
-    for (const [campo, clave] of Object.entries(def.objetos || {})) {
-      if (sensibles.has(campo)) continue;
-      const arr = jsonIn(item[campo], clave);
-      if (arr.length > 0) out[campo] = arr;
-    }
-    return def.transform ? def.transform(out) : out;
-  });
-
-  // ── Búsqueda libre sobre los campos ya proyectados ──
-  if (p.busqueda) {
-    const norm = (s) => String(s || '').toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const needle = norm(p.busqueda).trim();
-    // Si buscan un teléfono, comparar solo dígitos: en CRM está como
-    // "+34 617 37 89 84" y lo teclean como "617378984".
-    const soloDigitos = needle.replace(/[^\d]/g, '');
-    const esTelefono = soloDigitos.length >= 6;
-
-    const match = filas.filter(f => {
-      const blob = norm(JSON.stringify(f));
-      if (blob.indexOf(needle) !== -1) return true;
-      if (esTelefono && blob.replace(/[^\d]/g, '').indexOf(soloDigitos) !== -1) return true;
-      return false;
-    });
-
-    if (match.length > 0) {
-      filas = match;
-    } else if (def.requiereBusqueda) {
-      // Sin match en una fuente que exige búsqueda, devolver TODO sería
-      // volcar el CRM entero. Mejor decir la verdad: no se ha encontrado.
-      console.log(`${TAG} config fuente=${clave} busqueda="${p.busqueda}" → 0 resultados`);
-      return {
-        fuente: clave,
-        numRegistros: 0,
-        datos: [],
-        nota: `No se ha encontrado ningún registro que coincida con "${p.busqueda}".`
-      };
-    }
-    // En fuentes pequeñas (catálogo, personal), sin match se devuelve todo:
-    // mejor contexto de más que respuesta vacía por una búsqueda mal formulada.
-  }
-
-  // Techo duro tras filtrar: protege el contexto del modelo.
-  if (def.limite && filas.length > def.limite) filas = filas.slice(0, def.limite);
-
-  console.log(`${TAG} config fuente=${clave} filas=${filas.length} → ${Date.now() - t0}ms`);
-
-  if (def.filaUnica) {
-    return { fuente: clave, coleccion: def.coleccion, datos: filas[0] || null };
-  }
-  return { fuente: clave, coleccion: def.coleccion, numRegistros: filas.length, datos: filas };
 }
 
 /**
@@ -2088,7 +2884,9 @@ function _buildToolConfig() {
   const listado = claves
     .map(k => {
       const f = FUENTES_CONFIG[k];
-      const req = f.requiereBusqueda ? ' [REQUIERE el parámetro `busqueda`]' : '';
+      const req = f.requiereBusqueda ? ' [REQUIERE `busqueda`]'
+        : (f.requiereFechas ? ' [REQUIERE `desde` y `hasta`]'
+        : ((f.campoFecha || f.loaderFechas) ? ' [admite `desde`/`hasta`]' : ''));
       return `· "${k}"${req}: ${f.descripcion}`;
     })
     .join('\n');
@@ -2097,12 +2895,15 @@ function _buildToolConfig() {
   return {
     name: 'consultar_configuracion_salon',
     description:
-      'Consulta cómo está CONFIGURADO el salón: catálogo de servicios y sus precios de tarifa, ' +
-      'horarios del personal, ajustes generales, almacén y comisiones. Estos datos NO tienen fecha: ' +
-      'describen el estado actual, no lo que ocurrió en un periodo.\n\n' +
-      'Combínala con consultar_datos_salon cuando la pregunta cruce configuración y actividad ' +
-      '(por ejemplo: comparar el precio de tarifa de un servicio con lo que se está cobrando, ' +
-      'o las horas contratadas de un profesional con las que tiene ocupadas).\n\n' +
+      'Acceso a TODA la información guardada en KAMISUITE, registro a registro: configuración, ' +
+      'catálogos, tienda, almacén, clientes y su ficha completa, bonos, PRIME, tarjetas, cuidado y ' +
+      'salud, LOPD, facturas, caja, fichajes, comunicaciones, campañas, histórico y cualquier otra ' +
+      'colección del salón.\n\n' +
+      'Para totales, conteos y comparativas de reservas y cobros usa consultar_datos_salon; esta ' +
+      'herramienta da el detalle. Combínalas cuando la pregunta cruce configuración y actividad ' +
+      '(por ejemplo: comparar el precio de tarifa de un servicio con lo que se está cobrando).\n\n' +
+      'Antes de afirmar que algo no existe o que no hay ninguno (descuentos, bonos, notas…), lee ' +
+      'la fuente que lo guarda. Si no sabes cuál es, usa "coleccion".\n\n' +
       'Fuentes disponibles:\n' + listado,
     input_schema: {
       type: 'object',
@@ -2110,16 +2911,20 @@ function _buildToolConfig() {
         fuente: {
           type: 'string',
           enum: claves,
-          description: 'Qué configuración leer.'
+          description: 'Qué información leer.'
         },
         busqueda: {
           type: 'string',
-          description: 'Texto libre para acotar: nombre de un servicio, de un profesional o de un cliente; también vale un teléfono o email. ' +
+          description: 'Texto libre para acotar: nombre de un servicio, producto, profesional o cliente; también un teléfono, un email o un contactId. ' +
             (conBusqueda.length > 0
-              ? `OBLIGATORIO en: ${conBusqueda.join(', ')} (son demasiados registros para devolverlos todos). `
+              ? `OBLIGATORIO en: ${conBusqueda.join(', ')}. `
               : '') +
-            'En el resto de fuentes es opcional: si se omite, devuelve todo.'
-        }
+            'En el resto es opcional.'
+        },
+        desde: { type: 'string', description: 'Fecha inicio YYYY-MM-DD, en las fuentes con fechas. Cópiala de la tabla FECHAS; no la calcules.' },
+        hasta: { type: 'string', description: 'Fecha fin YYYY-MM-DD, inclusive.' },
+        coleccion: { type: 'string', description: 'Solo con fuente "coleccion": id exacto de la colección, tal como sale en su listado.' },
+        incluirInactivos: { type: 'boolean', description: 'true para incluir también lo desactivado (servicios, personal, externos, almacén). Por defecto false.' }
       },
       required: ['fuente']
     }
@@ -2623,12 +3428,23 @@ function _buildSystemBlocks(ctx) {
     '1b. Tienes DOS herramientas y son complementarias:',
     '   · consultar_datos_salon → qué PASÓ o pasará (reservas, cobros,',
     '     conversión). Tiene fecha.',
-    '   · consultar_configuracion_salon → cómo está MONTADO el salón (precios',
-    '     de tarifa, horarios del personal, almacén, ajustes). NO tiene fecha.',
+    '   · consultar_configuracion_salon → TODO lo demás que guarda KAMISUITE,',
+    '     registro a registro: configuración, catálogos, tienda, almacén,',
+    '     clientes y su ficha, bonos, PRIME, tarjetas, cuidado, LOPD, facturas,',
+    '     caja, fichajes, comunicaciones, campañas y cualquier otra colección.',
+    '     Las fuentes con actividad admiten desde/hasta.',
     '   Cuando la pregunta cruce ambas, llama a las dos. Ejemplos: comparar el',
     '   precio de tarifa con lo cobrado de verdad; contrastar las horas de',
     '   horario de un profesional con las que tiene ocupadas; valorar si un',
     '   servicio rinde según su duración configurada.',
+    '1c. ACCESO TOTAL. Tienes acceso a toda la información del salón. Antes de',
+    '   afirmar que algo no existe o que no hay ninguno, léelo en la fuente que',
+    '   lo guarda (si dudas cuál, usa la fuente "coleccion"). Nunca contestes',
+    '   con datos de otra fuente como si fueran lo preguntado: el almacén de uso',
+    '   interno NO es la tienda, y los servicios NO son productos. Si de verdad',
+    '   no está en ninguna fuente, dilo así: «eso no lo tengo en KAMISUITE».',
+    '   Los identificadores internos (contactId, ids) son para tus consultas:',
+    '   no los recites al usuario.',
     '2. NUNCA calcules fechas. Copia las de la tabla FECHAS de este system.',
     '3. Si necesitas comparar dos periodos, llama a la herramienta dos veces.',
     '4. Si la herramienta devuelve numRegistros 0, dilo con claridad: no hay datos',
