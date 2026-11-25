@@ -1,6 +1,23 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.124  ·  Pregunta del ticket sin opción marcada
+ *
+ *   Pareja: page code v1.0.51 + facturacionSalonLogic v1.0.14.
+ *   · La pregunta del botón Ticket y la de 📤 ya no marcan ninguna opción
+ *     al abrirse (antes marcaba Email si la ficha lo tenía, y el botón
+ *     verde «EMITIR Y ENVIAR» lo mandaba por email sin que se viera).
+ *     Hasta elegir, el botón está desactivado y dice «ELIGE UNA OPCIÓN».
+ *   · El botón dice por dónde va: «EMITIR Y ENVIAR POR EMAIL», «EMITIR Y
+ *     ENVIAR POR WHATSAPP», «EMITIR Y ABRIR WHATSAPP», «EMITIR E
+ *     IMPRIMIR», «EMITIR SIN ENVIAR»; en 📤, lo mismo sin «EMITIR Y».
+ *   · «💬 WhatsApp» (Meta) pasa a «💬 WhatsApp automático», para no
+ *     confundirlo con «📱 Abrir WhatsApp».
+ *   · Tras «Abrir WhatsApp», el aviso pide revisar que en WhatsApp solo
+ *     esté este mensaje: si el chat tenía un texto sin enviar, WhatsApp
+ *     le suma el nuevo.
+ *   Nada más cambia.
+ *
  * VERSION: 1.1.123  ·  «Abrir WhatsApp» (envío manual, todos los salones)
  *
  *   Pareja: page code v1.0.51 + facturacionSalonLogic v1.0.12.
@@ -2245,7 +2262,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.123]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.124]';
 
   // ─── helpers ───
   function esc(s) {
@@ -4082,7 +4099,7 @@ button { font-family: inherit; cursor: pointer; }
             if (w && !w.closed) w.location.href = p.url;
             else window.open(p.url, '_blank', 'noopener');
             this._envioPanel[o] = null;
-            this._avisoEnvio(o, `✓ WhatsApp abierto para ${p.destino || ''}: pulsa Enviar en WhatsApp${this._textoFicha(p.ficha)}`, false);
+            this._avisoEnvio(o, `✓ WhatsApp abierto para ${p.destino || ''}: revisa que solo esté este mensaje y pulsa Enviar${this._textoFicha(p.ficha)}`, false);
           } else {
             try { if (w && !w.closed) w.close(); } catch (_) { /* nada */ }
             if (e) {
@@ -4109,9 +4126,8 @@ button { font-family: inherit; cursor: pointer; }
             e.telefono = p.telefono || '';
             e.whatsapp = !!p.whatsappDisponible;
           }
-          e.canal = e.email ? 'email'
-            : ((e.whatsapp && e.telefono) ? 'whatsapp'
-              : (e.telefono ? 'whatsapp_app' : (e.modo === 'emitir' ? 'no' : 'email')));
+          // v1.1.124 — sin opción marcada: la recepcionista elige siempre.
+          e.canal = '';
           this._envioRender(o);
           break;
         }
@@ -7763,7 +7779,7 @@ button { font-family: inherit; cursor: pointer; }
         return `<button data-canal="${canal}" class="ksEnvChip"${bloqueado ? ' disabled' : ''} style="flex:1 1 auto;background:${sel ? 'var(--ks-ink)' : 'var(--ks-paper2)'};color:${sel ? '#fff' : 'var(--ks-ink)'};border:1px solid ${sel ? 'var(--ks-ink)' : 'var(--ks-line)'};border-radius:8px;padding:7px 8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">${label}</button>`;
       };
       const chips = chip('email', '✉ Email')
-        + (e.whatsapp ? chip('whatsapp', '💬 WhatsApp') : '')
+        + (e.whatsapp ? chip('whatsapp', '💬 WhatsApp automático') : '')   // v1.1.124
         + chip('whatsapp_app', '📱 Abrir WhatsApp')   // v1.1.123
         + (e.modo === 'emitir' ? chip('imprimir', '🖨 Imprimir') + chip('no', 'No enviar') : '');
       let campo = '';
@@ -7774,12 +7790,18 @@ button { font-family: inherit; cursor: pointer; }
         const ph = e.canal === 'email' ? 'Email de la clienta' : 'Teléfono de la clienta';
         campo = `<input id="envDestino"${e.enviando ? ' disabled' : ''} placeholder="${ph}" value="${esc(val)}" style="border:1px solid var(--ks-line);border-radius:8px;padding:7px 10px;font-size:12.5px;font-family:inherit;outline:none;background:#fff;" />`;
       }
+      // v1.1.124 — el botón dice siempre por dónde va; sin elegir, desactivado.
+      const accion = {
+        email: 'ENVIAR POR EMAIL',
+        whatsapp: 'ENVIAR POR WHATSAPP',
+        whatsapp_app: 'ABRIR WHATSAPP'
+      };
       const okTxt = e.enviando ? 'Enviando…'
-        : (e.modo === 'emitir'
-          ? (e.canal === 'no' ? 'EMITIR TICKET'
-            : (e.canal === 'imprimir' ? 'EMITIR E IMPRIMIR'
-              : (e.canal === 'whatsapp_app' ? 'EMITIR Y ABRIR WHATSAPP' : 'EMITIR Y ENVIAR')))
-          : (e.canal === 'whatsapp_app' ? 'ABRIR WHATSAPP' : 'ENVIAR'));
+        : (!e.canal ? 'ELIGE UNA OPCIÓN'
+          : (e.modo === 'emitir'
+            ? (e.canal === 'no' ? 'EMITIR SIN ENVIAR'
+              : (e.canal === 'imprimir' ? 'EMITIR E IMPRIMIR' : `EMITIR Y ${accion[e.canal] || ''}`))
+            : (accion[e.canal] || '')));
       return `<div style="flex:1;display:flex;flex-direction:column;gap:7px;width:100%;">
           <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;">${titulo}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">${chips}</div>

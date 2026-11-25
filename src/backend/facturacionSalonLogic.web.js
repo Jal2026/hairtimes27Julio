@@ -1,10 +1,24 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.13
-// TAG: facturacion-salon-v1.0.13
+// VERSION: 1.0.14
+// TAG: facturacion-salon-v1.0.14
 // =============================================================
 // CHANGELOG:
+// v1.0.14 (2026-11-25) — EL ENLACE YA NO VA AL FINAL DEL MENSAJE.
+//   Si el chat de WhatsApp tenía un texto sin enviar, WhatsApp le suma el
+//   mensaje nuevo pegado, sin espacio. Con el enlace al final, el mensaje
+//   siguiente se pegaba al enlace («…f97bff21Hola») y lo rompía: «No se
+//   encuentra el documento» y, en el enlace largo de antes, «token
+//   validation failed» (Hair-Times, 25-Nov, T-2026-0012).
+//   · enlaceWhatsAppManual: texto «Hola <nombre>, te enviamos tu <ticket o
+//     factura> de <salón>. Puedes verlo aquí:» + enlace + «Gracias por tu
+//     visita.» El enlace queda en medio, entre líneas en blanco.
+//   · pdfDocumentoCompartido admite texto pegado detrás del código: toma
+//     el último '-' seguido de 8 caracteres hexadecimales y descarta lo
+//     que venga después. Arregla también los enlaces ya enviados con
+//     «Hola» pegado. Sigue haciendo falta el prefijo del _id.
+//
 // v1.0.13 (2026-11-25) — ENLACE CORTO Y DEL SALÓN EN «ABRIR WHATSAPP».
 //   El mensaje llevaba la URL firmada de Media (download-files.wixmp.com,
 //   unos 600 caracteres): «ese espanto de estética» (Jal).
@@ -417,7 +431,7 @@ import { enviarDocumentoWhatsApp, formatearTelefono } from 'backend/whatsappLogi
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.13';
+const VERSION = '1.0.14';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -2301,7 +2315,9 @@ export const enlaceWhatsAppManual = webMethod(
       const etiqueta = `${row.modo === MODO_FACTURA ? 'factura' : 'ticket'} ${row.invoiceNumber || ''}`.trim();
       const marca = cfg.brandName || cfg.legalName || '';
       const nombreCli = String(datos.nombre || row.clientName || '').trim();
-      const texto = `Hola ${nombreCli || ''}, te enviamos tu ${etiqueta}${marca ? ' de ' + marca : ''}. Gracias por tu visita.\n\nPuedes verlo aquí: ${pdfUrl}`
+      // v1.0.14 — el enlace en medio: si WhatsApp pega otro texto detrás,
+      // se pega a «visita.», no al enlace.
+      const texto = `Hola ${nombreCli || ''}, te enviamos tu ${etiqueta}${marca ? ' de ' + marca : ''}. Puedes verlo aquí:\n\n${pdfUrl}\n\nGracias por tu visita.`
         .replace('Hola , ', 'Hola, ');
       const url = `https://wa.me/${numero}?text=${encodeURIComponent(texto)}`;
 
@@ -2325,7 +2341,8 @@ function _codigoCompartir(row) {
 // Devuelve { ok, buffer, fileName } o { ok:false, motivo:
 // 'codigo' | 'no_existe' | 'caducado' }.
 export async function pdfDocumentoCompartido(codigo) {
-  const m = String(codigo || '').trim().match(/^(.+)-([0-9a-f]{8})$/i);
+  // v1.0.14 — sin '$': lo que venga pegado detrás del código se descarta.
+  const m = String(codigo || '').trim().match(/^(.+)-([0-9a-f]{8})/i);
   if (!m) return { ok: false, motivo: 'codigo' };
   const numero = m[1];
   const prefijo = m[2].toLowerCase();
