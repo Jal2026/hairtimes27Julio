@@ -1,6 +1,21 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.119  ·  Imprimir abre el diálogo de impresión
+ *
+ *   Pareja: facturacionSalonLogic v1.0.11 (page code v1.0.50 sin cambios).
+ *
+ *   (A) 🖨 ya no abre una pestaña con el PDF: el PDF llega en base64 (A4 u
+ *       80 mm, según Configuración del Salón), se carga en un marco oculto
+ *       y se abre directamente el diálogo de impresión del navegador.
+ *   (B) La pregunta del botón «🧾 Ticket» tiene una opción más:
+ *       Email / WhatsApp / 🖨 Imprimir / No enviar. «EMITIR E IMPRIMIR»
+ *       emite el ticket y abre el diálogo de impresión en cuanto llega.
+ *   (C) Con la pregunta abierta, el hueco del documento ocupa todo el
+ *       ancho del pie y «Cerrar» pasa debajo; antes quedaba en medio del
+ *       formulario.
+ *   Nada más cambia.
+ *
  * VERSION: 1.1.118  ·  Imprimir en 80 mm y enviar ticket / factura
  *
  *   Pareja: page code v1.0.50 + facturacionSalonLogic v1.0.10 (+ brevoLogic
@@ -2173,7 +2188,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.118]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.119]';
 
   // ─── helpers ───
   function esc(s) {
@@ -3428,7 +3443,8 @@ button { font-family: inherit; cursor: pointer; }
       // por origen ('cita' | 'tienda').
       this._envioPanel = { cita: null, tienda: null };
       this._envioAviso = { cita: null, tienda: null };
-      this._ventanaImpresion = null;    // pestaña abierta al pulsar 🖨
+      // v1.1.119 — «EMITIR E IMPRIMIR»: imprimir al llegar el ticket.
+      this._imprimirTrasEmitir = { cita: false, tienda: false };
       // v1.1.71 — Apertura de caja (fondo inicial del día). Módulo opcional
       // gobernado por SalonConfig.arqueoActivo (lo decide el page code).
       this._aperturaChequeada = false;   // ¿ya se disparó check-apertura-caja?
@@ -4074,6 +4090,11 @@ button { font-family: inherit; cursor: pointer; }
             this._toast('Error: ' + (p.error?.message || p.error || 'no se pudo emitir'));
           }
           this._renderVentaDocPanel();
+          // v1.1.119 — «EMITIR E IMPRIMIR»
+          if (this._imprimirTrasEmitir.tienda) {
+            this._imprimirTrasEmitir.tienda = false;
+            if (p.ok && p.invoiceId) this._imprimirDocumento('tienda', p.invoiceId);
+          }
           break;
         }
         case 'documentoVenta':
@@ -4368,6 +4389,11 @@ button { font-family: inherit; cursor: pointer; }
             this._toast('Error: ' + (p.error?.message || p.error || 'no se pudo emitir'));
           }
           if (this._modalReserva) this._renderFacturaSlot();
+          // v1.1.119 — «EMITIR E IMPRIMIR»
+          if (this._imprimirTrasEmitir.cita) {
+            this._imprimirTrasEmitir.cita = false;
+            if (p.ok && p.invoiceId) this._imprimirDocumento('cita', p.invoiceId);
+          }
           break;
         // ─── v1.1.63: nombres del salón para el texto copiable ───
         case 'salonNombres':
@@ -7054,6 +7080,7 @@ button { font-family: inherit; cursor: pointer; }
       this._pagoCita = null;
       this._envioPanel.cita = null;     // v1.1.118
       this._envioAviso.cita = null;
+      this._imprimirTrasEmitir.cita = false;   // v1.1.119
       this._renderModal();
       // v1.1.51 — F4/F5 auto-detección: si la cita tiene contactId real,
       // pedimos al page code los bonos/tarjetas activos del cliente para
@@ -7427,6 +7454,12 @@ button { font-family: inherit; cursor: pointer; }
       const slot = this.shadowRoot.getElementById('facturaSlot');
       if (!slot) return;
       const r = this._modalReserva; if (!r) return;
+      // v1.1.119 — con la pregunta de envío abierta, el hueco ocupa todo el
+      // ancho del pie y «Cerrar» pasa a la línea de abajo.
+      const anchoCompleto = !!this._envioPanel.cita && !this._facturaGenerando;
+      slot.style.flexBasis = anchoCompleto ? '100%' : '';
+      if (slot.parentElement) slot.parentElement.style.flexWrap = anchoCompleto ? 'wrap' : '';
+      slot.style.marginBottom = anchoCompleto ? '10px' : '';
 
       // ── A) Generando ──────────────────────────────────────────
       if (this._facturaGenerando) {
@@ -7619,7 +7652,7 @@ button { font-family: inherit; cursor: pointer; }
       };
       const chips = chip('email', '✉ Email')
         + (e.whatsapp ? chip('whatsapp', '💬 WhatsApp') : '')
-        + (e.modo === 'emitir' ? chip('no', 'No enviar') : '');
+        + (e.modo === 'emitir' ? chip('imprimir', '🖨 Imprimir') + chip('no', 'No enviar') : '');
       let campo = '';
       if (e.cargando) {
         campo = `<div style="font-size:11.5px;color:var(--ks-ink3);">Cargando datos de la clienta…</div>`;
@@ -7629,7 +7662,9 @@ button { font-family: inherit; cursor: pointer; }
         campo = `<input id="envDestino"${e.enviando ? ' disabled' : ''} placeholder="${ph}" value="${esc(val)}" style="border:1px solid var(--ks-line);border-radius:8px;padding:7px 10px;font-size:12.5px;font-family:inherit;outline:none;background:#fff;" />`;
       }
       const okTxt = e.enviando ? 'Enviando…'
-        : (e.modo === 'emitir' ? (e.canal === 'no' ? 'EMITIR TICKET' : 'EMITIR Y ENVIAR') : 'ENVIAR');
+        : (e.modo === 'emitir'
+          ? (e.canal === 'no' ? 'EMITIR TICKET' : (e.canal === 'imprimir' ? 'EMITIR E IMPRIMIR' : 'EMITIR Y ENVIAR'))
+          : 'ENVIAR');
       return `<div style="flex:1;display:flex;flex-direction:column;gap:7px;width:100%;">
           <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;">${titulo}</div>
           <div style="display:flex;gap:6px;">${chips}</div>
@@ -7664,8 +7699,10 @@ button { font-family: inherit; cursor: pointer; }
         this._envioRender(origen);
       });
       cont.querySelector('#envOk')?.addEventListener('click', () => {
-        // «No enviar»: emisión de siempre.
-        if (e.canal === 'no') {
+        // «No enviar» e «Imprimir»: emisión de siempre. Con «Imprimir», el
+        // diálogo de impresión se abre al llegar el ticket (v1.1.119).
+        if (e.canal === 'no' || e.canal === 'imprimir') {
+          this._imprimirTrasEmitir[origen] = (e.canal === 'imprimir');
           this._envioPanel[origen] = null;
           if (origen === 'tienda') {
             this._ventaGenerando = true; this._renderVentaDocPanel();
@@ -7749,69 +7786,62 @@ button { font-family: inherit; cursor: pointer; }
       return `${base} emitido`;
     }
 
-    // La pestaña se abre AL PULSAR: abrirla después de la respuesta la
-    // bloquearía el navegador. Al llegar el PDF se carga en ella.
+    // v1.1.119 — 🖨: el backend devuelve el PDF en base64 (A4 u 80 mm) y
+    // se abre directamente el diálogo de impresión, sin pestaña intermedia.
     _imprimirDocumento(origen, invoiceId) {
       if (!invoiceId) { this._toast('No se puede identificar el documento'); return; }
-      let w = null;
-      try { w = window.open('', '_blank'); } catch (_) { w = null; }
-      if (w) {
-        try { w.document.write('<title>Preparando…</title><p style="font:14px sans-serif;padding:24px;color:#555">Preparando el documento…</p>'); } catch (_) { /* sin texto */ }
-      }
-      this._ventanaImpresion = w;
+      this._avisoEnvio(origen, 'Preparando la impresión…', false);
       this._sendToPage('imprimirDocumento', { invoiceId, origen });
     }
 
     _recibirPdfImpresion(p) {
       const origen = (p.origen === 'tienda') ? 'tienda' : 'cita';
-      const w = this._ventanaImpresion;
-      this._ventanaImpresion = null;
-      const cerrar = () => { try { if (w && !w.closed) w.close(); } catch (_) { /* nada */ } };
-
-      if (!p.ok) {
-        cerrar();
+      if (!p.ok || !p.pdfBase64) {
         this._avisoEnvio(origen, p.error || 'No se pudo preparar el documento para imprimir.', true);
         return;
       }
-      // 80 mm: PDF en base64 → se abre en la pestaña del clic.
-      if (p.pdfBase64) {
-        let url = '';
+      let url = '';
+      try {
+        const bin = atob(p.pdfBase64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      } catch (_) {
+        this._avisoEnvio(origen, 'No se pudo preparar el documento para imprimir.', true);
+        return;
+      }
+      this._avisoEnvio(origen, '', false);
+      this._imprimirPdfUrl(url, p.fileName);
+    }
+
+    // Marco oculto con el PDF y print() al cargar: abre el diálogo de
+    // impresión del navegador sobre el propio PDF. Si el navegador no deja
+    // imprimir desde el marco, se abre el PDF en una pestaña.
+    _imprimirPdfUrl(url, fileName) {
+      document.getElementById('ksPrintFrame')?.remove();
+      const f = document.createElement('iframe');
+      f.id = 'ksPrintFrame';
+      f.setAttribute('aria-hidden', 'true');
+      f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+      f.onload = () => {
         try {
-          const bin = atob(p.pdfBase64);
-          const bytes = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+          f.contentWindow.focus();
+          f.contentWindow.print();
         } catch (_) {
-          cerrar();
-          this._avisoEnvio(origen, 'No se pudo abrir el documento para imprimir.', true);
-          return;
+          const w = window.open(url, '_blank');
+          if (!w) {
+            const a = document.createElement('a');
+            a.href = url; a.download = fileName || 'documento.pdf';
+            document.body.appendChild(a); a.click(); a.remove();
+          }
         }
-        if (w && !w.closed) {
-          w.location.href = url;
-        } else {
-          // Pestaña bloqueada: se descarga el PDF.
-          const a = document.createElement('a');
-          a.href = url; a.download = p.fileName || 'documento.pdf';
-          document.body.appendChild(a); a.click(); a.remove();
-        }
-        setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) { /* nada */ } }, 120000);
-        return;
-      }
-      // A4: el PDF original, como el 🔗. Si el enlace descarga el archivo
-      // en vez de abrirlo, la pestaña vacía se cierra sola.
-      if (p.pdfUrl) {
-        if (w && !w.closed) {
-          w.location.href = p.pdfUrl;
-          setTimeout(() => {
-            try { if (w && !w.closed && w.location.href === 'about:blank') w.close(); } catch (_) { /* abrió el PDF: se deja */ }
-          }, 4000);
-        } else {
-          window.open(p.pdfUrl, '_blank', 'noopener');
-        }
-        return;
-      }
-      cerrar();
-      this._avisoEnvio(origen, 'El documento no tiene PDF asociado', true);
+      };
+      f.src = url;
+      document.body.appendChild(f);
+      setTimeout(() => {
+        try { URL.revokeObjectURL(url); } catch (_) { /* nada */ }
+        if (document.getElementById('ksPrintFrame') === f) f.remove();
+      }, 120000);
     }
 
     _renderDescuentoChipPagado(pct, eurv, importeNeto) {
@@ -8682,6 +8712,7 @@ button { font-family: inherit; cursor: pointer; }
       this._ventaGenerando = false;
       this._envioPanel.tienda = null;   // v1.1.118
       this._envioAviso.tienda = null;
+      this._imprimirTrasEmitir.tienda = false;   // v1.1.119
       this._productoCart = [];
       this._productoSearchQ = '';
       this._closeSubModal();

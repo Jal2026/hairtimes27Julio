@@ -1,10 +1,20 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.10
-// TAG: facturacion-salon-v1.0.10
+// VERSION: 1.0.11
+// TAG: facturacion-salon-v1.0.11
 // =============================================================
 // CHANGELOG:
+// v1.0.11 (2026-11-25) — IMPRIMIR ABRE EL DIÁLOGO DE IMPRESIÓN.
+//   obtenerPdfImpresion devuelve ahora SIEMPRE el PDF en base64, también
+//   en A4, para que Recepción PRO lo cargue en un marco oculto y abra
+//   directamente el diálogo de impresión del navegador (sin pestaña
+//   intermedia). El enlace firmado no sirve para eso: es de otro dominio y
+//   se descarga como adjunto. El A4 se pinta con _generarPdfBuffer, la
+//   misma función que hizo el PDF guardado, desde la fila de Invoices y
+//   la SalonConfig actual. El PDF guardado y el que se envía por email o
+//   WhatsApp no cambian.
+//
 // v1.0.10 (2026-11-25) — IMPRIMIR EN 80 MM Y ENVIAR POR EMAIL/WHATSAPP.
 //   (1) IMPRIMIR. NEW obtenerPdfImpresion({ invoiceId }). Lee
 //       SalonConfig.printPaperFormat: con '80 mm' pinta el documento
@@ -374,7 +384,7 @@ import { enviarDocumentoWhatsApp } from 'backend/whatsappLogic.web.js';
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.10';
+const VERSION = '1.0.11';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -2078,9 +2088,10 @@ export const obtenerDocumentoReserva = webMethod(
 // v1.0.10 — IMPRIMIR Y ENVIAR DESDE RECEPCIÓN PRO
 // =============================================================
 
-// PDF para «Imprimir». Con SalonConfig.printPaperFormat = '80 mm' se pinta
-// la tira de 80 mm desde la fila guardada y se devuelve en base64 (no se
-// sube a Media). Con A4 o vacío, enlace nuevo al PDF original.
+// PDF para «Imprimir», en base64, listo para el diálogo de impresión.
+// Se pinta desde la fila guardada (no se emite nada ni se gasta número):
+// con SalonConfig.printPaperFormat = '80 mm', la tira de 80 mm; con A4 o
+// vacío, el A4 de _generarPdfBuffer. No se sube a Media.
 export const obtenerPdfImpresion = webMethod(
   Permissions.SiteMember,
   async ({ invoiceId } = {}) => {
@@ -2090,26 +2101,22 @@ export const obtenerPdfImpresion = webMethod(
       if (!row) return { ok: false, version: VERSION, error: 'No se encuentra el documento.' };
       const cfg = await _leerSalonConfig();
 
-      if (_esPapel80(cfg.printPaperFormat)) {
-        const items = (row.invoiceLines && Array.isArray(row.invoiceLines.items)) ? row.invoiceLines.items : [];
-        const buffer = _generarPdfRolloBuffer({
-          documento: row,
-          salonConfig: cfg,
-          lineas: items,
-          ivaDesglose: { base: row.baseAmount, cuota: row.vatAmount }
-        });
-        return {
-          ok: true,
-          version: VERSION,
-          formato: PAPEL_80MM,
-          invoiceNumber: row.invoiceNumber,
-          fileName: _nombrePdf(row),
-          pdfBase64: buffer.toString('base64')
-        };
-      }
-
-      const pdfUrl = await _resolverPdfUrlHttps(row.pdfUrl || '', _nombrePdf(row));
-      return { ok: true, version: VERSION, formato: 'A4', invoiceNumber: row.invoiceNumber, pdfUrl };
+      const datos = {
+        documento: row,
+        salonConfig: cfg,
+        lineas: (row.invoiceLines && Array.isArray(row.invoiceLines.items)) ? row.invoiceLines.items : [],
+        ivaDesglose: { base: row.baseAmount, cuota: row.vatAmount }
+      };
+      const es80 = _esPapel80(cfg.printPaperFormat);
+      const buffer = es80 ? _generarPdfRolloBuffer(datos) : _generarPdfBuffer(datos);
+      return {
+        ok: true,
+        version: VERSION,
+        formato: es80 ? PAPEL_80MM : 'A4',
+        invoiceNumber: row.invoiceNumber,
+        fileName: _nombrePdf(row),
+        pdfBase64: buffer.toString('base64')
+      };
     } catch (e) {
       console.error(`${TAG} ❌ obtenerPdfImpresion: ${e.message}`);
       return { ok: false, version: VERSION, error: 'No se pudo preparar el documento para imprimir.' };
