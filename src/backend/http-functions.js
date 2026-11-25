@@ -9,9 +9,22 @@
 //   https://www.hair-times.com/_functions/akiraAsk         (POST=pregunta a AKIRA)
 //   https://www.hair-times.com/_functions/akiraNuevaSesion (POST=abre sesión AKIRA)
 //   https://www.hair-times.com/_functions/akiraTts         (POST=voz de AKIRA)
+//   https://www.hair-times.com/_functions/documento?d=T-2026-0012-7c65130c
+//                                                          (GET=ticket o factura en PDF)
 //
 // CHANGELOG
 // ---------
+// v1.6.0 (25-Nov-2026)
+//   - NUEVO GET get_documento(): el enlace corto al ticket o la factura que
+//     lleva el mensaje de «Abrir WhatsApp» de Recepción PRO. Abre el PDF en
+//     el navegador (Content-Disposition inline), igual que get_descargarPdf
+//     devuelve el suyo (ok + buffer).
+//   - Toda la lógica está en facturacionSalonLogic.pdfDocumentoCompartido
+//     (v1.0.13): código '<número>-<8 primeros caracteres del _id>', caduca a
+//     los 30 días de la emisión. Enlace caducado o código que no existe →
+//     texto en español, sin datos.
+//   - Aditivo: el resto de funciones queda intacto.
+//
 // v1.5.0 (17-Sep-2026)
 //   - post_whatsappWebhook: además de los mensajes entrantes (value.messages),
 //     ahora procesa los avisos de estado de entrega (value.statuses) que Meta
@@ -61,6 +74,8 @@ import { askAkiraCore, crearSesionCore } from 'backend/akiraLogic.web';
 // Función PURA, no el webMethod: http-functions corre SIN sesión de miembro
 // y un webMethod con SiteMember rechazaría la llamada.
 import { akiraSynthesizeCore } from 'backend/akiraTTS.web';
+// v1.6.0 — enlace corto al ticket o la factura
+import { pdfDocumentoCompartido } from 'backend/facturacionSalonLogic.web';
 
 const COLECCION_PAGOS = 'PaymentReservations';
 const TAG_WA = '[WhatsApp Webhook]';
@@ -660,6 +675,34 @@ export async function get_descargarExcel(request) {
 // ═══════════════════════════════════════════════════════════════════════════
 // GET: Descargar PDF
 // ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GET: Ticket o factura en PDF — v1.6.0
+// URL: https://www.hair-times.com/_functions/documento?d=<número>-<8 car. del _id>
+// Lo manda «Abrir WhatsApp» de Recepción PRO. Caduca a los 30 días.
+// ═══════════════════════════════════════════════════════════════════════════
+export async function get_documento(request) {
+  try {
+    const r = await pdfDocumentoCompartido(request.query.d || '');
+    if (!r.ok) {
+      const texto = r.motivo === 'caducado'
+        ? 'Este enlace ha caducado. Pide tu ticket o tu factura en el salón.'
+        : 'No se encuentra el documento. Revisa el enlace o pide tu ticket o tu factura en el salón.';
+      const cuerpo = { headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: texto };
+      return r.motivo === 'caducado' ? forbidden(cuerpo) : badRequest(cuerpo);
+    }
+    return ok({
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `inline; filename="${r.fileName}"`
+      },
+      body: r.buffer
+    });
+  } catch (error) {
+    console.error('[HTTP] Error documento:', error);
+    return serverError({ headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: 'No se pudo abrir el documento. Inténtalo más tarde.' });
+  }
+}
 
 export async function get_descargarPdf(request) {
   try {

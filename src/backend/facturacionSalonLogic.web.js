@@ -1,10 +1,28 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.12
-// TAG: facturacion-salon-v1.0.12
+// VERSION: 1.0.13
+// TAG: facturacion-salon-v1.0.13
 // =============================================================
 // CHANGELOG:
+// v1.0.13 (2026-11-25) — ENLACE CORTO Y DEL SALÓN EN «ABRIR WHATSAPP».
+//   El mensaje llevaba la URL firmada de Media (download-files.wixmp.com,
+//   unos 600 caracteres): «ese espanto de estética» (Jal).
+//   · NEW pdfDocumentoCompartido(codigo) — función normal (no webMethod),
+//     como askAkiraCore: la usa http-functions get_documento.
+//     codigo = '<número>-<8 primeros caracteres del _id>', p. ej.
+//     'T-2026-0012-7c65130c'. Busca por invoiceNumber y comprueba el
+//     prefijo del _id: con el número solo no se abre ningún documento.
+//     Caduca a los 30 días de la fecha de emisión (decisión de Jal, la
+//     misma que el enlace anterior). Devuelve el A4 pintado con
+//     _generarPdfBuffer desde la fila guardada, como «Imprimir».
+//   · enlaceWhatsAppManual: el enlace es
+//     <SalonConfig.siteUrl>/_functions/documento?d=<codigo>, p. ej.
+//     https://www.hair-times.com/_functions/documento?d=T-2026-0012-7c65130c.
+//     Sin siteUrl, se usa el enlace firmado de antes. Texto: «… Gracias
+//     por tu visita.» + «Puedes verlo aquí: <enlace>».
+//   · _leerSalonConfig devuelve también siteUrl.
+//
 // v1.0.12 (2026-11-25) — «ABRIR WHATSAPP» (envío manual, todos los salones).
 //   NEW enlaceWhatsAppManual({ invoiceId, destino }). Devuelve el enlace
 //   oficial de WhatsApp para abrir un chat (https://wa.me/<número>?text=…)
@@ -399,7 +417,7 @@ import { enviarDocumentoWhatsApp, formatearTelefono } from 'backend/whatsappLogi
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.12';
+const VERSION = '1.0.13';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -440,6 +458,9 @@ const PDF_URL_EXPIRACION = 3600;
 // v1.0.12 — Enlace al PDF que va en el mensaje de «Abrir WhatsApp»:
 // 30 días (decisión de Jal). 43200 minutos.
 const ENLACE_WHATSAPP_EXPIRACION = 43200;
+// v1.0.13 — Enlace corto del salón al documento (http-functions
+// get_documento): días que sigue abriendo desde la fecha de emisión.
+const DIAS_ENLACE_DOCUMENTO = 30;
 
 // v1.0.10 — Papel de «Imprimir». SalonConfig.printPaperFormat.
 const PAPEL_80MM = '80 mm';
@@ -473,6 +494,7 @@ async function _leerSalonConfig() {
       address:            String(cfg.address      || ''),
       phone:              String(cfg.phone        || ''),
       invoiceEmail:       String(cfg.invoiceEmail || cfg.senderEmail || ''),
+      siteUrl:            String(cfg.siteUrl || ''),   // v1.0.13
       vatRate:            (!isNaN(vatRate) && vatRate > 0) ? vatRate : DEFAULT_VAT_RATE,
       invoiceSeries:      String(cfg.invoiceSeries      || DEFAULT_INVOICE_SERIES),
       ticketSeries:       String(cfg.ticketSeries       || DEFAULT_TICKET_SERIES),
@@ -488,7 +510,7 @@ async function _leerSalonConfig() {
     console.warn(`${TAG} Error leyendo SalonConfig: ${e.message}. Usando defaults.`);
     return {
       legalName: '', brandName: '', taxId: '', address: '', phone: '',
-      invoiceEmail: '', vatRate: DEFAULT_VAT_RATE,
+      invoiceEmail: '', siteUrl: '', vatRate: DEFAULT_VAT_RATE,
       invoiceSeries: DEFAULT_INVOICE_SERIES, ticketSeries: DEFAULT_TICKET_SERIES,
       invoiceStartNumber: 0, ticketStartNumber: 0,
       printPaperFormat: '', invoiceEmailText: '',
@@ -2263,8 +2285,15 @@ export const enlaceWhatsAppManual = webMethod(
       const ficha = await _sincronizarFicha(contactId, CANAL_WHATSAPP, d);
       const datos = await _datosClienta(contactId, row);
 
-      const fileName = _nombrePdf(row);
-      const pdfUrl = await _resolverPdfUrlHttps(row.pdfUrl || '', fileName, ENLACE_WHATSAPP_EXPIRACION);
+      // v1.0.13 — enlace corto en el dominio del salón; sin siteUrl, el
+      // enlace firmado de Media como en la v1.0.12.
+      const base = String(cfg.siteUrl || '').trim().replace(/\/+$/, '');
+      let pdfUrl = '';
+      if (/^https:\/\//.test(base)) {
+        pdfUrl = `${base}/_functions/documento?d=${encodeURIComponent(_codigoCompartir(row))}`;
+      } else {
+        pdfUrl = await _resolverPdfUrlHttps(row.pdfUrl || '', _nombrePdf(row), ENLACE_WHATSAPP_EXPIRACION);
+      }
       if (!pdfUrl || !pdfUrl.startsWith('https://')) {
         return { ok: false, version: VERSION, error: 'Este documento no tiene PDF para enviar.', ficha };
       }
@@ -2272,7 +2301,7 @@ export const enlaceWhatsAppManual = webMethod(
       const etiqueta = `${row.modo === MODO_FACTURA ? 'factura' : 'ticket'} ${row.invoiceNumber || ''}`.trim();
       const marca = cfg.brandName || cfg.legalName || '';
       const nombreCli = String(datos.nombre || row.clientName || '').trim();
-      const texto = `Hola ${nombreCli || ''}, te enviamos tu ${etiqueta}${marca ? ' de ' + marca : ''}. Gracias por tu visita.\n\n${pdfUrl}`
+      const texto = `Hola ${nombreCli || ''}, te enviamos tu ${etiqueta}${marca ? ' de ' + marca : ''}. Gracias por tu visita.\n\nPuedes verlo aquí: ${pdfUrl}`
         .replace('Hola , ', 'Hola, ');
       const url = `https://wa.me/${numero}?text=${encodeURIComponent(texto)}`;
 
@@ -2284,3 +2313,39 @@ export const enlaceWhatsAppManual = webMethod(
     }
   }
 );
+
+// v1.0.13 — Código público del documento para el enlace corto:
+// '<número>-<8 primeros caracteres del _id>'.
+function _codigoCompartir(row) {
+  return `${row.invoiceNumber}-${String(row._id || '').substring(0, 8)}`;
+}
+
+// v1.0.13 — PDF del enlace corto (http-functions get_documento). Función
+// normal, no webMethod: la llama el backend, como askAkiraCore.
+// Devuelve { ok, buffer, fileName } o { ok:false, motivo:
+// 'codigo' | 'no_existe' | 'caducado' }.
+export async function pdfDocumentoCompartido(codigo) {
+  const m = String(codigo || '').trim().match(/^(.+)-([0-9a-f]{8})$/i);
+  if (!m) return { ok: false, motivo: 'codigo' };
+  const numero = m[1];
+  const prefijo = m[2].toLowerCase();
+
+  const r = await wixData.query(COL_INVOICES).eq('invoiceNumber', numero).find(CMS_OPTS);
+  const row = ((r && r.items) || []).find(it => String(it._id || '').toLowerCase().startsWith(prefijo));
+  if (!row) return { ok: false, motivo: 'no_existe' };
+
+  const emitido = new Date(row.issueDate || row._createdDate).getTime();
+  if (!emitido || (Date.now() - emitido) > DIAS_ENLACE_DOCUMENTO * 24 * 60 * 60 * 1000) {
+    return { ok: false, motivo: 'caducado' };
+  }
+
+  const cfg = await _leerSalonConfig();
+  const buffer = _generarPdfBuffer({
+    documento: row,
+    salonConfig: cfg,
+    lineas: (row.invoiceLines && Array.isArray(row.invoiceLines.items)) ? row.invoiceLines.items : [],
+    ivaDesglose: { base: row.baseAmount, cuota: row.vatAmount }
+  });
+  console.log(`${TAG} 🔗 Enlace del documento abierto: ${row.invoiceNumber}`);
+  return { ok: true, buffer, fileName: _nombrePdf(row) };
+}
