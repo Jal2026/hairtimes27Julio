@@ -1,6 +1,21 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.120  ·  Citas de profesional externo sin ticket ni factura
+ *
+ *   El cobro de un profesional EXTERNO no entra en PaymentReservations
+ *   (va a PagoreservasExternos), así que «🧾 Ticket» y «📄 Factura»
+ *   acababan en «No se encontró el cobro de esta reserva». Además, el
+ *   documento sale con los datos fiscales del salón, que no es quien cobra
+ *   ese servicio.
+ *   · En el modal de una cita PAGADA cuyo profesional es externo
+ *     (this._staff[].isExternal, el mismo dato que pinta la etiqueta «ext»
+ *     de la columna) no salen los botones: sale «Esta cita es de un
+ *     profesional externo: no puede llevar ticket ni factura a nombre de
+ *     <marca del salón>».
+ *   · Tras cobrar una cita externa no se pide el ticket automático.
+ *   Page code y backends sin cambios.
+ *
  * VERSION: 1.1.119  ·  Imprimir abre el diálogo de impresión
  *
  *   Pareja: facturacionSalonLogic v1.0.11 (page code v1.0.50 sin cambios).
@@ -2188,7 +2203,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.119]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.120]';
 
   // ─── helpers ───
   function esc(s) {
@@ -3810,7 +3825,9 @@ button { font-family: inherit; cursor: pointer; }
             }
             // v1.1.118 — ticket automático (el backend decide con
             // SalonConfig.ticketAutoSend). Solo en un cobro nuevo.
-            const ridTicketAuto = (!p.yaEstabaPagado && this._modalReserva) ? this._modalReserva._id : '';
+            // v1.1.120 — ni en citas de profesional externo.
+            const ridTicketAuto = (!p.yaEstabaPagado && this._modalReserva && !this._esCitaExterna(this._modalReserva))
+              ? this._modalReserva._id : '';
             this._closeModal();
             this._sendToPage('getReservas', { fecha: this._fecha });
             if (ridTicketAuto) this._sendToPage('ticketAutomatico', { reservaId: ridTicketAuto, origen: 'cita' });
@@ -7461,6 +7478,13 @@ button { font-family: inherit; cursor: pointer; }
       if (slot.parentElement) slot.parentElement.style.flexWrap = anchoCompleto ? 'wrap' : '';
       slot.style.marginBottom = anchoCompleto ? '10px' : '';
 
+      // ── v1.1.120 — Profesional EXTERNO: sin ticket ni factura ─────
+      if (this._esCitaExterna(r)) {
+        const marca = this._salonBrandName || this._salonLegalName || 'el salón';
+        slot.innerHTML = `<span style="color:var(--ks-ink2);font-size:12px;font-weight:600;line-height:1.35;">Esta cita es de un profesional externo: no puede llevar ticket ni factura a nombre de ${esc(marca)}.</span>`;
+        return;
+      }
+
       // ── A) Generando ──────────────────────────────────────────
       if (this._facturaGenerando) {
         slot.innerHTML = `<span style="color:var(--ks-ink2);font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;">
@@ -7615,6 +7639,14 @@ button { font-family: inherit; cursor: pointer; }
         // v1.1.117 — rellenar con el CIF y la razón social de la ficha.
         if (r.contactId) this._sendToPage('leerDatosFiscales', { contactId: r.contactId, origen: 'factura' });
       });
+    }
+
+    // v1.1.120 — ¿La cita es de un profesional externo? Mismo dato que la
+    // etiqueta «ext» de la columna (this._staff[].isExternal).
+    _esCitaExterna(r) {
+      if (!r || !r.staffId) return false;
+      const st = (this._staff || []).find(x => x.wixResourceId === r.staffId);
+      return !!(st && st.isExternal);
     }
 
     // ═══════════════════════════════════════════════════
