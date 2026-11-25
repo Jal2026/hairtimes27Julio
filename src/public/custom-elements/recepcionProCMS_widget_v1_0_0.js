@@ -1,6 +1,17 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.121  ·  Nombre del salón en el aviso de cita externa
+ *
+ *   En Hair-Times el aviso salió «a nombre de el salón»: el widget no
+ *   tenía la marca del salón, aunque SalonConfig sí la tiene («Hair
+ *   Times»). La marca solo se pide una vez al arrancar ('salonNombres',
+ *   sin reintento) y esa respuesta no llegó.
+ *   · Si el aviso se pinta sin marca, se vuelve a pedir 'salonNombres' y,
+ *     al llegar, se repinta el aviso.
+ *   · Mientras tanto dice «a nombre del salón» (antes «de el salón»).
+ *   Page code y backends sin cambios.
+ *
  * VERSION: 1.1.120  ·  Citas de profesional externo sin ticket ni factura
  *
  *   El cobro de un profesional EXTERNO no entra en PaymentReservations
@@ -2203,7 +2214,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.120]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.121]';
 
   // ─── helpers ───
   function esc(s) {
@@ -4416,6 +4427,8 @@ button { font-family: inherit; cursor: pointer; }
         case 'salonNombres':
           this._salonBrandName = p.brandName || '';
           this._salonLegalName = p.legalName || '';
+          // v1.1.121 — repintar el aviso de cita externa si está a la vista.
+          if (this._modalReserva && this._esCitaExterna(this._modalReserva)) this._renderFacturaSlot();
           break;
         // ─── v1.1.45: capa de acceso ───
         case 'usersActivation':
@@ -7480,8 +7493,10 @@ button { font-family: inherit; cursor: pointer; }
 
       // ── v1.1.120 — Profesional EXTERNO: sin ticket ni factura ─────
       if (this._esCitaExterna(r)) {
-        const marca = this._salonBrandName || this._salonLegalName || 'el salón';
-        slot.innerHTML = `<span style="color:var(--ks-ink2);font-size:12px;font-weight:600;line-height:1.35;">Esta cita es de un profesional externo: no puede llevar ticket ni factura a nombre de ${esc(marca)}.</span>`;
+        const marca = this._salonBrandName || this._salonLegalName;
+        // v1.1.121 — sin marca, se pide otra vez; al llegar se repinta.
+        if (!marca) this._sendToPage('salonNombres', {});
+        slot.innerHTML = `<span style="color:var(--ks-ink2);font-size:12px;font-weight:600;line-height:1.35;">Esta cita es de un profesional externo: no puede llevar ticket ni factura a nombre ${marca ? 'de ' + esc(marca) : 'del salón'}.</span>`;
         return;
       }
 
