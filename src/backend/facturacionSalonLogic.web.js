@@ -1,10 +1,25 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.11
-// TAG: facturacion-salon-v1.0.11
+// VERSION: 1.0.12
+// TAG: facturacion-salon-v1.0.12
 // =============================================================
 // CHANGELOG:
+// v1.0.12 (2026-11-25) — «ABRIR WHATSAPP» (envío manual, todos los salones).
+//   NEW enlaceWhatsAppManual({ invoiceId, destino }). Devuelve el enlace
+//   oficial de WhatsApp para abrir un chat (https://wa.me/<número>?text=…)
+//   con el número de la clienta y el mensaje escrito; la recepcionista
+//   solo pulsa Enviar. No pasa por Meta ni necesita plantilla ni el extra.
+//   · El enlace de WhatsApp no adjunta archivos: el mensaje lleva un
+//     enlace al PDF original que dura 30 días (ENLACE_WHATSAPP_EXPIRACION =
+//     43200 minutos; comprobado en Hair-Times que Media lo acepta).
+//   · Texto: el mismo de la plantilla de Meta (Hola {nombre}, te enviamos
+//     tu {documento} de {marca}. Gracias por tu visita.) y el enlace.
+//   · Número: formatearTelefono de whatsappLogic (el mismo que usan los
+//     envíos por WhatsApp). Si no coincide con la ficha, se guarda en
+//     ella, como en el resto de envíos.
+//   · _resolverPdfUrlHttps acepta una caducidad opcional (minutos).
+//
 // v1.0.11 (2026-11-25) — IMPRIMIR ABRE EL DIÁLOGO DE IMPRESIÓN.
 //   obtenerPdfImpresion devuelve ahora SIEMPRE el PDF en base64, también
 //   en A4, para que Recepción PRO lo cargue en un marco oculto y abra
@@ -378,13 +393,13 @@ import { jsPDF } from 'jspdf';
 // v1.0.10 — envío del documento. Mismo patrón de import que
 // comunicacionesLogic (brevoLogic.web.js / whatsappLogic.web.js).
 import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
-import { enviarDocumentoWhatsApp } from 'backend/whatsappLogic.web.js';
+import { enviarDocumentoWhatsApp, formatearTelefono } from 'backend/whatsappLogic.web.js';
 
 // -------------------------------------------------------------
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.11';
+const VERSION = '1.0.12';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -422,6 +437,9 @@ const CMS_OPTS = { suppressAuth: true };
 // v1.0.10 — Caducidad de los enlaces del PDF. getDownloadUrl la toma en
 // MINUTOS (3600 → token de 60 h, comprobado en Invoices de Hair-Times).
 const PDF_URL_EXPIRACION = 3600;
+// v1.0.12 — Enlace al PDF que va en el mensaje de «Abrir WhatsApp»:
+// 30 días (decisión de Jal). 43200 minutos.
+const ENLACE_WHATSAPP_EXPIRACION = 43200;
 
 // v1.0.10 — Papel de «Imprimir». SalonConfig.printPaperFormat.
 const PAPEL_80MM = '80 mm';
@@ -959,7 +977,7 @@ function _generarPdfBuffer({ documento, salonConfig, lineas, ivaDesglose }) {
 // v1.0.10 — `nombreArchivo` ('<número>.pdf'): con él, una URL firmada
 // guardada (que caduca) se reconstruye como URL de Media y se vuelve a
 // firmar. Sin él, la URL HTTPS se devuelve tal cual, como antes.
-async function _resolverPdfUrlHttps(rawFileUrl, nombreArchivo) {
+async function _resolverPdfUrlHttps(rawFileUrl, nombreArchivo, expiracionMin) {
   if (!rawFileUrl) return '';
   // v1.0.10 — si la nueva firma falla, se devuelve lo que había guardado
   // (nunca la URL wix:document://, que el navegador no abre).
@@ -977,7 +995,7 @@ async function _resolverPdfUrlHttps(rawFileUrl, nombreArchivo) {
   // wix:document://... → resolver con Wix Media API
   if (rawFileUrl.startsWith('wix:document://')) {
     try {
-      const result = await mediaManager.getDownloadUrl(rawFileUrl, PDF_URL_EXPIRACION);
+      const result = await mediaManager.getDownloadUrl(rawFileUrl, expiracionMin || PDF_URL_EXPIRACION);
       if (typeof result === 'string' && result) return result;
       if (result && typeof result === 'object' && result.downloadUrl) return result.downloadUrl;
       console.warn(`${TAG} ⚠️ getDownloadUrl devolvió shape inesperado:`, result);
@@ -2219,6 +2237,50 @@ export const ticketAutomatico = webMethod(
     } catch (e) {
       console.error(`${TAG} ❌ ticketAutomatico: ${e.message}`);
       return { ok: false, version: VERSION, error: 'No se pudo emitir el ticket automático.' };
+    }
+  }
+);
+
+// v1.0.12 — «Abrir WhatsApp»: enlace wa.me con el número de la clienta y el
+// mensaje escrito (texto de la plantilla de Meta + enlace al PDF de 30
+// días). No envía nada: lo envía la recepcionista desde WhatsApp. Sirve
+// para ticket y factura y para todos los salones (no usa Meta).
+export const enlaceWhatsAppManual = webMethod(
+  Permissions.SiteMember,
+  async ({ invoiceId, destino } = {}) => {
+    try {
+      const d = String(destino || '').trim();
+      if (!invoiceId) return { ok: false, version: VERSION, error: 'Falta el documento.' };
+      if (!d) return { ok: false, version: VERSION, error: 'Escribe el teléfono de la clienta.' };
+      const numero = await formatearTelefono(d);
+      if (!numero) return { ok: false, version: VERSION, error: 'El teléfono no es válido.' };
+
+      const row = await wixData.get(COL_INVOICES, invoiceId, CMS_OPTS);
+      if (!row) return { ok: false, version: VERSION, error: 'No se encuentra el documento.' };
+      const cfg = await _leerSalonConfig();
+
+      const contactId = await _contactIdDeDocumento(row);
+      const ficha = await _sincronizarFicha(contactId, CANAL_WHATSAPP, d);
+      const datos = await _datosClienta(contactId, row);
+
+      const fileName = _nombrePdf(row);
+      const pdfUrl = await _resolverPdfUrlHttps(row.pdfUrl || '', fileName, ENLACE_WHATSAPP_EXPIRACION);
+      if (!pdfUrl || !pdfUrl.startsWith('https://')) {
+        return { ok: false, version: VERSION, error: 'Este documento no tiene PDF para enviar.', ficha };
+      }
+
+      const etiqueta = `${row.modo === MODO_FACTURA ? 'factura' : 'ticket'} ${row.invoiceNumber || ''}`.trim();
+      const marca = cfg.brandName || cfg.legalName || '';
+      const nombreCli = String(datos.nombre || row.clientName || '').trim();
+      const texto = `Hola ${nombreCli || ''}, te enviamos tu ${etiqueta}${marca ? ' de ' + marca : ''}. Gracias por tu visita.\n\n${pdfUrl}`
+        .replace('Hola , ', 'Hola, ');
+      const url = `https://wa.me/${numero}?text=${encodeURIComponent(texto)}`;
+
+      console.log(`${TAG} 📱 WhatsApp manual preparado: ${row.invoiceNumber} → ${numero}${ficha.actualizada ? ' · ficha actualizada' : ''}`);
+      return { ok: true, version: VERSION, url, canal: CANAL_WHATSAPP, destino: d, invoiceNumber: row.invoiceNumber, ficha };
+    } catch (e) {
+      console.error(`${TAG} ❌ enlaceWhatsAppManual: ${e.message}`);
+      return { ok: false, version: VERSION, error: 'No se pudo preparar el WhatsApp. Vuelve a intentarlo.' };
     }
   }
 );

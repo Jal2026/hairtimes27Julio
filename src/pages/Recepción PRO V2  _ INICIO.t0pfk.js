@@ -1,8 +1,17 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.50
+// VERSION: 1.0.51
 // FECHA: 25 de noviembre de 2026
+//
+// v1.0.51: «Abrir WhatsApp» (envío manual, todos los salones).
+//          Pareja: facturacionSalonLogic.web v1.0.12 y widget v1.1.123.
+//          · NEW import enlaceWhatsAppManual.
+//          · Handler 'whatsappManual' { invoiceId, destino, origen } →
+//            'whatsappManual' { ok, url, ficha, … , origen }. Si guardó el
+//            teléfono en la ficha, se actualiza la caché de clientes
+//            (_actualizarCacheTrasEnvio, v1.0.50).
+//          · Nada más cambia.
 //
 // v1.0.50: Imprimir en 80 mm y enviar ticket / factura por email o
 //          WhatsApp. Pareja: facturacionSalonLogic.web v1.0.10 y widget
@@ -677,7 +686,9 @@ import {
   datosEnvio,
   enviarDocumento,
   emitirYEnviarTicket,
-  ticketAutomatico
+  ticketAutomatico,
+  // v1.0.51 — «Abrir WhatsApp»
+  enlaceWhatsAppManual
 } from 'backend/facturacionSalonLogic.web';
 
 // v1.0.29 — Nombres del salón (brandName / legalName) para las cabeceras
@@ -705,7 +716,7 @@ import {
   desactivarFichaClienteRecord
 } from 'backend/clientRecordsLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.50]';
+const TAG = '[RecepcionProCMS v1.0.51]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1356,6 +1367,19 @@ async function handleTicketAutomatico(msg) {
   } catch (e) {
     console.error(`${TAG} ❌ ticketAutomatico:`, e);
     sendResponse('ticketAutomatico', { ok: false, origen, error: 'No se pudo emitir el ticket automático.' });
+  }
+}
+
+// v1.0.51 — «Abrir WhatsApp»: enlace wa.me listo para abrir en el widget.
+async function handleWhatsappManual(msg) {
+  const origen = msg.origen || '';
+  try {
+    const result = await enlaceWhatsAppManual({ invoiceId: msg.invoiceId, destino: msg.destino });
+    if (result && result.ok) _actualizarCacheTrasEnvio(result.ficha, result.canal, result.destino);
+    sendResponse('whatsappManual', { ...result, origen });
+  } catch (e) {
+    console.error(`${TAG} ❌ enlaceWhatsAppManual:`, e);
+    sendResponse('whatsappManual', { ok: false, origen, error: 'No se pudo preparar el WhatsApp.' });
   }
 }
 
@@ -2266,6 +2290,7 @@ $w.onReady(function () {
         case 'enviarDocumento':     handleEnviarDocumento(msg); break;
         case 'emitirYEnviarTicket': handleEmitirYEnviarTicket(msg); break;
         case 'ticketAutomatico':    handleTicketAutomatico(msg); break;
+        case 'whatsappManual':      handleWhatsappManual(msg); break;   // v1.0.51
         case 'buscarCliente':    handleBuscarCliente(msg); break;
         case 'crearCliente':     handleCrearCliente(msg); break;
         case 'editarContacto':   handleEditarContacto(msg); break;

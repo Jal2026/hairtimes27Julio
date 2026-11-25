@@ -1,6 +1,23 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.123  ·  «Abrir WhatsApp» (envío manual, todos los salones)
+ *
+ *   Pareja: page code v1.0.51 + facturacionSalonLogic v1.0.12.
+ *   · Nueva opción «📱 Abrir WhatsApp» en la pregunta del botón Ticket y
+ *     en 📤, para todos los salones. Abre WhatsApp con el número de la
+ *     clienta y el mensaje escrito (enlace al PDF de 30 días); la
+ *     recepcionista pulsa Enviar en WhatsApp. «💬 WhatsApp» (envío
+ *     automático por Meta, salones con el extra) se conserva.
+ *   · La pestaña se abre AL PULSAR (si se abriera al llegar la respuesta,
+ *     el navegador la bloquearía) y se lleva al enlace cuando llega.
+ *   · Con ticket por emitir: se emite como siempre ('generarTicket' /
+ *     'generarTicketVenta') y después se pide el enlace ('whatsappManual').
+ *   · Opción por defecto: Email si hay email; si no, WhatsApp si el salón
+ *     lo tiene y hay teléfono; si no, Abrir WhatsApp si hay teléfono.
+ *   · Las opciones pasan a la línea siguiente si no caben.
+ *   Nada más cambia.
+ *
  * VERSION: 1.1.122  ·  Cita cobrada con descuento en euros
  *
  *   Una cita cobrada con descuento en modo € se veía en el modal con el
@@ -2228,7 +2245,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.122]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.123]';
 
   // ─── helpers ───
   function esc(s) {
@@ -3485,6 +3502,8 @@ button { font-family: inherit; cursor: pointer; }
       this._envioAviso = { cita: null, tienda: null };
       // v1.1.119 — «EMITIR E IMPRIMIR»: imprimir al llegar el ticket.
       this._imprimirTrasEmitir = { cita: false, tienda: false };
+      // v1.1.123 — «Abrir WhatsApp» pendiente: { ventana, destino }.
+      this._waManual = { cita: null, tienda: null };
       // v1.1.71 — Apertura de caja (fondo inicial del día). Módulo opcional
       // gobernado por SalonConfig.arqueoActivo (lo decide el page code).
       this._aperturaChequeada = false;   // ¿ya se disparó check-apertura-caja?
@@ -4052,6 +4071,30 @@ button { font-family: inherit; cursor: pointer; }
             if (bAdd) bAdd.disabled = false;
           }
           break;
+        // v1.1.123 — «Abrir WhatsApp»: llevar la pestaña abierta al enlace
+        case 'whatsappManual': {
+          const o = (p.origen === 'tienda') ? 'tienda' : 'cita';
+          const wm = this._waManual[o];
+          this._waManual[o] = null;
+          const w = wm && wm.ventana;
+          const e = this._envioPanel[o];
+          if (p.ok && p.url) {
+            if (w && !w.closed) w.location.href = p.url;
+            else window.open(p.url, '_blank', 'noopener');
+            this._envioPanel[o] = null;
+            this._avisoEnvio(o, `✓ WhatsApp abierto para ${p.destino || ''}: pulsa Enviar en WhatsApp${this._textoFicha(p.ficha)}`, false);
+          } else {
+            try { if (w && !w.closed) w.close(); } catch (_) { /* nada */ }
+            if (e) {
+              e.enviando = false;
+              e.error = p.error || 'No se pudo preparar el WhatsApp.';
+              this._envioRender(o);
+            } else {
+              this._avisoEnvio(o, p.error || 'No se pudo preparar el WhatsApp.', true);
+            }
+          }
+          break;
+        }
         // v1.1.118 — imprimir y enviar
         case 'pdfImpresion':
           this._recibirPdfImpresion(p);
@@ -4067,7 +4110,8 @@ button { font-family: inherit; cursor: pointer; }
             e.whatsapp = !!p.whatsappDisponible;
           }
           e.canal = e.email ? 'email'
-            : ((e.whatsapp && e.telefono) ? 'whatsapp' : (e.modo === 'emitir' ? 'no' : 'email'));
+            : ((e.whatsapp && e.telefono) ? 'whatsapp'
+              : (e.telefono ? 'whatsapp_app' : (e.modo === 'emitir' ? 'no' : 'email')));
           this._envioRender(o);
           break;
         }
@@ -4137,6 +4181,8 @@ button { font-family: inherit; cursor: pointer; }
             this._imprimirTrasEmitir.tienda = false;
             if (p.ok && p.invoiceId) this._imprimirDocumento('tienda', p.invoiceId);
           }
+          // v1.1.123 — «Abrir WhatsApp» tras emitir
+          if (this._waManual.tienda) this._waTrasEmitir('tienda', p);
           break;
         }
         case 'documentoVenta':
@@ -4438,6 +4484,8 @@ button { font-family: inherit; cursor: pointer; }
             this._imprimirTrasEmitir.cita = false;
             if (p.ok && p.invoiceId) this._imprimirDocumento('cita', p.invoiceId);
           }
+          // v1.1.123 — «Abrir WhatsApp» tras emitir
+          if (this._waManual.cita) this._waTrasEmitir('cita', p);
           break;
         // ─── v1.1.63: nombres del salón para el texto copiable ───
         case 'salonNombres':
@@ -7127,6 +7175,7 @@ button { font-family: inherit; cursor: pointer; }
       this._envioPanel.cita = null;     // v1.1.118
       this._envioAviso.cita = null;
       this._imprimirTrasEmitir.cita = false;   // v1.1.119
+      this._waManual.cita = null;              // v1.1.123
       this._renderModal();
       // v1.1.51 — F4/F5 auto-detección: si la cita tiene contactId real,
       // pedimos al page code los bonos/tarjetas activos del cliente para
@@ -7711,26 +7760,29 @@ button { font-family: inherit; cursor: pointer; }
       const titulo = e.modo === 'emitir' ? 'Ticket · ¿enviarlo a la clienta?' : `Enviar ${esc(e.invoiceNumber)}`;
       const chip = (canal, label) => {
         const sel = e.canal === canal;
-        return `<button data-canal="${canal}" class="ksEnvChip"${bloqueado ? ' disabled' : ''} style="flex:1;background:${sel ? 'var(--ks-ink)' : 'var(--ks-paper2)'};color:${sel ? '#fff' : 'var(--ks-ink)'};border:1px solid ${sel ? 'var(--ks-ink)' : 'var(--ks-line)'};border-radius:8px;padding:7px 8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">${label}</button>`;
+        return `<button data-canal="${canal}" class="ksEnvChip"${bloqueado ? ' disabled' : ''} style="flex:1 1 auto;background:${sel ? 'var(--ks-ink)' : 'var(--ks-paper2)'};color:${sel ? '#fff' : 'var(--ks-ink)'};border:1px solid ${sel ? 'var(--ks-ink)' : 'var(--ks-line)'};border-radius:8px;padding:7px 8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">${label}</button>`;
       };
       const chips = chip('email', '✉ Email')
         + (e.whatsapp ? chip('whatsapp', '💬 WhatsApp') : '')
+        + chip('whatsapp_app', '📱 Abrir WhatsApp')   // v1.1.123
         + (e.modo === 'emitir' ? chip('imprimir', '🖨 Imprimir') + chip('no', 'No enviar') : '');
       let campo = '';
       if (e.cargando) {
         campo = `<div style="font-size:11.5px;color:var(--ks-ink3);">Cargando datos de la clienta…</div>`;
-      } else if (e.canal === 'email' || e.canal === 'whatsapp') {
+      } else if (e.canal === 'email' || e.canal === 'whatsapp' || e.canal === 'whatsapp_app') {
         const val = e.canal === 'email' ? e.email : e.telefono;
         const ph = e.canal === 'email' ? 'Email de la clienta' : 'Teléfono de la clienta';
         campo = `<input id="envDestino"${e.enviando ? ' disabled' : ''} placeholder="${ph}" value="${esc(val)}" style="border:1px solid var(--ks-line);border-radius:8px;padding:7px 10px;font-size:12.5px;font-family:inherit;outline:none;background:#fff;" />`;
       }
       const okTxt = e.enviando ? 'Enviando…'
         : (e.modo === 'emitir'
-          ? (e.canal === 'no' ? 'EMITIR TICKET' : (e.canal === 'imprimir' ? 'EMITIR E IMPRIMIR' : 'EMITIR Y ENVIAR'))
-          : 'ENVIAR');
+          ? (e.canal === 'no' ? 'EMITIR TICKET'
+            : (e.canal === 'imprimir' ? 'EMITIR E IMPRIMIR'
+              : (e.canal === 'whatsapp_app' ? 'EMITIR Y ABRIR WHATSAPP' : 'EMITIR Y ENVIAR')))
+          : (e.canal === 'whatsapp_app' ? 'ABRIR WHATSAPP' : 'ENVIAR'));
       return `<div style="flex:1;display:flex;flex-direction:column;gap:7px;width:100%;">
           <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;">${titulo}</div>
-          <div style="display:flex;gap:6px;">${chips}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">${chips}</div>
           ${campo}
           ${e.error ? `<div style="font-size:11.5px;font-weight:600;color:#b91c1c;">${esc(e.error)}</div>` : ''}
           <div style="display:flex;gap:6px;margin-top:2px;">
@@ -7782,6 +7834,26 @@ button { font-family: inherit; cursor: pointer; }
           this._envioRender(origen);
           return;
         }
+        // v1.1.123 — «Abrir WhatsApp»: la pestaña se abre ya, en el clic.
+        if (e.canal === 'whatsapp_app') {
+          this._waManual[origen] = { ventana: this._abrirVentanaWhatsApp(), destino };
+          if (e.modo === 'emitir') {
+            this._envioPanel[origen] = null;
+            if (origen === 'tienda') {
+              this._ventaGenerando = true; this._renderVentaDocPanel();
+              this._sendToPage('generarTicketVenta', { sourceKey });
+            } else {
+              this._facturaGenerando = true; this._renderFacturaSlot();
+              this._sendToPage('generarTicket', { reservaId });
+            }
+          } else {
+            e.enviando = true;
+            e.error = '';
+            this._envioRender(origen);
+            this._sendToPage('whatsappManual', { invoiceId: e.invoiceId, destino, origen });
+          }
+          return;
+        }
         if (e.modo === 'emitir') {
           this._envioPanel[origen] = null;
           if (origen === 'tienda') this._ventaGenerando = true; else this._facturaGenerando = true;
@@ -7794,6 +7866,28 @@ button { font-family: inherit; cursor: pointer; }
           this._sendToPage('enviarDocumento', { invoiceId: e.invoiceId, canal: e.canal, destino, origen });
         }
       });
+    }
+
+    // v1.1.123 — Pestaña para WhatsApp, abierta en el clic.
+    _abrirVentanaWhatsApp() {
+      let w = null;
+      try { w = window.open('', '_blank'); } catch (_) { w = null; }
+      if (w) {
+        try { w.document.write('<title>WhatsApp…</title><p style="font:14px sans-serif;padding:24px;color:#555">Abriendo WhatsApp…</p>'); } catch (_) { /* sin texto */ }
+      }
+      return w;
+    }
+
+    // v1.1.123 — Tras emitir el ticket con «Abrir WhatsApp», pedir el enlace.
+    _waTrasEmitir(origen, p) {
+      const wm = this._waManual[origen];
+      if (!wm) return;
+      if (p.ok && p.invoiceId) {
+        this._sendToPage('whatsappManual', { invoiceId: p.invoiceId, destino: wm.destino, origen });
+      } else {
+        this._waManual[origen] = null;
+        try { if (wm.ventana && !wm.ventana.closed) wm.ventana.close(); } catch (_) { /* nada */ }
+      }
     }
 
     // 🖨 y 📤 junto al badge. Mismo tamaño que el botón «Convertir a
@@ -8777,6 +8871,7 @@ button { font-family: inherit; cursor: pointer; }
       this._envioPanel.tienda = null;   // v1.1.118
       this._envioAviso.tienda = null;
       this._imprimirTrasEmitir.tienda = false;   // v1.1.119
+      this._waManual.tienda = null;              // v1.1.123
       this._productoCart = [];
       this._productoSearchQ = '';
       this._closeSubModal();
