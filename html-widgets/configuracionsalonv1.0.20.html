@@ -9,10 +9,40 @@
 <title>KAMISUITE · Configuración Salón</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   widget_salon_config.html  v1.0.17
+   widget_salon_config.html  v1.0.20
    KAMISUITE — Widget Edición Configuración Salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.20 · 21 Oct 2026 · Interruptor de smart pricing
+     - SECTIONS[modulos].fields += smartPricingActivo
+     - Enciende las ofertas por día y hora de la reserva online. Las
+       propone AKIRA desde la pantalla de gestión de smart pricing; aquí
+       solo se enciende o apaga (por ejemplo, en Navidad, cuando todos
+       los días son fuertes).
+     - SIN defaultOn, deliberado: el motor solo ofrece con true explícito,
+       así que pintar el vacío como apagado dice la verdad.
+     - Construido sobre la v1.0.19 del 4-sep (en el repo seguía la
+       v1.0.17): se conservan las dos correcciones de copy de la hora
+       del resumen diario.
+     - CMS: crear en SalonConfig `smartPricingActivo` (Booleano).
+     - Pareja backend: salonConfigLogic v1.0.14. Motor:
+       smartPricingLogic v1.0.0.
+     - Page code sin cambios. CERO cambios de CSS: tipo boolean ya
+       existente.
+   v1.0.19 · 4 Sep 2026 · Texto de ayuda de la hora del resumen (final)
+     - Solo copy. Con las cuatro tareas escalonadas (resumenDiarioJob
+       v1.1.3) el envío vuelve a tener precisión de cuarto de hora, así
+       que el texto de la v1.0.18 ("solo a la hora en punto") ya no es
+       cierto. Restaurado el texto de los cuartos.
+     - Sin cambios de CSS, de campos ni de comportamiento.
+   v1.0.18 · 4 Sep 2026 · Texto de ayuda de la hora del resumen
+     - Solo copy. La v1.0.17 decía que el envío se hace "en punto, y
+       cuarto, y media o menos cuarto". Es FALSO: Wix ignora las tareas
+       programadas por debajo de 1 hora, así que el envío solo puede
+       ocurrir a la hora en punto. Corregido el texto de ayuda de
+       `dailySummaryTime`.
+     - Ver resumenDiarioLogic v1.1.2.
+     - Sin cambios de CSS, de campos ni de comportamiento.
    v1.0.17 · 4 Sep 2026 · Resumen diario del día por email
      - SECTIONS[comunicaciones].fields += dailySummaryActive,
        dailySummaryTime, dailySummaryRecipients
@@ -1128,7 +1158,7 @@ select.field-input {
     <div>
       <span class="header-brand">KAMISUITE</span>
       <span class="header-title"> · CONFIGURACIÓN SALÓN</span>
-      <span class="header-version">v1.0.17</span>
+      <span class="header-version">v1.0.20</span>
     </div>
   </div>
   <div class="header-right">
@@ -1434,7 +1464,7 @@ const SECTIONS = [
       // v1.0.17 — resumen diario del día. SIN defaultOn: nace apagado
       // a propósito (el motor solo envía con true explícito).
       { id: 'dailySummaryActive',     label: 'Resumen diario del día',  type: 'boolean', desc: 'Correo al cierre de la jornada con el trabajo, las reservas y las ventas del día.' },
-      { id: 'dailySummaryTime',       label: 'Hora del resumen',        type: 'text', placeholder: 'Ej: 21:00', desc: 'Hora de envío en formato HH:MM. Se envía en punto, y cuarto, y media o menos cuarto: una hora intermedia sale en el siguiente.' },
+      { id: 'dailySummaryTime',       label: 'Hora del resumen',        type: 'text', placeholder: 'Ej: 21:00', desc: 'Hora de envío en formato HH:MM. Se envía en punto, y cuarto, y media o menos cuarto: una hora intermedia sale en el siguiente cuarto.' },
       { id: 'dailySummaryRecipients', label: 'Destinatarios del resumen', type: 'textarea', fullWidth: true, placeholder: 'ana@salon.com, jose@salon.com', desc: 'Separados por comas, puntos y coma o saltos de línea. Si se deja vacío, se envía al email general del salón.' },
     ]
   },
@@ -1446,6 +1476,8 @@ const SECTIONS = [
       { id: 'shopActive',    label: 'Tienda online',       type: 'boolean', desc: 'Módulo de venta de productos activo' },
       { id: 'loyaltyActive', label: 'Club de fidelización', type: 'boolean', desc: 'Programa de puntos y recompensas activo' },
       { id: 'whatsappPro',   label: 'WhatsApp PRO',         type: 'boolean', desc: 'Funcionalidades avanzadas de WhatsApp (campañas, marketing)' },
+      // v1.0.20 — smart pricing. SIN defaultOn: nace apagado a propósito.
+      { id: 'smartPricingActivo', label: 'Smart pricing', type: 'boolean', desc: 'Ofertas por día y hora en la reserva online. AKIRA las propone en la pantalla de gestión de smart pricing.' },
     ]
   },
   {
