@@ -1,6 +1,34 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.118  ·  Imprimir en 80 mm y enviar ticket / factura
+ *
+ *   Pareja: page code v1.0.50 + facturacionSalonLogic v1.0.10 (+ brevoLogic
+ *   v1.3.0, whatsappLogic v1.7.0, salonConfigLogic v1.0.15).
+ *
+ *   (A) BOTÓN «🧾 TICKET» (cita pagada y venta de TIENDA). Ya no emite
+ *       directamente: en el mismo sitio del botón sale la pregunta
+ *       «Email / WhatsApp / No enviar», con el email o el teléfono de la
+ *       ficha ya puesto ('datosEnvio'). WhatsApp solo aparece si el salón
+ *       lo tiene. «No enviar» emite como antes ('generarTicket' /
+ *       'generarTicketVenta'); con canal, 'emitirYEnviarTicket'.
+ *   (B) DOCUMENTO EMITIDO. Junto al badge, 🖨 Imprimir y 📤 Enviar.
+ *       · 🖨 → 'imprimirDocumento'. Con papel de 80 mm llega el PDF en
+ *         base64 y se abre en la pestaña que se abrió al pulsar (así el
+ *         navegador no la bloquea). Con A4, el PDF original como hasta
+ *         ahora.
+ *       · 📤 → el mismo panel, sin «No enviar» → 'enviarDocumento'. Vale
+ *         para ticket y factura: la factura se envía siempre a mano.
+ *       · El resultado se escribe debajo del badge, no en un aviso suelto.
+ *   (C) TICKET AUTOMÁTICO. Tras un cobro nuevo de cita o una venta de
+ *       TIENDA se manda 'ticketAutomatico'. El backend solo actúa con
+ *       SalonConfig.ticketAutoSend encendido. Con la cita ya cerrada, el
+ *       resultado sale en el aviso de abajo.
+ *   (D) _facturaDoc y _ventaDoc guardan ahora `invoiceId`, que es lo que
+ *       piden imprimir y enviar.
+ *   Estilos inline con las mismas variables y medidas que el formulario
+ *   de CIF y el badge. Nada más cambia.
+ *
  * VERSION: 1.1.117  ·  CIF/NIF y razón social del cliente
  *
  *   Pareja: page code v1.0.49 + recepcionLogic v2.2.0 +
@@ -2145,7 +2173,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.117]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.118]';
 
   // ─── helpers ───
   function esc(s) {
@@ -3396,6 +3424,11 @@ button { font-family: inherit; cursor: pointer; }
       this._facturaFormLegalName = '';  // valor input razón social
       this._facturaGenerando = false;   // pulsado Ticket o Factura, esperando respuesta
       this._pagoCita = null;            // datos pago {tipoPago, desglose...} para mostrar método
+      // v1.1.118 — imprimir y enviar. Panel de envío y aviso de resultado
+      // por origen ('cita' | 'tienda').
+      this._envioPanel = { cita: null, tienda: null };
+      this._envioAviso = { cita: null, tienda: null };
+      this._ventanaImpresion = null;    // pestaña abierta al pulsar 🖨
       // v1.1.71 — Apertura de caja (fondo inicial del día). Módulo opcional
       // gobernado por SalonConfig.arqueoActivo (lo decide el page code).
       this._aperturaChequeada = false;   // ¿ya se disparó check-apertura-caja?
@@ -3759,8 +3792,12 @@ button { font-family: inherit; cursor: pointer; }
                 activationMethod: 'manual'
               });
             }
+            // v1.1.118 — ticket automático (el backend decide con
+            // SalonConfig.ticketAutoSend). Solo en un cobro nuevo.
+            const ridTicketAuto = (!p.yaEstabaPagado && this._modalReserva) ? this._modalReserva._id : '';
             this._closeModal();
             this._sendToPage('getReservas', { fecha: this._fecha });
+            if (ridTicketAuto) this._sendToPage('ticketAutomatico', { reservaId: ridTicketAuto, origen: 'cita' });
           } else { this._toast('Error: ' + (p.error?.message || 'no se pudo cobrar')); this.shadowRoot.querySelectorAll('.ks-pay').forEach(b => b.disabled = false); }
           break;
         // v1.1.50 — F4/F5 Productos Custom
@@ -3957,6 +3994,70 @@ button { font-family: inherit; cursor: pointer; }
             if (bAdd) bAdd.disabled = false;
           }
           break;
+        // v1.1.118 — imprimir y enviar
+        case 'pdfImpresion':
+          this._recibirPdfImpresion(p);
+          break;
+        case 'datosEnvio': {
+          const o = (p.origen === 'tienda') ? 'tienda' : 'cita';
+          const e = this._envioPanel[o];
+          if (!e || !e.cargando) break;
+          e.cargando = false;
+          if (p.ok) {
+            e.email = p.email || '';
+            e.telefono = p.telefono || '';
+            e.whatsapp = !!p.whatsappDisponible;
+          }
+          e.canal = e.email ? 'email'
+            : ((e.whatsapp && e.telefono) ? 'whatsapp' : (e.modo === 'emitir' ? 'no' : 'email'));
+          this._envioRender(o);
+          break;
+        }
+        case 'documentoEnviado': {
+          const o = (p.origen === 'tienda') ? 'tienda' : 'cita';
+          const e = this._envioPanel[o];
+          if (p.ok) {
+            this._envioPanel[o] = null;
+            this._avisoEnvio(o, this._textoEnviado(p.invoiceNumber, p.destino, p.ficha), false);
+          } else if (e) {
+            e.enviando = false;
+            e.error = p.error || 'No se pudo enviar el documento.';
+            this._envioRender(o);
+          } else {
+            this._toast(p.error || 'No se pudo enviar el documento.');
+          }
+          break;
+        }
+        case 'ticketEmitidoEnviado': {
+          const o = (p.origen === 'tienda') ? 'tienda' : 'cita';
+          if (o === 'tienda') this._ventaGenerando = false; else this._facturaGenerando = false;
+          if (!p.ok) {
+            this._toast('Error: ' + (p.error?.message || p.error || 'no se pudo emitir'));
+            this._envioRender(o);
+            break;
+          }
+          this._ponerDocumento(o, p);
+          this._avisoEnvio(o, this._textoTrasEmitir(p), !!(p.envio && !p.envio.ok && !p.envio.sinDestino));
+          break;
+        }
+        case 'ticketAutomatico': {
+          if (!p.ok) { this._toast('Ticket automático: ' + (p.error?.message || p.error || 'no se pudo emitir')); break; }
+          if (p.omitido) break;
+          const o = (p.origen === 'tienda') ? 'tienda' : 'cita';
+          const texto = this._textoTrasEmitir(p);
+          const esError = !!(p.envio && !p.envio.ok && !p.envio.sinDestino);
+          const visible = (o === 'tienda')
+            ? (this._ventaTiendaActiva && this._ventaTiendaKey && this._ventaTiendaKey === p.sourceKey)
+            : (this._modalReserva && this._modalReserva._id === p.reservaId);
+          if (visible) {
+            if (o === 'tienda') this._ventaGenerando = false;
+            this._ponerDocumento(o, p);
+            this._avisoEnvio(o, texto, esError);
+          } else {
+            this._toast(texto);
+          }
+          break;
+        }
         // v1.1.85 — documentos de la venta de TIENDA
         case 'ticketVentaGenerado':
         case 'facturaVentaGenerada': {
@@ -3965,7 +4066,8 @@ button { font-family: inherit; cursor: pointer; }
             this._ventaDoc = {
               modo: p.modo || (p.type === 'ticketVentaGenerado' ? 'ticket' : 'factura'),
               invoiceNumber: p.invoiceNumber || '',
-              pdfUrl: p.pdfUrl || ''
+              pdfUrl: p.pdfUrl || '',
+              invoiceId: p.invoiceId || ''   // v1.1.118
             };
             this._toast(p.duplicado ? 'Esta venta ya tenía documento' : `Documento emitido · ${p.invoiceNumber || ''}`);
           } else {
@@ -3979,7 +4081,8 @@ button { font-family: inherit; cursor: pointer; }
             this._ventaDoc = {
               modo: p.documento.modo,
               invoiceNumber: p.documento.invoiceNumber || '',
-              pdfUrl: p.documento.pdfUrl || ''
+              pdfUrl: p.documento.pdfUrl || '',
+              invoiceId: p.documento.invoiceId || ''   // v1.1.118
             };
             this._renderVentaDocPanel();
           }
@@ -4001,7 +4104,11 @@ button { font-family: inherit; cursor: pointer; }
               this._ventaDoc = null;
               this._ventaForm = false;
               this._ventaGenerando = false;
+              this._envioPanel.tienda = null;   // v1.1.118
+              this._envioAviso.tienda = null;
               this._renderVentaDocPanel();
+              // v1.1.118 — ticket automático (decide el backend).
+              if (this._ventaTiendaKey) this._sendToPage('ticketAutomatico', { sourceKey: this._ventaTiendaKey, origen: 'tienda' });
               break;
             }
             this._closeProductoModal();
@@ -4229,7 +4336,8 @@ button { font-family: inherit; cursor: pointer; }
               modo: p.documento.modo || '',
               invoiceNumber: p.documento.invoiceNumber || '',
               pdfUrl: p.documento.pdfUrl || '',
-              totalAmount: Number(p.documento.totalAmount || 0)
+              totalAmount: Number(p.documento.totalAmount || 0),
+              invoiceId: p.documento.invoiceId || ''   // v1.1.118
             };
           } else {
             this._facturaDoc = null;
@@ -4244,7 +4352,8 @@ button { font-family: inherit; cursor: pointer; }
               modo: p.modo || (p.type === 'ticketGenerado' ? 'ticket' : 'factura'),
               invoiceNumber: p.invoiceNumber || '',
               pdfUrl: p.pdfUrl || '',
-              totalAmount: Number(p.totalAmount || 0)
+              totalAmount: Number(p.totalAmount || 0),
+              invoiceId: p.invoiceId || ''   // v1.1.118
             };
             this._facturaForm = false;
             if (p.duplicado) {
@@ -6943,6 +7052,8 @@ button { font-family: inherit; cursor: pointer; }
       this._facturaFormLegalName = '';
       this._facturaGenerando = false;
       this._pagoCita = null;
+      this._envioPanel.cita = null;     // v1.1.118
+      this._envioAviso.cita = null;
       this._renderModal();
       // v1.1.51 — F4/F5 auto-detección: si la cita tiene contactId real,
       // pedimos al page code los bonos/tarjetas activos del cliente para
@@ -7326,6 +7437,13 @@ button { font-family: inherit; cursor: pointer; }
         return;
       }
 
+      // ── E) v1.1.118 — Panel de envío (pregunta del botón Ticket o 📤) ─
+      if (this._envioPanel.cita) {
+        slot.innerHTML = this._htmlEnvio('cita');
+        this._cablearEnvio('cita', slot, { reservaId: r._id });
+        return;
+      }
+
       // ── B) Documento ya emitido → badge recuperación ──────────
       // v1.1.58: guard `!this._facturaForm` para que cuando el operador
       // pulsa "Convertir a factura" sobre un ticket existente, esta
@@ -7352,11 +7470,22 @@ button { font-family: inherit; cursor: pointer; }
               📄 Convertir a factura
             </button>`
           : '';
-        slot.innerHTML = `<span title="${esc(badgeTitle)}" style="display:inline-flex;align-items:center;gap:7px;background:${colorBg};border:1px solid ${colorBorde};border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;color:${colorInk};">
+        // v1.1.118 — 🖨 Imprimir y 📤 Enviar junto al badge; el resultado
+        // del envío va en una línea debajo.
+        slot.innerHTML = `<div style="display:flex;flex-direction:column;gap:5px;width:100%;">
+          <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+          <span title="${esc(badgeTitle)}" style="display:inline-flex;align-items:center;gap:7px;background:${colorBg};border:1px solid ${colorBorde};border-radius:8px;padding:6px 12px;font-size:12.5px;font-weight:700;color:${colorInk};">
           <span>${icono}</span>
           <span>${esc(d.invoiceNumber)}</span>
           <a href="#" id="facturaOpenPdf" title="Abrir PDF" style="text-decoration:none;color:inherit;font-size:14px;margin-left:2px;">🔗</a>
-        </span>${upgradeBtn}`;
+        </span>${upgradeBtn}${this._htmlBotonesDoc('doc')}
+          </div>${this._htmlAvisoEnvio('cita')}
+        </div>`;
+        slot.querySelector('#docPrint')?.addEventListener('click', () => this._imprimirDocumento('cita', d.invoiceId));
+        slot.querySelector('#docSend')?.addEventListener('click', () => {
+          if (!d.invoiceId) { this._toast('No se puede identificar el documento'); return; }
+          this._abrirEnvio('cita', 'enviar', { invoiceId: d.invoiceId, contactId: r.contactId || '', invoiceNumber: d.invoiceNumber });
+        });
         const link = slot.querySelector('#facturaOpenPdf');
         if (link) {
           link.addEventListener('click', e => {
@@ -7378,6 +7507,7 @@ button { font-family: inherit; cursor: pointer; }
             this._facturaForm = true;
             this._facturaFormVatId = '';
             this._facturaFormLegalName = '';
+            this._envioAviso.cita = null;   // v1.1.118
             this._renderFacturaSlot();
             // v1.1.117 — rellenar con el CIF y la razón social de la ficha.
             if (r.contactId) this._sendToPage('leerDatosFiscales', { contactId: r.contactId, origen: 'factura' });
@@ -7430,10 +7560,10 @@ button { font-family: inherit; cursor: pointer; }
         <button id="btnFactura" style="background:#15803d;color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.3px;display:inline-flex;align-items:center;gap:6px;">
           📄 Factura
         </button>`;
+      // v1.1.118 — el botón Ticket pregunta antes por dónde enviarlo
+      // (panel E). «No enviar» emite con 'generarTicket', como antes.
       slot.querySelector('#btnTicket').addEventListener('click', () => {
-        this._facturaGenerando = true;
-        this._renderFacturaSlot();
-        this._sendToPage('generarTicket', { reservaId: r._id });
+        this._abrirEnvio('cita', 'emitir', { contactId: r.contactId || '' });
       });
       slot.querySelector('#btnFactura').addEventListener('click', () => {
         // Si el cliente ya tiene CIF en CRM, emisión directa (el backend
@@ -7452,6 +7582,236 @@ button { font-family: inherit; cursor: pointer; }
         // v1.1.117 — rellenar con el CIF y la razón social de la ficha.
         if (r.contactId) this._sendToPage('leerDatosFiscales', { contactId: r.contactId, origen: 'factura' });
       });
+    }
+
+    // ═══════════════════════════════════════════════════
+    // v1.1.118 — IMPRIMIR Y ENVIAR (cita pagada y venta de TIENDA)
+    // `origen` 'cita' | 'tienda'. El panel de envío se pinta DENTRO del
+    // hueco del documento, donde se ha pulsado; nunca en una ventana aparte.
+    // ═══════════════════════════════════════════════════
+    _envioRender(origen) {
+      if (origen === 'tienda') { if (this._ventaTiendaActiva) this._renderVentaDocPanel(); }
+      else if (this._modalReserva) this._renderFacturaSlot();
+    }
+
+    // modo 'emitir' (botón Ticket: pregunta antes de emitir) o 'enviar'
+    // (documento ya emitido). Pide email y teléfono de la ficha.
+    _abrirEnvio(origen, modo, { invoiceId, contactId, invoiceNumber } = {}) {
+      this._envioPanel[origen] = {
+        modo, invoiceId: invoiceId || '', invoiceNumber: invoiceNumber || '',
+        canal: '', email: '', telefono: '', whatsapp: false,
+        cargando: true, enviando: false, error: ''
+      };
+      this._envioAviso[origen] = null;
+      this._envioRender(origen);
+      this._sendToPage('datosEnvio', { invoiceId: invoiceId || '', contactId: contactId || '', origen });
+    }
+
+    // Mismo estilo inline que el formulario de CIF (v1.1.56).
+    _htmlEnvio(origen) {
+      const e = this._envioPanel[origen];
+      if (!e) return '';
+      const bloqueado = e.cargando || e.enviando;
+      const titulo = e.modo === 'emitir' ? 'Ticket · ¿enviarlo a la clienta?' : `Enviar ${esc(e.invoiceNumber)}`;
+      const chip = (canal, label) => {
+        const sel = e.canal === canal;
+        return `<button data-canal="${canal}" class="ksEnvChip"${bloqueado ? ' disabled' : ''} style="flex:1;background:${sel ? 'var(--ks-ink)' : 'var(--ks-paper2)'};color:${sel ? '#fff' : 'var(--ks-ink)'};border:1px solid ${sel ? 'var(--ks-ink)' : 'var(--ks-line)'};border-radius:8px;padding:7px 8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">${label}</button>`;
+      };
+      const chips = chip('email', '✉ Email')
+        + (e.whatsapp ? chip('whatsapp', '💬 WhatsApp') : '')
+        + (e.modo === 'emitir' ? chip('no', 'No enviar') : '');
+      let campo = '';
+      if (e.cargando) {
+        campo = `<div style="font-size:11.5px;color:var(--ks-ink3);">Cargando datos de la clienta…</div>`;
+      } else if (e.canal === 'email' || e.canal === 'whatsapp') {
+        const val = e.canal === 'email' ? e.email : e.telefono;
+        const ph = e.canal === 'email' ? 'Email de la clienta' : 'Teléfono de la clienta';
+        campo = `<input id="envDestino"${e.enviando ? ' disabled' : ''} placeholder="${ph}" value="${esc(val)}" style="border:1px solid var(--ks-line);border-radius:8px;padding:7px 10px;font-size:12.5px;font-family:inherit;outline:none;background:#fff;" />`;
+      }
+      const okTxt = e.enviando ? 'Enviando…'
+        : (e.modo === 'emitir' ? (e.canal === 'no' ? 'EMITIR TICKET' : 'EMITIR Y ENVIAR') : 'ENVIAR');
+      return `<div style="flex:1;display:flex;flex-direction:column;gap:7px;width:100%;">
+          <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase;">${titulo}</div>
+          <div style="display:flex;gap:6px;">${chips}</div>
+          ${campo}
+          ${e.error ? `<div style="font-size:11.5px;font-weight:600;color:#b91c1c;">${esc(e.error)}</div>` : ''}
+          <div style="display:flex;gap:6px;margin-top:2px;">
+            <button id="envOk"${(bloqueado || !e.canal) ? ' disabled' : ''} style="flex:1;background:#15803d;color:#fff;border:0;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.3px;">${okTxt}</button>
+            <button id="envCancel"${e.enviando ? ' disabled' : ''} style="background:#fff;color:var(--ks-ink2);border:1px solid var(--ks-line);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">Cancelar</button>
+          </div>
+        </div>`;
+    }
+
+    // Engancha el panel dentro de `cont` (el slot de la cita o el cuerpo
+    // del modal de TIENDA). Cita → { reservaId }; tienda → { sourceKey }.
+    _cablearEnvio(origen, cont, { reservaId, sourceKey }) {
+      const e = this._envioPanel[origen];
+      if (!e || !cont) return;
+      const inp = cont.querySelector('#envDestino');
+      if (inp) {
+        inp.addEventListener('input', ev => {
+          if (e.canal === 'email') e.email = ev.target.value; else e.telefono = ev.target.value;
+        });
+        if (!e.enviando) inp.focus();
+      }
+      cont.querySelectorAll('.ksEnvChip').forEach(b => b.addEventListener('click', () => {
+        e.canal = b.getAttribute('data-canal');
+        e.error = '';
+        this._envioRender(origen);
+      }));
+      cont.querySelector('#envCancel')?.addEventListener('click', () => {
+        this._envioPanel[origen] = null;
+        this._envioRender(origen);
+      });
+      cont.querySelector('#envOk')?.addEventListener('click', () => {
+        // «No enviar»: emisión de siempre.
+        if (e.canal === 'no') {
+          this._envioPanel[origen] = null;
+          if (origen === 'tienda') {
+            this._ventaGenerando = true; this._renderVentaDocPanel();
+            this._sendToPage('generarTicketVenta', { sourceKey });
+          } else {
+            this._facturaGenerando = true; this._renderFacturaSlot();
+            this._sendToPage('generarTicket', { reservaId });
+          }
+          return;
+        }
+        const destino = String(e.canal === 'email' ? e.email : e.telefono).trim();
+        if (!destino) {
+          e.error = e.canal === 'email' ? 'Escribe el email de la clienta.' : 'Escribe el teléfono de la clienta.';
+          this._envioRender(origen);
+          return;
+        }
+        if (e.modo === 'emitir') {
+          this._envioPanel[origen] = null;
+          if (origen === 'tienda') this._ventaGenerando = true; else this._facturaGenerando = true;
+          this._envioRender(origen);
+          this._sendToPage('emitirYEnviarTicket', { reservaId, sourceKey, canal: e.canal, destino, origen });
+        } else {
+          e.enviando = true;
+          e.error = '';
+          this._envioRender(origen);
+          this._sendToPage('enviarDocumento', { invoiceId: e.invoiceId, canal: e.canal, destino, origen });
+        }
+      });
+    }
+
+    // 🖨 y 📤 junto al badge. Mismo tamaño que el botón «Convertir a
+    // factura». Ids: <prefijo>Print / <prefijo>Send.
+    _htmlBotonesDoc(prefijo) {
+      const st = 'background:var(--ks-paper2);color:var(--ks-ink);border:1px solid var(--ks-line);border-radius:8px;padding:6px 9px;font-size:13px;line-height:1;cursor:pointer;font-family:inherit;';
+      return `<button id="${prefijo}Print" title="Imprimir" style="${st}">🖨</button><button id="${prefijo}Send" title="Enviar por email o WhatsApp" style="${st}">📤</button>`;
+    }
+
+    _htmlAvisoEnvio(origen) {
+      const a = this._envioAviso[origen];
+      if (!a || !a.texto) return '';
+      return `<div style="font-size:11.5px;font-weight:600;color:${a.error ? '#b91c1c' : '#15803d'};margin-top:4px;">${esc(a.texto)}</div>`;
+    }
+
+    // Resultado bajo el badge si el documento está a la vista; si no
+    // (cita ya cerrada tras cobrar), en el aviso de abajo.
+    _avisoEnvio(origen, texto, esError) {
+      this._envioAviso[origen] = texto ? { texto, error: !!esError } : null;
+      const visible = (origen === 'tienda') ? !!this._ventaTiendaActiva : !!this._modalReserva;
+      if (visible) this._envioRender(origen);
+      else if (texto) this._toast(texto);
+    }
+
+    _ponerDocumento(origen, p) {
+      const doc = {
+        modo: p.modo || 'ticket',
+        invoiceNumber: p.invoiceNumber || '',
+        pdfUrl: p.pdfUrl || '',
+        totalAmount: Number(p.totalAmount || 0),
+        invoiceId: p.invoiceId || ''
+      };
+      if (origen === 'tienda') { this._ventaDoc = doc; this._ventaForm = false; }
+      else { this._facturaDoc = doc; this._facturaForm = false; }
+    }
+
+    _textoFicha(ficha) {
+      if (!ficha) return '';
+      return (ficha.actualizada ? ' · guardado en la ficha' : '') + (ficha.aviso ? ' · ' + ficha.aviso : '');
+    }
+
+    _textoEnviado(numero, destino, ficha) {
+      return `✓ ${numero || 'Documento'} enviado a ${destino || ''}${this._textoFicha(ficha)}`;
+    }
+
+    _textoTrasEmitir(p) {
+      const n = p.invoiceNumber || '';
+      if (p.modo === 'factura') return `Ya tenía la factura ${n}. Envíala con 📤.`;
+      const base = p.duplicado ? `Ticket ${n} (ya existía)` : `Ticket ${n}`;
+      const e = p.envio;
+      if (e && e.ok) return `✓ ${base} enviado a ${e.destino}${this._textoFicha(p.ficha)}`;
+      if (e && e.error) return `${base} emitido. ${e.error}`;
+      return `${base} emitido`;
+    }
+
+    // La pestaña se abre AL PULSAR: abrirla después de la respuesta la
+    // bloquearía el navegador. Al llegar el PDF se carga en ella.
+    _imprimirDocumento(origen, invoiceId) {
+      if (!invoiceId) { this._toast('No se puede identificar el documento'); return; }
+      let w = null;
+      try { w = window.open('', '_blank'); } catch (_) { w = null; }
+      if (w) {
+        try { w.document.write('<title>Preparando…</title><p style="font:14px sans-serif;padding:24px;color:#555">Preparando el documento…</p>'); } catch (_) { /* sin texto */ }
+      }
+      this._ventanaImpresion = w;
+      this._sendToPage('imprimirDocumento', { invoiceId, origen });
+    }
+
+    _recibirPdfImpresion(p) {
+      const origen = (p.origen === 'tienda') ? 'tienda' : 'cita';
+      const w = this._ventanaImpresion;
+      this._ventanaImpresion = null;
+      const cerrar = () => { try { if (w && !w.closed) w.close(); } catch (_) { /* nada */ } };
+
+      if (!p.ok) {
+        cerrar();
+        this._avisoEnvio(origen, p.error || 'No se pudo preparar el documento para imprimir.', true);
+        return;
+      }
+      // 80 mm: PDF en base64 → se abre en la pestaña del clic.
+      if (p.pdfBase64) {
+        let url = '';
+        try {
+          const bin = atob(p.pdfBase64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+        } catch (_) {
+          cerrar();
+          this._avisoEnvio(origen, 'No se pudo abrir el documento para imprimir.', true);
+          return;
+        }
+        if (w && !w.closed) {
+          w.location.href = url;
+        } else {
+          // Pestaña bloqueada: se descarga el PDF.
+          const a = document.createElement('a');
+          a.href = url; a.download = p.fileName || 'documento.pdf';
+          document.body.appendChild(a); a.click(); a.remove();
+        }
+        setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) { /* nada */ } }, 120000);
+        return;
+      }
+      // A4: el PDF original, como el 🔗. Si el enlace descarga el archivo
+      // en vez de abrirlo, la pestaña vacía se cierra sola.
+      if (p.pdfUrl) {
+        if (w && !w.closed) {
+          w.location.href = p.pdfUrl;
+          setTimeout(() => {
+            try { if (w && !w.closed && w.location.href === 'about:blank') w.close(); } catch (_) { /* abrió el PDF: se deja */ }
+          }, 4000);
+        } else {
+          window.open(p.pdfUrl, '_blank', 'noopener');
+        }
+        return;
+      }
+      cerrar();
+      this._avisoEnvio(origen, 'El documento no tiene PDF asociado', true);
     }
 
     _renderDescuentoChipPagado(pct, eurv, importeNeto) {
@@ -8097,6 +8457,9 @@ button { font-family: inherit; cursor: pointer; }
         slot = `<div style="display:flex;align-items:center;gap:7px;color:var(--ks-ink2);font-size:12.5px;font-weight:600">
           <span style="display:inline-block;width:12px;height:12px;border:2px solid var(--ks-line);border-top-color:var(--ks-accent);border-radius:50%;animation:ksSpin .7s linear infinite;"></span>
           Generando documento…</div>`;
+      } else if (this._envioPanel.tienda) {
+        // v1.1.118 — panel de envío (pregunta del botón Ticket o 📤)
+        slot = this._htmlEnvio('tienda');
       } else if (this._ventaDoc && this._ventaDoc.invoiceNumber) {
         const d = this._ventaDoc;
         const esTicket = d.modo === 'ticket';
@@ -8105,8 +8468,8 @@ button { font-family: inherit; cursor: pointer; }
               <span>${esTicket ? '🧾' : '📄'}</span><span>${esc(d.invoiceNumber)}</span>
               <a href="#" id="vtPdf" title="Abrir PDF" style="text-decoration:none;color:inherit;font-size:14px;margin-left:2px">🔗</a>
             </span>
-            ${esTicket ? '<button id="vtUpgrade" style="background:#15803d;color:#fff;border:0;border-radius:8px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">📄 Convertir a factura</button>' : ''}
-          </div>`;
+            ${esTicket ? '<button id="vtUpgrade" style="background:#15803d;color:#fff;border:0;border-radius:8px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit">📄 Convertir a factura</button>' : ''}${this._htmlBotonesDoc('vt')}
+          </div>${this._htmlAvisoEnvio('tienda')}`;
       } else if (this._ventaForm) {
         slot = `<div style="display:flex;flex-direction:column;gap:7px">
             <div style="font-size:10.5px;font-weight:700;color:var(--ks-ink3);letter-spacing:.5px;text-transform:uppercase">Datos para factura completa</div>
@@ -8144,15 +8507,24 @@ button { font-family: inherit; cursor: pointer; }
         this._closeProductoModal();
         this._sendToPage('getReservas', { fecha: this._fecha });
       });
+      // v1.1.118 — el botón Ticket pregunta antes por dónde enviarlo.
+      // «No enviar» emite con 'generarTicketVenta', como antes.
       body.querySelector('#vtTicket')?.addEventListener('click', () => {
         if (!this._ventaTiendaKey) { this._toast('No se puede identificar la venta'); return; }
-        this._ventaGenerando = true; this._renderVentaDocPanel();
-        this._sendToPage('generarTicketVenta', { sourceKey: this._ventaTiendaKey });
+        this._abrirEnvio('tienda', 'emitir', { contactId: cli.contactId || '' });
+      });
+      if (this._envioPanel.tienda) this._cablearEnvio('tienda', body, { sourceKey: this._ventaTiendaKey });
+      body.querySelector('#vtPrint')?.addEventListener('click', () => this._imprimirDocumento('tienda', this._ventaDoc && this._ventaDoc.invoiceId));
+      body.querySelector('#vtSend')?.addEventListener('click', () => {
+        const d = this._ventaDoc;
+        if (!d || !d.invoiceId) { this._toast('No se puede identificar el documento'); return; }
+        this._abrirEnvio('tienda', 'enviar', { invoiceId: d.invoiceId, contactId: cli.contactId || '', invoiceNumber: d.invoiceNumber });
       });
       body.querySelector('#vtFactura')?.addEventListener('click', () => {
         this._ventaForm = true; this._renderVentaDocPanel();
       });
       body.querySelector('#vtUpgrade')?.addEventListener('click', () => {
+        this._envioAviso.tienda = null;   // v1.1.118
         this._ventaForm = true; this._ventaDoc = null; this._renderVentaDocPanel();
       });
       body.querySelector('#vtFormCancel')?.addEventListener('click', () => {
@@ -8308,6 +8680,8 @@ button { font-family: inherit; cursor: pointer; }
       this._ventaDoc = null;
       this._ventaForm = false;
       this._ventaGenerando = false;
+      this._envioPanel.tienda = null;   // v1.1.118
+      this._envioAviso.tienda = null;
       this._productoCart = [];
       this._productoSearchQ = '';
       this._closeSubModal();

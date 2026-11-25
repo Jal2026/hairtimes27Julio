@@ -2,12 +2,26 @@
  * ============================================================
  *  whatsappLogic.web.js  —  KAMISUITE WhatsApp Cloud API
  * ============================================================
- *  v1.6.1  ·  27 Agosto 2026
+ *  v1.7.0  ·  25 Noviembre 2026
  * ------------------------------------------------------------
  *  Backend para envío de mensajes WhatsApp vía Meta Cloud API.
  *
  *  CHANGELOG
  *  ---------
+ *  v1.7.0 (25-Nov-2026) — Plantilla con DOCUMENTO en la cabecera
+ *    - _enviarTemplateConDocumento: misma estructura que
+ *      _enviarTemplateConImagen, con cabecera { type:'document',
+ *      document:{ link, filename } } (Messages API de Meta: enlace público
+ *      y nombre de archivo opcional).
+ *    - NEW export enviarDocumentoWhatsApp({ telefono, nombreCliente,
+ *      parameters, documentUrl, fileName, eventType }): envía la plantilla
+ *      TEMPLATE_DOCUMENTO ('sales_document_es') y deja el envío en
+ *      CommunicationLog como el resto.
+ *    - Plantilla a dar de alta en Meta (UTILITY, es): cabecera DOCUMENTO;
+ *      cuerpo con 3 variables: {{1}} nombre de la clienta, {{2}} documento
+ *      («ticket T-2026-0001»), {{3}} nombre del salón.
+ *    - Lo usa facturacionSalonLogic v1.0.10 (ticket y factura desde
+ *      Recepción PRO). El resto del archivo no cambia.
  *  v1.6.1 (27-Ago-2026) — Idioma de plantilla configurable
  *    - enviarTemplateGenerico y _enviarTemplate aceptan `language`
  *      opcional (por defecto 'es'). Permite enviar plantillas aprobadas
@@ -42,7 +56,7 @@ import { fetch } from 'wix-fetch';
 import { mediaManager } from 'wix-media-backend';
 
 // ── Constantes ──────────────────────────────────────────────
-const TAG = '[WhatsApp v1.6.1]';
+const TAG = '[WhatsApp v1.7.0]';
 const GRAPH_API_VERSION = 'v21.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
@@ -54,6 +68,8 @@ const TEMPLATE_PROMO_SERVICE      = 'promo_service_es';
 const TEMPLATE_PROMO_PRODUCT      = 'promo_product_es';
 const TEMPLATE_GIFT_CARD          = 'gift_card_es';
 const TEMPLATE_SPECIAL_OCCASION   = 'special_occasion_es';
+// v1.7.0 — ticket / factura en PDF (cabecera DOCUMENTO)
+const TEMPLATE_DOCUMENTO          = 'sales_document_es';
 
 const COL_COMM_LOG = 'CommunicationLog';
 const COL_CAMPAIGNS = 'MarketingCampaigns';
@@ -284,6 +300,64 @@ async function _enviarTemplateConImagen({ telefono, templateName, parameters, im
     };
 
     console.log(TAG, `Enviando template+img "${templateName}" a ${to} (${parameters.length} params)`);
+
+    const result = await _callWhatsAppAPI({
+        phoneNumberId: config.phoneNumberId,
+        endpoint: 'messages',
+        body
+    });
+
+    return { ...result, telefono: to };
+}
+
+// v1.7.0 — Plantilla con DOCUMENTO en la cabecera. Copia de la estructura
+// de _enviarTemplateConImagen; cambia solo el parámetro de la cabecera.
+async function _enviarTemplateConDocumento({ telefono, templateName, parameters, documentUrl, fileName }) {
+    const config = await _getSalonWhatsAppConfig();
+
+    if (!config) return { ok: false, error: 'SalonConfig no disponible' };
+    if (!config.activo) return { ok: false, error: 'WhatsApp desactivado en SalonConfig' };
+    if (!config.phoneNumberId) return { ok: false, error: 'whatsappPhoneNumberId no configurado en SalonConfig' };
+    if (!documentUrl) return { ok: false, error: 'Falta el enlace del documento' };
+
+    const to = _formatPhoneNumber(telefono);
+    if (!to) return { ok: false, error: `Teléfono inválido: ${telefono}` };
+
+    const documento = { link: documentUrl };
+    if (fileName) documento.filename = String(fileName);
+
+    const components = [
+        {
+            type: 'header',
+            parameters: [
+                {
+                    type: 'document',
+                    document: documento
+                }
+            ]
+        },
+        {
+            type: 'body',
+            parameters: parameters.map(p => ({
+                type: 'text',
+                text: String(p)
+            }))
+        }
+    ];
+
+    const body = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: to,
+        type: 'template',
+        template: {
+            name: templateName,
+            language: { code: 'es' },
+            components
+        }
+    };
+
+    console.log(TAG, `Enviando template+doc "${templateName}" a ${to} (${parameters.length} params)`);
 
     const result = await _callWhatsAppAPI({
         phoneNumberId: config.phoneNumberId,
@@ -719,6 +793,34 @@ export const getTemplatesDisponibles = webMethod(
 // ═════════════════════════════════════════════════════════════
 //  UTILIDADES — v1.2.0 (sin cambios)
 // ═════════════════════════════════════════════════════════════
+
+// v1.7.0 — Ticket o factura en PDF por WhatsApp (plantilla con documento).
+// parameters: [nombre de la clienta, documento, nombre del salón].
+export const enviarDocumentoWhatsApp = webMethod(
+    Permissions.SiteMember,
+    async ({ telefono, nombreCliente, parameters, documentUrl, fileName, eventType }) => {
+        console.log(TAG, `Documento "${fileName || ''}" → ${nombreCliente} (${telefono})`);
+
+        const result = await _enviarTemplateConDocumento({
+            telefono,
+            templateName: TEMPLATE_DOCUMENTO,
+            parameters: parameters || [],
+            documentUrl: documentUrl || '',
+            fileName: fileName || ''
+        });
+
+        _logEnvio({
+            event: eventType || TEMPLATE_DOCUMENTO,
+            channel: 'whatsapp',
+            recipient: result.telefono || telefono,
+            clientName: nombreCliente || '',
+            result: result.ok ? 'ok' : 'error',
+            errorDetail: result.ok ? '' : (result.error || JSON.stringify(result.data || ''))
+        });
+
+        return result;
+    }
+);
 
 export const isWhatsAppActivo = webMethod(
     Permissions.SiteMember,

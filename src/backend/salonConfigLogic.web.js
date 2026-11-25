@@ -1,8 +1,28 @@
 /* ═══════════════════════════════════════════════════════════════
-   salonConfigLogic.web.js  v1.0.14
+   salonConfigLogic.web.js  v1.0.15
    KAMISUITE — Backend de configuración de salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.15 · 25 Nov 2026 · Papel de la impresora, texto del email
+           del ticket/factura y ticket automático
+     - ALL_FIELDS += printPaperFormat, invoiceEmailText (los dos Texto,
+       sin lista de tipos: se guardan como String igual que el resto).
+     - ALL_FIELDS     += ticketAutoSend
+       BOOLEAN_FIELDS += ticketAutoSend
+       Encendido: al cobrar en Recepción PRO se emite el ticket y se
+       envía a la clienta sin preguntar. Apagado o vacío: el botón
+       «🧾 Ticket» pregunta. Solo con true EXPLÍCITO, como
+       dailySummaryActive y smartPricingActivo.
+     - printPaperFormat: 'A4' o '80 mm'. Vacío = A4. Lo lee
+       facturacionSalonLogic v1.0.10 al pulsar «Imprimir» en Recepción
+       PRO.
+     - invoiceEmailText: texto del correo con el que se envía el ticket
+       o la factura en PDF. Vacío = texto estándar del código
+       (facturacionSalonLogic v1.0.10).
+     - CMS: crear en SalonConfig printPaperFormat e invoiceEmailText
+       (Texto) y ticketAutoSend (Booleano).
+     - Pareja widget: widget_salon_config v1.0.21 (sección Facturación).
+     - Page code sin cambios.
    v1.0.14 · 21 Oct 2026 · Interruptor de smart pricing
      - ALL_FIELDS     += smartPricingActivo
      - BOOLEAN_FIELDS += smartPricingActivo
@@ -224,7 +244,7 @@
 import { Permissions, webMethod } from 'wix-web-module';
 import wixData from 'wix-data';
 
-const TAG = '[SalonConfig v1.0.14]';
+const TAG = '[SalonConfig v1.0.15]';
 const COLLECTION = 'SalonConfig';
 
 // ── Lista completa de field IDs (53 user fields) ──
@@ -305,7 +325,12 @@ const ALL_FIELDS = [
   'dailySummaryRecipients',
   // v1.0.14 — interruptor del smart pricing
   //           (lo consume smartPricingLogic v1.0.0)
-  'smartPricingActivo'
+  'smartPricingActivo',
+  // v1.0.15 — papel de la impresora y texto del email del documento
+  //           (los consume facturacionSalonLogic v1.0.10)
+  'printPaperFormat',
+  'invoiceEmailText',
+  'ticketAutoSend'
 ];
 
 // ── Campos booleanos (para parseo correcto) ──
@@ -328,6 +353,8 @@ const BOOLEAN_FIELDS = [
   // v1.0.14 — interruptor del smart pricing. Mismo criterio: apagado
   // salvo true explícito.
   'smartPricingActivo',
+  // v1.0.15 — ticket automático al cobrar. Mismo criterio.
+  'ticketAutoSend',
 ];
 
 // ── Campos numéricos ──

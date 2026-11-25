@@ -1,10 +1,51 @@
 // =============================================================
 // facturacionSalonLogic.web.js
 // KAMISUITE V2 — Módulo de Facturación del Salón a sus Clientes
-// VERSION: 1.0.9
-// TAG: facturacion-salon-v1.0.9
+// VERSION: 1.0.10
+// TAG: facturacion-salon-v1.0.10
 // =============================================================
 // CHANGELOG:
+// v1.0.10 (2026-11-25) — IMPRIMIR EN 80 MM Y ENVIAR POR EMAIL/WHATSAPP.
+//   (1) IMPRIMIR. NEW obtenerPdfImpresion({ invoiceId }). Lee
+//       SalonConfig.printPaperFormat: con '80 mm' pinta el documento
+//       guardado en una tira de 80 mm (_generarPdfRolloBuffer, una sola
+//       página de alto variable) y lo devuelve en base64, sin subirlo a
+//       Media; con A4 o vacío devuelve el PDF original. El rollo se pinta
+//       desde la fila de Invoices: no se emite nada ni se gasta número.
+//   (2) ENVIAR. NEW datosEnvio({ invoiceId } | { contactId }) → email y
+//       teléfono de la ficha y si el salón tiene WhatsApp (whatsappPro +
+//       waActive). NEW enviarDocumento({ invoiceId, canal, destino }) →
+//       email (Brevo, PDF adjunto) o WhatsApp (plantilla con documento)
+//       de un documento ya emitido, ticket o factura. Si el email o el
+//       teléfono no coinciden con la ficha, se guardan en ella igual que
+//       hace «Editar cliente» de Recepción PRO (recepcionLogic
+//       editarContacto: nombre + emails + phones). Si Wix lo rechaza por
+//       ser de otra ficha, la ficha no se toca y el envío sigue.
+//       Texto del email: SalonConfig.invoiceEmailText; vacío → texto
+//       estándar (TEXTO_EMAIL_ESTANDAR). Marcadores ${Nombre} y
+//       ${documento}. Los errores de Brevo y Meta van al log; a pantalla,
+//       mensaje propio.
+//   (3) TICKET CON ENVÍO. NEW emitirYEnviarTicket({ reservaId } |
+//       { sourceKey }, canal, destino): el botón «🧾 Ticket» pregunta
+//       primero por dónde enviarlo; emite con la misma emisión que el
+//       botón y envía. NEW ticketAutomatico({ reservaId } | { sourceKey }):
+//       Recepción PRO lo llama tras cada cobro; solo actúa con
+//       SalonConfig.ticketAutoSend === true. Emite el ticket y lo envía
+//       por email si la ficha lo tiene; si no, por WhatsApp si el salón
+//       lo tiene. Ninguno de los dos envía nunca una factura: la factura
+//       se envía siempre a mano.
+//   (4) FIX ENLACE CADUCADO. Desde la v1.0.2 se guarda en Invoices.pdfUrl
+//       la URL firmada que devuelve getDownloadUrl, y al leerla se
+//       devolvía tal cual. Esa URL caduca: en las filas de Hair-Times el
+//       token dura 60 h (3600 → minutos). Pasado ese plazo el 🔗 del badge
+//       ya no abría el PDF. _resolverPdfUrlHttps reconstruye ahora la URL
+//       de Media (wix:document://v1/<archivo>/<número>.pdf, el mismo
+//       formato que devuelve upload()) y pide un enlace nuevo. Lo
+//       necesitan el 🔗, Imprimir A4 y los dos envíos.
+//   NO SE TOCA: numeración, series, idempotencia, IVA, líneas, PDF A4,
+//   Verifactu, upgrade ticket→factura ni la firma de los webMethods
+//   existentes.
+//
 // v1.0.9 (2026-10-27) — CIF/NIF Y RAZÓN SOCIAL EN CAMPOS PERSONALIZADOS.
 //   Recepción PRO (recepcionLogic v2.2.0) guarda ahora el CIF/NIF y la
 //   razón social en la ficha del cliente, en dos campos personalizados:
@@ -324,12 +365,16 @@ import { contacts as contactsV1 } from 'wix-crm-backend';
 import { elevate } from 'wix-auth';
 import { mediaManager } from 'wix-media-backend';
 import { jsPDF } from 'jspdf';
+// v1.0.10 — envío del documento. Mismo patrón de import que
+// comunicacionesLogic (brevoLogic.web.js / whatsappLogic.web.js).
+import { enviarEmailBrevo } from 'backend/brevoLogic.web.js';
+import { enviarDocumentoWhatsApp } from 'backend/whatsappLogic.web.js';
 
 // -------------------------------------------------------------
 // CONSTANTES
 // -------------------------------------------------------------
 
-const VERSION = '1.0.9';
+const VERSION = '1.0.10';
 const TAG = `[FacturacionSalon][${VERSION}]`;
 
 const COL_INVOICES    = 'Invoices';
@@ -364,6 +409,21 @@ const TIPO_OP_FACTURA = 'F1';   // factura completa
 
 const CMS_OPTS = { suppressAuth: true };
 
+// v1.0.10 — Caducidad de los enlaces del PDF. getDownloadUrl la toma en
+// MINUTOS (3600 → token de 60 h, comprobado en Invoices de Hair-Times).
+const PDF_URL_EXPIRACION = 3600;
+
+// v1.0.10 — Papel de «Imprimir». SalonConfig.printPaperFormat.
+const PAPEL_80MM = '80 mm';
+
+// v1.0.10 — Texto del email cuando SalonConfig.invoiceEmailText está
+// vacío. Marcadores: ${Nombre} y ${documento} ('ticket T-2026-0001').
+const TEXTO_EMAIL_ESTANDAR =
+  'Hola ${Nombre}:\n\nTe enviamos adjunto tu ${documento}. Gracias por tu visita.\n\nUn saludo.';
+
+const CANAL_EMAIL    = 'email';
+const CANAL_WHATSAPP = 'whatsapp';
+
 // =============================================================
 // HELPERS — LECTURA DE DATOS
 // =============================================================
@@ -389,7 +449,12 @@ async function _leerSalonConfig() {
       invoiceSeries:      String(cfg.invoiceSeries      || DEFAULT_INVOICE_SERIES),
       ticketSeries:       String(cfg.ticketSeries       || DEFAULT_TICKET_SERIES),
       invoiceStartNumber: Number(cfg.invoiceStartNumber) || 0,
-      ticketStartNumber:  Number(cfg.ticketStartNumber)  || 0
+      ticketStartNumber:  Number(cfg.ticketStartNumber)  || 0,
+      // v1.0.10 — imprimir y enviar
+      printPaperFormat:   String(cfg.printPaperFormat || ''),
+      invoiceEmailText:   String(cfg.invoiceEmailText || ''),
+      ticketAutoSend:     cfg.ticketAutoSend === true,
+      whatsappDisponible: cfg.whatsappPro === true && cfg.waActive === true
     };
   } catch (e) {
     console.warn(`${TAG} Error leyendo SalonConfig: ${e.message}. Usando defaults.`);
@@ -397,7 +462,9 @@ async function _leerSalonConfig() {
       legalName: '', brandName: '', taxId: '', address: '', phone: '',
       invoiceEmail: '', vatRate: DEFAULT_VAT_RATE,
       invoiceSeries: DEFAULT_INVOICE_SERIES, ticketSeries: DEFAULT_TICKET_SERIES,
-      invoiceStartNumber: 0, ticketStartNumber: 0
+      invoiceStartNumber: 0, ticketStartNumber: 0,
+      printPaperFormat: '', invoiceEmailText: '',
+      ticketAutoSend: false, whatsappDisponible: false
     };
   }
 }
@@ -879,26 +946,49 @@ function _generarPdfBuffer({ documento, salonConfig, lineas, ivaDesglose }) {
 // Defensivo: la API puede devolver string directo o {downloadUrl}.
 // Aceptamos ambos shapes.
 // =============================================================
-async function _resolverPdfUrlHttps(rawFileUrl) {
+// v1.0.10 — `nombreArchivo` ('<número>.pdf'): con él, una URL firmada
+// guardada (que caduca) se reconstruye como URL de Media y se vuelve a
+// firmar. Sin él, la URL HTTPS se devuelve tal cual, como antes.
+async function _resolverPdfUrlHttps(rawFileUrl, nombreArchivo) {
   if (!rawFileUrl) return '';
-  // Ya HTTPS → tal cual
+  // v1.0.10 — si la nueva firma falla, se devuelve lo que había guardado
+  // (nunca la URL wix:document://, que el navegador no abre).
+  const guardada = rawFileUrl;
+  // Ya HTTPS
   if (rawFileUrl.startsWith('http://') || rawFileUrl.startsWith('https://')) {
-    return rawFileUrl;
+    // v1.0.10 — URL firmada de descarga (download-files.wixmp.com/ugd/<id>
+    // ?token=…): caduca. Se reconstruye la URL de Media con el mismo
+    // formato que devuelve mediaManager.upload() —
+    // wix:document://v1/<id>/<nombre>— y se pide un enlace nuevo.
+    const media = _urlMediaDesdeFirmada(rawFileUrl, nombreArchivo);
+    if (!media) return rawFileUrl;
+    rawFileUrl = media;
   }
   // wix:document://... → resolver con Wix Media API
   if (rawFileUrl.startsWith('wix:document://')) {
     try {
-      const result = await mediaManager.getDownloadUrl(rawFileUrl, 3600);
+      const result = await mediaManager.getDownloadUrl(rawFileUrl, PDF_URL_EXPIRACION);
       if (typeof result === 'string' && result) return result;
       if (result && typeof result === 'object' && result.downloadUrl) return result.downloadUrl;
       console.warn(`${TAG} ⚠️ getDownloadUrl devolvió shape inesperado:`, result);
-      return rawFileUrl; // fallback: al menos devolvemos algo
+      return guardada; // fallback: al menos devolvemos algo
     } catch (e) {
       console.error(`${TAG} ❌ getDownloadUrl falló: ${e.message}`);
-      return rawFileUrl;
+      return guardada;
     }
   }
   return rawFileUrl;
+}
+
+// v1.0.10 — De la URL firmada guardada en Invoices.pdfUrl a la URL de
+// Media del archivo. Solo para enlaces de descarga con token de wixmp
+// (los que guarda este módulo desde la v1.0.2). Cualquier otra URL →
+// null, y se devuelve tal cual.
+function _urlMediaDesdeFirmada(url, nombreArchivo) {
+  if (!nombreArchivo) return null;
+  const m = String(url).match(/^https:\/\/download-files\.wixmp\.com\/ugd\/([^/?#]+)\?token=/);
+  if (!m || !m[1]) return null;
+  return `wix:document://v1/${m[1]}/${nombreArchivo}`;
 }
 
 async function _subirPdf(buffer, fileName) {
@@ -1083,7 +1173,7 @@ async function _emitirDocumento({ reservaId, modo, vatId, legalName, sourceType,
     } else {
       // Resto de casos: bloqueado (devuelve el documento existente).
       console.log(`${TAG} ⚠️ ${origen} ${String(claveCobro).substring(0, 12)} ya tiene documento ${existente.invoiceNumber} (modo=${existente.modo}); modo solicitado=${modo} → duplicado`);
-      const pdfUrl = await _resolverPdfUrlHttps(existente.pdfUrl || '');
+      const pdfUrl = await _resolverPdfUrlHttps(existente.pdfUrl || '', _nombrePdf(existente));
       return {
         ok: true,
         version: VERSION,
@@ -1405,6 +1495,408 @@ async function _emitirDocumento({ reservaId, modo, vatId, legalName, sourceType,
 }
 
 // =============================================================
+// v1.0.10 — IMPRIMIR EN 80 MM
+// =============================================================
+
+// Nombre del PDF en Media: '<número>.pdf', el mismo que usa la emisión.
+function _nombrePdf(doc) {
+  return (doc && doc.invoiceNumber) ? `${doc.invoiceNumber}.pdf` : '';
+}
+
+// SalonConfig.printPaperFormat → ¿tira de 80 mm? Vacío o 'A4' → no.
+function _esPapel80(formato) {
+  return String(formato || '').replace(/\s+/g, '').toLowerCase() === PAPEL_80MM.replace(/\s+/g, '').toLowerCase();
+}
+
+const ROLLO_ANCHO  = 80;   // mm de papel
+const ROLLO_MARGEN = 4;    // 80 mm de papel → 72 mm de ancho útil
+
+// Pinta el documento en una tira de 80 mm y devuelve la Y final (mm).
+// Mismo contenido que el A4 (_generarPdfBuffer): emisor, tipo, número y
+// fecha, cliente, líneas, base, IVA, total, método de pago y pie. Los
+// textos largos se parten en varias líneas en vez de cortarse.
+function _pintarRollo(doc, { documento, salonConfig, lineas, ivaDesglose }) {
+  const W = ROLLO_ANCHO;
+  const M = ROLLO_MARGEN;
+  const CW = W - 2 * M;
+  const centro = W / 2;
+  const alto = (pt) => pt * 0.3528 * 1.3;   // alto de línea en mm
+  let y = 7;
+
+  const parrafo = (texto, pt, estilo, alinear) => {
+    doc.setFont('helvetica', estilo);
+    doc.setFontSize(pt);
+    const partes = doc.splitTextToSize(String(texto), CW);
+    partes.forEach(linea => {
+      if (alinear === 'center') doc.text(linea, centro, y, { align: 'center' });
+      else doc.text(linea, M, y);
+      y += alto(pt);
+    });
+  };
+  const fila = (izq, der, pt, estilo) => {
+    doc.setFont('helvetica', estilo);
+    doc.setFontSize(pt);
+    doc.text(String(izq), M, y);
+    doc.text(String(der), W - M, y, { align: 'right' });
+    y += alto(pt);
+  };
+  const raya = () => {
+    y += 0.5;
+    doc.setLineWidth(0.2);
+    doc.line(M, y, W - M, y);
+    y += 4;
+  };
+
+  doc.setTextColor(0, 0, 0);
+
+  // ── Emisor ────────────────────────────────────────────────
+  parrafo(salonConfig.legalName || salonConfig.brandName || '—', 11, 'bold', 'center');
+  y += 0.5;
+  if (salonConfig.taxId)   parrafo(`CIF/NIF: ${salonConfig.taxId}`, 8, 'normal', 'center');
+  if (salonConfig.address) parrafo(salonConfig.address, 8, 'normal', 'center');
+  const contacto = [salonConfig.phone, salonConfig.invoiceEmail].filter(Boolean).join(' · ');
+  if (contacto) parrafo(contacto, 8, 'normal', 'center');
+  raya();
+
+  // ── Tipo + número + fecha ─────────────────────────────────
+  parrafo((documento.modo === MODO_TICKET) ? 'TICKET' : 'FACTURA', 11, 'bold', 'center');
+  y += 0.5;
+  fila(`Nº: ${documento.invoiceNumber || ''}`, `Fecha: ${_formatFechaCorta(documento.issueDate)}`, 8.5, 'normal');
+  raya();
+
+  // ── Cliente ───────────────────────────────────────────────
+  parrafo('Cliente:', 8.5, 'bold');
+  parrafo(documento.clientName || '—', 8.5, 'normal');
+  if (documento.modo === MODO_FACTURA) {
+    if (documento.clientLegalName) parrafo(documento.clientLegalName, 8.5, 'normal');
+    if (documento.clientVatId)     parrafo(`CIF/NIF: ${documento.clientVatId}`, 8.5, 'normal');
+  }
+  raya();
+
+  // ── Líneas ────────────────────────────────────────────────
+  const X_CANT = 56;          // borde derecho de la cantidad
+  const ANCHO_CONCEPTO = 40;  // de M a 44 mm
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.text('Concepto', M, y);
+  doc.text('Cant.', X_CANT, y, { align: 'right' });
+  doc.text('Importe', W - M, y, { align: 'right' });
+  y += alto(8) + 1;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  for (const linea of (lineas || [])) {
+    const partes = doc.splitTextToSize(String(linea.nombre || ''), ANCHO_CONCEPTO);
+    partes.forEach((parte, i) => {
+      doc.text(parte, M, y);
+      if (i === 0) {
+        doc.text(String(linea.cantidad || 1), X_CANT, y, { align: 'right' });
+        doc.text(_formatEUR(linea.subtotal), W - M, y, { align: 'right' });
+      }
+      y += alto(8.5);
+    });
+    y += 0.8;
+  }
+  raya();
+
+  // ── Totales ───────────────────────────────────────────────
+  fila('Base imponible:', _formatEUR(ivaDesglose.base), 8.5, 'normal');
+  fila(`IVA (${documento.vatRate}%):`, _formatEUR(ivaDesglose.cuota), 8.5, 'normal');
+  y += 0.5;
+  fila('TOTAL:', _formatEUR(documento.totalAmount), 10, 'bold');
+
+  // ── Pie ───────────────────────────────────────────────────
+  y += 2;
+  if (documento.paymentMethod) parrafo(`Método de pago: ${documento.paymentMethod}`, 8, 'normal');
+  y += 2;
+  doc.setTextColor(120, 120, 120);
+  parrafo('Gracias por su confianza.', 8, 'normal', 'center');
+  doc.setTextColor(0, 0, 0);
+
+  return y + 5;
+}
+
+// Tira de 80 mm de una sola página: primero se mide en una hoja larga
+// y después se pinta en una hoja del alto justo.
+function _generarPdfRolloBuffer(datos) {
+  const medida = new jsPDF({ unit: 'mm', format: [ROLLO_ANCHO, 1000] });
+  const altoFinal = Math.max(Math.ceil(_pintarRollo(medida, datos)), ROLLO_ANCHO + 5);
+  const doc = new jsPDF({ unit: 'mm', format: [ROLLO_ANCHO, altoFinal] });
+  _pintarRollo(doc, datos);
+  return Buffer.from(doc.output('arraybuffer'));
+}
+
+// =============================================================
+// v1.0.10 — ENVIAR POR EMAIL / WHATSAPP
+// =============================================================
+
+// contactId del documento: el de la reserva y, si no, el del cobro.
+// Invoices no guarda contactId; reserva y cobro sí (los mismos que usa
+// la emisión: reserva.contactId || pago.contactId).
+async function _contactIdDeDocumento(row) {
+  if (row && row.reservaId) {
+    const r = await _leerReserva(row.reservaId);
+    if (r && r.contactId) return String(r.contactId);
+  }
+  if (row && row.paymentReservationId) {
+    try {
+      const pago = await wixData.get(COL_PAGOS, row.paymentReservationId, CMS_OPTS);
+      if (pago && pago.contactId) return String(pago.contactId);
+    } catch (e) {
+      console.warn(`${TAG} No se pudo leer el cobro del documento: ${e.message}`);
+    }
+  }
+  return '';
+}
+
+// Primer email / teléfono de un contacto de wix-crm-backend. Mismo
+// criterio que formatearContacto de recepcionLogic (emails[0], phones[0]).
+function _listaV1(v) {
+  if (Array.isArray(v)) return v;
+  if (v && Array.isArray(v.items)) return v.items;
+  return [];
+}
+function _primerEmailV1(c) {
+  const l = _listaV1(c && c.info && c.info.emails);
+  return String((l[0] && (l[0].email || l[0])) || '').trim();
+}
+function _primerTelefonoV1(c) {
+  const l = _listaV1(c && c.info && c.info.phones);
+  return String((l[0] && (l[0].phone || l[0])) || '').trim();
+}
+
+function _normEmail(e) {
+  return String(e || '').trim().toLowerCase();
+}
+// Solo dígitos, sin prefijo internacional 00 ni 34 delante de 9 cifras:
+// '+34 654 19 63 05' y '654196305' son el mismo teléfono.
+function _normTel(t) {
+  let d = String(t || '').replace(/\D/g, '');
+  if (d.startsWith('00')) d = d.substring(2);
+  if (d.length === 11 && d.startsWith('34')) d = d.substring(2);
+  return d;
+}
+
+// Copia literal de codigoErrorContacto (recepcionLogic v2.2.0).
+function _codigoErrorContacto(e) {
+  let txt = String(e?.message || '');
+  try { txt += ' ' + JSON.stringify(e?.details || {}); } catch (_) { /* sin details */ }
+  if (txt.indexOf('DUPLICATE_CONTACT_EXISTS') === -1) return 'ERROR';
+  if (txt.indexOf('duplicateEmail') !== -1) return 'DUPLICATE_EMAIL';
+  if (txt.indexOf('duplicatePhone') !== -1) return 'DUPLICATE_PHONE';
+  return 'DUPLICATE';
+}
+
+// Guarda en la ficha el email o el teléfono nuevo. Mismo patrón que
+// editarContacto de recepcionLogic («Editar cliente»): getContact →
+// revision → updateContact(identifiers, { name, emails, phones },
+// { suppressAuth }). El dato que no cambia se reenvía con el valor que ya
+// tiene la ficha, como hace el formulario de «Editar cliente».
+async function _guardarContactoEnFicha(contactId, { email, telefono }) {
+  try {
+    const current = await elevate(contactsV1.getContact)(contactId);
+    if (!current || !current.revision) return { ok: false, code: 'ERROR' };
+
+    const nombre = (current.info && current.info.name) || {};
+    const contactInfo = {};
+    if (nombre.first || nombre.last) {
+      contactInfo.name = {
+        first: String(nombre.first || '').trim(),
+        last: String(nombre.last || '').trim()
+      };
+    }
+    const nuevoEmail = String(email || _primerEmailV1(current) || '').trim();
+    const nuevoTel   = String(telefono || _primerTelefonoV1(current) || '').trim();
+    if (nuevoEmail) contactInfo.emails = [{ email: nuevoEmail }];
+    if (nuevoTel)   contactInfo.phones = [{ phone: nuevoTel }];
+
+    await elevate(contactsV1.updateContact)(
+      { contactId, revision: current.revision },
+      contactInfo,
+      { suppressAuth: true }
+    );
+    return { ok: true };
+  } catch (e) {
+    console.warn(`${TAG} ⚠️ No se pudo guardar en la ficha ${String(contactId).substring(0, 8)}: ${e?.message || e}`);
+    return { ok: false, code: _codigoErrorContacto(e) };
+  }
+}
+
+function _avisoFicha(code, canal) {
+  const dato = (canal === CANAL_EMAIL) ? 'Ese email' : 'Ese teléfono';
+  if (code === 'DUPLICATE_EMAIL' || code === 'DUPLICATE_PHONE' || code === 'DUPLICATE') {
+    return `${dato} es de otra ficha: no se ha guardado en esta clienta.`;
+  }
+  return `${dato} no se ha podido guardar en la ficha.`;
+}
+
+function _escHtml(t) {
+  return String(t)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Texto del email → HTML: marcadores ${clave}, escape y saltos de línea.
+function _cuerpoEmail(texto, vars) {
+  const t = String(texto).replace(/\$\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : ''));
+  return _escHtml(t).replace(/\r?\n/g, '<br>');
+}
+
+// Datos de envío de una clienta: email y teléfono de la ficha (o, sin
+// ficha, los que guardó el documento).
+async function _datosClienta(contactId, row) {
+  let email = '', telefono = '', nombre = '';
+  if (contactId) {
+    const c = await _leerContactoV1(contactId);
+    if (c) {
+      email = _primerEmailV1(c);
+      telefono = _primerTelefonoV1(c);
+      nombre = String((c.info && c.info.name && c.info.name.first) || '').trim();
+    }
+  }
+  if (row) {
+    if (!email) email = String(row.clientEmail || '').trim();
+    if (!telefono) telefono = String(row.clientPhone || '').trim();
+  }
+  return { email, telefono, nombre };
+}
+
+// Si lo escrito no coincide con la ficha, se guarda en ella.
+async function _sincronizarFicha(contactId, canal, destino) {
+  const ficha = { actualizada: false, aviso: '' };
+  if (!contactId) return ficha;
+  const c = await _leerContactoV1(contactId);
+  if (!c) return ficha;
+  const enFicha = (canal === CANAL_EMAIL) ? _primerEmailV1(c) : _primerTelefonoV1(c);
+  const coincide = (canal === CANAL_EMAIL)
+    ? _normEmail(enFicha) === _normEmail(destino)
+    : _normTel(enFicha) === _normTel(destino);
+  if (coincide) return ficha;
+  const g = await _guardarContactoEnFicha(contactId,
+    (canal === CANAL_EMAIL) ? { email: destino } : { telefono: destino });
+  if (g.ok) { ficha.actualizada = true; ficha.contactId = contactId; }
+  else ficha.aviso = _avisoFicha(g.code, canal);
+  return ficha;
+}
+
+// Comprueba canal y destino. Devuelve '' si vale o el mensaje de error.
+function _validarDestino(canal, destino, cfg) {
+  if (canal !== CANAL_EMAIL && canal !== CANAL_WHATSAPP) return 'Elige email o WhatsApp.';
+  if (!destino) return (canal === CANAL_EMAIL) ? 'Escribe el email de la clienta.' : 'Escribe el teléfono de la clienta.';
+  if (canal === CANAL_EMAIL && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(destino)) return 'El email no es válido.';
+  if (canal === CANAL_WHATSAPP && _normTel(destino).length < 9) return 'El teléfono no es válido.';
+  if (canal === CANAL_WHATSAPP && !cfg.whatsappDisponible) return 'Este salón no tiene activo el envío por WhatsApp.';
+  return '';
+}
+
+// Envía un documento YA EMITIDO (fila de Invoices) por el canal pedido.
+// El PDF que sale es el original guardado en Media, con un enlace nuevo.
+// Los errores de Brevo o de Meta quedan en el log; a pantalla va un
+// mensaje propio.
+async function _enviarDocumentoInterno({ row, cfg, canal, destino, nombre }) {
+  const fileName = _nombrePdf(row);
+  const url = await _resolverPdfUrlHttps(row.pdfUrl || '', fileName);
+  if (!url || !url.startsWith('https://')) {
+    return { ok: false, error: 'Este documento no tiene PDF para enviar.' };
+  }
+  const etiqueta = `${row.modo === MODO_FACTURA ? 'factura' : 'ticket'} ${row.invoiceNumber || ''}`.trim();
+  const marca = cfg.brandName || cfg.legalName || '';
+  const nombreCli = String(nombre || row.clientName || '').trim();
+  const evento = `documento_${row.modo || MODO_TICKET}`;
+
+  if (canal === CANAL_EMAIL) {
+    const texto = String(cfg.invoiceEmailText || '').trim() ? cfg.invoiceEmailText : TEXTO_EMAIL_ESTANDAR;
+    const r = await enviarEmailBrevo({
+      to: destino,
+      toName: nombreCli,
+      subject: `Tu ${etiqueta}${marca ? ' · ' + marca : ''}`,
+      bodyHtml: _cuerpoEmail(texto, { Nombre: nombreCli, documento: etiqueta }),
+      event: evento,
+      attachment: [{ url, name: fileName }]
+    });
+    if (r && r.ok) return { ok: true };
+    console.error(`${TAG} ❌ Email del ${etiqueta} a ${destino}: ${r && r.error}`);
+    return { ok: false, error: 'No se pudo enviar el email. Revisa la dirección y vuelve a intentarlo.' };
+  }
+
+  const r = await enviarDocumentoWhatsApp({
+    telefono: destino,
+    nombreCliente: nombreCli,
+    parameters: [nombreCli || 'cliente', etiqueta, marca],
+    documentUrl: url,
+    fileName,
+    eventType: evento
+  });
+  if (r && r.ok) return { ok: true };
+  const detalle = JSON.stringify((r && (r.data || r.error)) || '');
+  console.error(`${TAG} ❌ WhatsApp del ${etiqueta} a ${destino}: ${detalle}`);
+  // 132001: la plantilla no existe o no está aprobada en ese idioma.
+  if (detalle.indexOf('132001') !== -1) {
+    return { ok: false, error: 'La plantilla de WhatsApp del documento aún no está aprobada en Meta.' };
+  }
+  return { ok: false, error: 'No se pudo enviar por WhatsApp. Revisa el número y vuelve a intentarlo.' };
+}
+
+// ¿Hay importe cobrado? Mismo cálculo que la emisión (cobro + ventas de
+// la cita). Un cobro a cero (canje completo de bono) no lleva ticket, y el
+// automático no debe avisar de error por eso.
+async function _hayImporteCobrado({ reservaId, sourceKey }) {
+  const pago = sourceKey ? await _leerPagoPorBookingId(sourceKey) : await _leerPagoDeReserva(reservaId);
+  if (!pago) return false;
+  const ventas = sourceKey ? [] : await _ventasDeReserva(reservaId);
+  const totalVentas = ventas.reduce((acc, v) => acc + (Number(v.importeTotal) || 0), 0);
+  return _round2(_round2(pago.importeTotal) + _round2(totalVentas)) > 0;
+}
+
+// Emite el ticket (misma emisión que el botón) y lo envía.
+//   canal 'email' | 'whatsapp' + destino → se envía ahí (y se guarda en
+//     la ficha si no coincide).
+//   canal 'auto' → email de la ficha; si no hay, WhatsApp si el salón lo
+//     tiene y la ficha tiene teléfono; si no, solo se emite.
+// Nunca envía una factura: si la cita ya tenía factura, se devuelve sin
+// enviar.
+async function _emitirYEnviarTicket({ reservaId, sourceKey, canal, destino }) {
+  const emision = sourceKey
+    ? await _emitirDocumento({ modo: MODO_TICKET, sourceType: SOURCE_TIENDA, sourceKey })
+    : await _emitirDocumento({ reservaId, modo: MODO_TICKET });
+  if (!emision || !emision.ok) return emision;
+
+  const salida = { ...emision, envio: null, ficha: { actualizada: false, aviso: '' } };
+  if (emision.modo === MODO_FACTURA) return salida;
+
+  const row = emision.invoiceId ? await wixData.get(COL_INVOICES, emision.invoiceId, CMS_OPTS) : null;
+  if (!row) {
+    salida.envio = { ok: false, error: 'Ticket emitido, pero no se pudo leer para enviarlo.' };
+    return salida;
+  }
+  const cfg = await _leerSalonConfig();
+  const contactId = await _contactIdDeDocumento(row);
+  const datos = await _datosClienta(contactId, row);
+
+  let c = canal;
+  let d = String(destino || '').trim();
+  if (c === 'auto') {
+    if (datos.email) { c = CANAL_EMAIL; d = datos.email; }
+    else if (cfg.whatsappDisponible && datos.telefono) { c = CANAL_WHATSAPP; d = datos.telefono; }
+    else {
+      salida.envio = { ok: false, sinDestino: true, error: 'La clienta no tiene email ni WhatsApp en su ficha.' };
+      return salida;
+    }
+  } else {
+    const errDestino = _validarDestino(c, d, cfg);
+    if (errDestino) {
+      salida.envio = { ok: false, error: errDestino };
+      return salida;
+    }
+    salida.ficha = await _sincronizarFicha(contactId, c, d);
+  }
+
+  const envio = await _enviarDocumentoInterno({ row, cfg, canal: c, destino: d, nombre: datos.nombre });
+  salida.envio = envio.ok ? { ok: true, canal: c, destino: d } : { ok: false, canal: c, destino: d, error: envio.error };
+  return salida;
+}
+
+// =============================================================
 // WEBMETHODS PÚBLICOS
 // =============================================================
 
@@ -1465,7 +1957,7 @@ export const obtenerDocumentoVenta = webMethod(
       if (!doc) {
         return { ok: true, version: VERSION, existe: false };
       }
-      const pdfUrl = await _resolverPdfUrlHttps(doc.pdfUrl || '');
+      const pdfUrl = await _resolverPdfUrlHttps(doc.pdfUrl || '', _nombrePdf(doc));
       return {
         ok: true,
         version: VERSION,
@@ -1551,7 +2043,7 @@ export const obtenerDocumentoReserva = webMethod(
       // frontend reciba directamente la URL HTTPS navegable. No tocamos
       // la fila en CMS — la resolución es barata y aporta frescura del
       // token de descarga.
-      const pdfUrl = await _resolverPdfUrlHttps(doc.pdfUrl || '');
+      const pdfUrl = await _resolverPdfUrlHttps(doc.pdfUrl || '', _nombrePdf(doc));
       // El widget v1.1.56 lee p.documento.* (estructura anidada).
       const documento = {
         modo: doc.modo,
@@ -1578,6 +2070,148 @@ export const obtenerDocumentoReserva = webMethod(
     } catch (e) {
       console.error(`${TAG} ❌ obtenerDocumentoReserva: ${e.message}`);
       return { ok: false, version: VERSION, error: e.message };
+    }
+  }
+);
+
+// =============================================================
+// v1.0.10 — IMPRIMIR Y ENVIAR DESDE RECEPCIÓN PRO
+// =============================================================
+
+// PDF para «Imprimir». Con SalonConfig.printPaperFormat = '80 mm' se pinta
+// la tira de 80 mm desde la fila guardada y se devuelve en base64 (no se
+// sube a Media). Con A4 o vacío, enlace nuevo al PDF original.
+export const obtenerPdfImpresion = webMethod(
+  Permissions.SiteMember,
+  async ({ invoiceId } = {}) => {
+    try {
+      if (!invoiceId) return { ok: false, version: VERSION, error: 'Falta el documento.' };
+      const row = await wixData.get(COL_INVOICES, invoiceId, CMS_OPTS);
+      if (!row) return { ok: false, version: VERSION, error: 'No se encuentra el documento.' };
+      const cfg = await _leerSalonConfig();
+
+      if (_esPapel80(cfg.printPaperFormat)) {
+        const items = (row.invoiceLines && Array.isArray(row.invoiceLines.items)) ? row.invoiceLines.items : [];
+        const buffer = _generarPdfRolloBuffer({
+          documento: row,
+          salonConfig: cfg,
+          lineas: items,
+          ivaDesglose: { base: row.baseAmount, cuota: row.vatAmount }
+        });
+        return {
+          ok: true,
+          version: VERSION,
+          formato: PAPEL_80MM,
+          invoiceNumber: row.invoiceNumber,
+          fileName: _nombrePdf(row),
+          pdfBase64: buffer.toString('base64')
+        };
+      }
+
+      const pdfUrl = await _resolverPdfUrlHttps(row.pdfUrl || '', _nombrePdf(row));
+      return { ok: true, version: VERSION, formato: 'A4', invoiceNumber: row.invoiceNumber, pdfUrl };
+    } catch (e) {
+      console.error(`${TAG} ❌ obtenerPdfImpresion: ${e.message}`);
+      return { ok: false, version: VERSION, error: 'No se pudo preparar el documento para imprimir.' };
+    }
+  }
+);
+
+// Email y teléfono para el panel de envío (ficha de la clienta) y si el
+// salón tiene WhatsApp. Por documento (`invoiceId`) o, antes de emitir el
+// ticket, por cliente (`contactId`).
+export const datosEnvio = webMethod(
+  Permissions.SiteMember,
+  async ({ invoiceId, contactId } = {}) => {
+    try {
+      let row = null;
+      let cid = String(contactId || '');
+      if (invoiceId) {
+        row = await wixData.get(COL_INVOICES, invoiceId, CMS_OPTS);
+        if (row && !cid) cid = await _contactIdDeDocumento(row);
+      }
+      const cfg = await _leerSalonConfig();
+      const datos = await _datosClienta(cid, row);
+      return {
+        ok: true,
+        version: VERSION,
+        contactId: cid,
+        email: datos.email,
+        telefono: datos.telefono,
+        whatsappDisponible: cfg.whatsappDisponible
+      };
+    } catch (e) {
+      console.error(`${TAG} ❌ datosEnvio: ${e.message}`);
+      return { ok: false, version: VERSION, error: 'No se pudieron leer los datos de la clienta.' };
+    }
+  }
+);
+
+// Envía un documento ya emitido (ticket o factura). Si el email o el
+// teléfono no coinciden con la ficha, se guardan en ella.
+export const enviarDocumento = webMethod(
+  Permissions.SiteMember,
+  async ({ invoiceId, canal, destino } = {}) => {
+    try {
+      const d = String(destino || '').trim();
+      if (!invoiceId) return { ok: false, version: VERSION, error: 'Falta el documento.' };
+      const row = await wixData.get(COL_INVOICES, invoiceId, CMS_OPTS);
+      if (!row) return { ok: false, version: VERSION, error: 'No se encuentra el documento.' };
+      const cfg = await _leerSalonConfig();
+      const errDestino = _validarDestino(canal, d, cfg);
+      if (errDestino) return { ok: false, version: VERSION, error: errDestino };
+
+      const contactId = await _contactIdDeDocumento(row);
+      const ficha = await _sincronizarFicha(contactId, canal, d);
+      const datos = await _datosClienta(contactId, row);
+      const envio = await _enviarDocumentoInterno({ row, cfg, canal, destino: d, nombre: datos.nombre });
+      if (!envio.ok) return { ok: false, version: VERSION, error: envio.error, ficha };
+
+      console.log(`${TAG} 📤 ${row.invoiceNumber} enviado por ${canal}${ficha.actualizada ? ' · ficha actualizada' : ''}`);
+      return { ok: true, version: VERSION, canal, destino: d, invoiceNumber: row.invoiceNumber, ficha };
+    } catch (e) {
+      console.error(`${TAG} ❌ enviarDocumento: ${e.message}`);
+      return { ok: false, version: VERSION, error: 'No se pudo enviar el documento. Vuelve a intentarlo.' };
+    }
+  }
+);
+
+// Botón «🧾 Ticket» con envío: emite el ticket y lo envía por el canal
+// elegido en la pregunta. Cita → { reservaId }; venta de tienda →
+// { sourceKey }. La respuesta lleva los mismos campos que
+// generarTicketCita / generarTicketVenta, más `envio` y `ficha`.
+export const emitirYEnviarTicket = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId, sourceKey, canal, destino } = {}) => {
+    try {
+      if (!reservaId && !sourceKey) return { ok: false, version: VERSION, error: 'Falta la cita o la venta.' };
+      if (canal !== CANAL_EMAIL && canal !== CANAL_WHATSAPP) {
+        return { ok: false, version: VERSION, error: 'Elige email o WhatsApp.' };
+      }
+      return await _emitirYEnviarTicket({ reservaId, sourceKey, canal, destino });
+    } catch (e) {
+      console.error(`${TAG} ❌ emitirYEnviarTicket: ${e.message}`);
+      return { ok: false, version: VERSION, error: 'No se pudo emitir el ticket. Vuelve a intentarlo.' };
+    }
+  }
+);
+
+// Ticket automático tras cobrar. Solo actúa con SalonConfig.ticketAutoSend
+// === true; si no, devuelve { omitido: true } sin emitir nada.
+export const ticketAutomatico = webMethod(
+  Permissions.SiteMember,
+  async ({ reservaId, sourceKey } = {}) => {
+    try {
+      if (!reservaId && !sourceKey) return { ok: false, version: VERSION, error: 'Falta la cita o la venta.' };
+      const cfg = await _leerSalonConfig();
+      if (!cfg.ticketAutoSend) return { ok: true, version: VERSION, omitido: true };
+      if (!(await _hayImporteCobrado({ reservaId, sourceKey }))) {
+        return { ok: true, version: VERSION, omitido: true, motivo: 'sin_importe' };
+      }
+      return await _emitirYEnviarTicket({ reservaId, sourceKey, canal: 'auto' });
+    } catch (e) {
+      console.error(`${TAG} ❌ ticketAutomatico: ${e.message}`);
+      return { ok: false, version: VERSION, error: 'No se pudo emitir el ticket automático.' };
     }
   }
 );

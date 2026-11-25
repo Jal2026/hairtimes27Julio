@@ -9,10 +9,31 @@
 <title>KAMISUITE · Configuración Salón</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════
-   widget_salon_config.html  v1.0.20
+   widget_salon_config.html  v1.0.21
    KAMISUITE — Widget Edición Configuración Salón
    ═══════════════════════════════════════════════════════════════
    CHANGELOG
+   v1.0.21 · 25 Nov 2026 · Papel de la impresora, texto del email
+           del ticket/factura y ticket automático
+     - SECTIONS[facturacion].fields += ticketAutoSend (boolean, SIN
+       defaultOn: nace apagado), printPaperFormat (select: vacío, 'A4',
+       '80 mm') e invoiceEmailText (textarea a ancho completo).
+     - ticketAutoSend encendido: al cobrar se emite el ticket y se envía
+       a la clienta sin preguntar. Apagado: el botón «🧾 Ticket» de la
+       cita pregunta por dónde enviarlo. La factura siempre es manual.
+     - printPaperFormat decide en qué papel sale «Imprimir» en Recepción
+       PRO. Vacío = A4, que es lo que se hacía hasta hoy.
+     - invoiceEmailText es el texto del correo que lleva el ticket o la
+       factura en PDF. El placeholder muestra el texto estándar que usa
+       el código cuando está vacío, con sus dos marcadores ${Nombre} y
+       ${documento}.
+     - Tipos 'boolean', 'select' y 'textarea' ya existentes. CERO
+       cambios de CSS.
+     - CMS: SalonConfig.printPaperFormat y SalonConfig.invoiceEmailText
+       (Texto), SalonConfig.ticketAutoSend (Booleano).
+     - Pareja backend: salonConfigLogic v1.0.15. Lo consume
+       facturacionSalonLogic v1.0.10.
+     - Page code sin cambios.
    v1.0.20 · 21 Oct 2026 · Interruptor de smart pricing
      - SECTIONS[modulos].fields += smartPricingActivo
      - Enciende las ofertas por día y hora de la reserva online. Las
@@ -1158,7 +1179,7 @@ select.field-input {
     <div>
       <span class="header-brand">KAMISUITE</span>
       <span class="header-title"> · CONFIGURACIÓN SALÓN</span>
-      <span class="header-version">v1.0.20</span>
+      <span class="header-version">v1.0.21</span>
     </div>
   </div>
   <div class="header-right">
@@ -1505,6 +1526,11 @@ const SECTIONS = [
       { id: 'ticketSeries',       label: 'Serie tickets (F2)',        type: 'text',   placeholder: 'Ej: T' },
       { id: 'invoiceStartNumber', label: 'Nº inicial serie facturas', type: 'number', placeholder: 'Ej: 1' },
       { id: 'ticketStartNumber',  label: 'Nº inicial serie tickets',  type: 'number', placeholder: 'Ej: 1' },
+      // v1.0.21 — papel de «Imprimir» en Recepción PRO y texto del email
+      // con el que se envía el ticket o la factura.
+      { id: 'ticketAutoSend',     label: 'Envío automático del ticket', type: 'boolean', desc: 'Al cobrar, el ticket se emite y se envía a la clienta por email o, si no tiene, por WhatsApp. Apagado: el botón Ticket pregunta. La factura se envía siempre a mano.' },
+      { id: 'printPaperFormat',   label: 'Papel de la impresora (vacío = A4)', type: 'select', options: ['', 'A4', '80 mm'] },
+      { id: 'invoiceEmailText',   label: 'Texto del email del ticket / factura', type: 'textarea', fullWidth: true, placeholder: 'Hola ${Nombre}:\n\nTe enviamos adjunto tu ${documento}. Gracias por tu visita.\n\nUn saludo.' },
     ]
   },
   {

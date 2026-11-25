@@ -2,7 +2,7 @@
  * ============================================================
  *  brevoLogic.web.js — KAMISUITE Email vía Brevo
  * ============================================================
- *  v1.2.0  ·  13 Septiembre 2026
+ *  v1.3.0  ·  25 Noviembre 2026
  * ------------------------------------------------------------
  *  Backend de envío de email (transaccional + marketing) vía
  *  Brevo Transactional API (POST /v3/smtp/email).
@@ -52,6 +52,15 @@
  *
  *  CHANGELOG
  *  ---------
+ *  v1.3.0 (25-Nov-2026) — Adjuntos en el envío genérico.
+ *    - _enviarEmail (y por tanto enviarEmailBrevo) acepta `attachment`
+ *      opcional: lista de { url, name } o { content, name }, tal cual la
+ *      espera Brevo en POST /v3/smtp/email (URL absoluta o base64, con
+ *      nombre de archivo; PDF admitido).
+ *    - Lo usa facturacionSalonLogic v1.0.10 para mandar el ticket o la
+ *      factura en PDF desde Recepción PRO.
+ *    - Cambio aditivo: sin `attachment` el payload es idéntico al de la
+ *      v1.2.0. enviarEmailPlantilla no se toca.
  *  v1.2.0 (13-Sep-2026) — Sustitución sin escapar para claves de bloque.
  *    - RAW_KEYS = { bloqueProductos }. _sustituir inserta esas claves sin
  *      pasar por _esc; todas las demás siguen escapándose igual que en
@@ -88,7 +97,7 @@ import { fetch } from 'wix-fetch';
 
 // ── Constantes ──────────────────────────────────────────────
 const VERSION = '1.2.0';
-const TAG = '[Brevo v1.2.0]';
+const TAG = '[Brevo v1.3.0]';
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 const SALON_CONFIG_COLLECTION = 'SalonConfig';
 const COMMUNICATION_LOG_COLLECTION = 'CommunicationLog';
@@ -301,7 +310,7 @@ function _replyTo(salon, replyTo) {
 }
 
 // ── Core interno de envío (envíos genéricos/prueba, CON log) ──
-async function _enviarEmail({ to, toName, subject, bodyHtml, event, replyTo }) {
+async function _enviarEmail({ to, toName, subject, bodyHtml, event, replyTo, attachment }) {
     if (!to || !String(to).trim()) {
         return { ok: false, error: 'Falta destinatario (to)' };
     }
@@ -322,6 +331,17 @@ async function _enviarEmail({ to, toName, subject, bodyHtml, event, replyTo }) {
     };
     const rt = _replyTo(salon, replyTo);
     if (rt) payload.replyTo = rt;
+
+    // v1.3.0 — adjuntos opcionales. Solo entradas con nombre y con URL
+    // absoluta o contenido base64; el resto se descarta.
+    if (Array.isArray(attachment)) {
+        const adj = attachment
+            .filter(a => a && a.name && (a.url || a.content))
+            .map(a => a.url
+                ? { url: String(a.url), name: String(a.name) }
+                : { content: String(a.content), name: String(a.name) });
+        if (adj.length) payload.attachment = adj;
+    }
 
     const res = await _callBrevoAPI(payload);
     const messageId = (res.data && res.data.messageId) ? res.data.messageId : '';
@@ -415,7 +435,8 @@ export const enviarEmailPlantilla = webMethod(
  * Envío genérico de email por Brevo (wrapper de marca en código).
  * Para usos internos/diagnóstico. Los emails a cliente usan plantilla CMS.
  *
- * @param {object} p  — { to, toName?, subject, bodyHtml, event?, replyTo? }
+ * @param {object} p  — { to, toName?, subject, bodyHtml, event?, replyTo?,
+ *                       attachment? }  (v1.3.0: [{ url|content, name }])
  * @returns {object} { ok, messageId? } | { ok:false, error }
  */
 export const enviarEmailBrevo = webMethod(

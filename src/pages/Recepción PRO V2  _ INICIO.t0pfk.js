@@ -1,8 +1,30 @@
 // =====================================================
 // KAMISUITE - Page Code: Nueva Recepción PRO (CMS-first)
 // =====================================================
-// VERSION: 1.0.49
-// FECHA: 27 de octubre de 2026
+// VERSION: 1.0.50
+// FECHA: 25 de noviembre de 2026
+//
+// v1.0.50: Imprimir en 80 mm y enviar ticket / factura por email o
+//          WhatsApp. Pareja: facturacionSalonLogic.web v1.0.10 y widget
+//          v1.1.118.
+//
+//          · NEW imports de facturacionSalonLogic: obtenerPdfImpresion,
+//            datosEnvio, enviarDocumento, emitirYEnviarTicket,
+//            ticketAutomatico.
+//          · Cinco handlers nuevos, envoltorios finos como los de
+//            v1.0.27. Todos devuelven `origen` tal cual ('cita' o
+//            'tienda') para que el widget sepa qué panel repintar:
+//              'imprimirDocumento'   → 'pdfImpresion'
+//              'datosEnvio'          → 'datosEnvio'
+//              'enviarDocumento'     → 'documentoEnviado'
+//              'emitirYEnviarTicket' → 'ticketEmitidoEnviado'
+//              'ticketAutomatico'    → 'ticketAutomatico'
+//          · Si el envío guardó un email o teléfono nuevo en la ficha, se
+//            actualiza esa entrada de la caché de clientes (mismo criterio
+//            que handleEditarContacto), para que el buscador no enseñe
+//            el dato viejo.
+//          · Nada más cambia: los handlers de facturación existentes, el
+//            cobro y el switch siguen igual salvo los cinco case nuevos.
 //
 // v1.0.49: CIF/NIF y razón social del cliente.
 //          Pareja: recepcionLogic.web v2.2.0 y widget v1.1.117.
@@ -649,7 +671,13 @@ import {
   // v1.0.38 — documentos de ventas sin cita (TIENDA)
   generarTicketVenta,
   generarFacturaVenta,
-  obtenerDocumentoVenta
+  obtenerDocumentoVenta,
+  // v1.0.50 — imprimir en 80 mm y enviar por email / WhatsApp
+  obtenerPdfImpresion,
+  datosEnvio,
+  enviarDocumento,
+  emitirYEnviarTicket,
+  ticketAutomatico
 } from 'backend/facturacionSalonLogic.web';
 
 // v1.0.29 — Nombres del salón (brandName / legalName) para las cabeceras
@@ -677,7 +705,7 @@ import {
   desactivarFichaClienteRecord
 } from 'backend/clientRecordsLogic.web';
 
-const TAG = '[RecepcionProCMS v1.0.49]';
+const TAG = '[RecepcionProCMS v1.0.50]';
 
 // ID del Custom Element en la página (ajustar al ID real del editor Wix).
 const ELEMENT_ID = '#recepcionProCMS';
@@ -1250,6 +1278,84 @@ async function handleObtenerDocumentoVenta(msg) {
   } catch (e) {
     console.error(`${TAG} ❌ obtenerDocumentoVenta:`, e);
     sendResponse('documentoVenta', { ok: false, error: { message: e?.message || 'Error' } });
+  }
+}
+
+// =====================================================
+// IMPRIMIR Y ENVIAR — v1.0.50
+//   Bridge a facturacionSalonLogic.web v1.0.10. `origen` ('cita' |
+//   'tienda') viaja de ida y vuelta sin tocarse.
+// =====================================================
+
+// v1.0.50 — Si el backend guardó en la ficha el email o el teléfono del
+// envío, la caché de clientes se pone al día (como handleEditarContacto).
+function _actualizarCacheTrasEnvio(ficha, canal, destino) {
+  if (!ficha || !ficha.actualizada || !ficha.contactId || !destino) return;
+  const idx = cacheContactos.findIndex(c => c.contactId === ficha.contactId);
+  if (idx < 0) return;
+  if (canal === 'email') cacheContactos[idx].email = destino;
+  else if (canal === 'whatsapp') cacheContactos[idx].telefono = destino;
+}
+
+async function handleImprimirDocumento(msg) {
+  const origen = msg.origen || '';
+  try {
+    const result = await obtenerPdfImpresion({ invoiceId: msg.invoiceId });
+    sendResponse('pdfImpresion', { ...result, origen });
+  } catch (e) {
+    console.error(`${TAG} ❌ obtenerPdfImpresion:`, e);
+    sendResponse('pdfImpresion', { ok: false, origen, error: 'No se pudo preparar el documento para imprimir.' });
+  }
+}
+
+async function handleDatosEnvio(msg) {
+  const origen = msg.origen || '';
+  try {
+    const result = await datosEnvio({ invoiceId: msg.invoiceId, contactId: msg.contactId });
+    sendResponse('datosEnvio', { ...result, origen });
+  } catch (e) {
+    console.error(`${TAG} ❌ datosEnvio:`, e);
+    sendResponse('datosEnvio', { ok: false, origen, error: 'No se pudieron leer los datos de la clienta.' });
+  }
+}
+
+async function handleEnviarDocumento(msg) {
+  const origen = msg.origen || '';
+  try {
+    const result = await enviarDocumento({ invoiceId: msg.invoiceId, canal: msg.canal, destino: msg.destino });
+    if (result && result.ok) _actualizarCacheTrasEnvio(result.ficha, result.canal, result.destino);
+    sendResponse('documentoEnviado', { ...result, origen });
+  } catch (e) {
+    console.error(`${TAG} ❌ enviarDocumento:`, e);
+    sendResponse('documentoEnviado', { ok: false, origen, error: 'No se pudo enviar el documento.' });
+  }
+}
+
+async function handleEmitirYEnviarTicket(msg) {
+  const origen = msg.origen || '';
+  try {
+    const result = await emitirYEnviarTicket({
+      reservaId: msg.reservaId,
+      sourceKey: msg.sourceKey,
+      canal: msg.canal,
+      destino: msg.destino
+    });
+    if (result && result.envio && result.envio.ok) _actualizarCacheTrasEnvio(result.ficha, result.envio.canal, result.envio.destino);
+    sendResponse('ticketEmitidoEnviado', { ...result, origen });
+  } catch (e) {
+    console.error(`${TAG} ❌ emitirYEnviarTicket:`, e);
+    sendResponse('ticketEmitidoEnviado', { ok: false, origen, error: 'No se pudo emitir el ticket.' });
+  }
+}
+
+async function handleTicketAutomatico(msg) {
+  const origen = msg.origen || '';
+  try {
+    const result = await ticketAutomatico({ reservaId: msg.reservaId, sourceKey: msg.sourceKey });
+    sendResponse('ticketAutomatico', { ...result, origen, reservaId: msg.reservaId || '', sourceKey: msg.sourceKey || '' });
+  } catch (e) {
+    console.error(`${TAG} ❌ ticketAutomatico:`, e);
+    sendResponse('ticketAutomatico', { ok: false, origen, error: 'No se pudo emitir el ticket automático.' });
   }
 }
 
@@ -2154,6 +2260,12 @@ $w.onReady(function () {
         case 'generarTicketVenta':    handleGenerarTicketVenta(msg); break;
         case 'generarFacturaVenta':   handleGenerarFacturaVenta(msg); break;
         case 'obtenerDocumentoVenta': handleObtenerDocumentoVenta(msg); break;
+        // v1.0.50 — imprimir en 80 mm y enviar por email / WhatsApp
+        case 'imprimirDocumento':   handleImprimirDocumento(msg); break;
+        case 'datosEnvio':          handleDatosEnvio(msg); break;
+        case 'enviarDocumento':     handleEnviarDocumento(msg); break;
+        case 'emitirYEnviarTicket': handleEmitirYEnviarTicket(msg); break;
+        case 'ticketAutomatico':    handleTicketAutomatico(msg); break;
         case 'buscarCliente':    handleBuscarCliente(msg); break;
         case 'crearCliente':     handleCrearCliente(msg); break;
         case 'editarContacto':   handleEditarContacto(msg); break;
