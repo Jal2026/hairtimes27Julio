@@ -1,6 +1,20 @@
 /* =====================================================================
  * KAMISUITE — Widget Nueva Recepción PRO (CMS-first)
  * Custom Element: <recepcion-pro-cms>
+ * VERSION: 1.1.122  ·  Cita cobrada con descuento en euros
+ *
+ *   Una cita cobrada con descuento en modo € se veía en el modal con el
+ *   precio original (21€) en vez de lo cobrado (1€). El cobro se guardaba
+ *   bien: PaymentReservations.importeTotal = 1 y descripcion
+ *   «… 🏷️ Descuento -20€» (comprobado en Hair-Times). Lo que fallaba es
+ *   el modal de la cita PAGADA: el chip de descuento (v1.1.11) solo
+ *   reconocía el modo % («🏷️ Descuento -X% (-Y€)»), y el modo € que
+ *   escribe el cobro desde la v1.1.26 («🏷️ Descuento -Y€») no pintaba
+ *   nada. No depende de la fecha de la cita.
+ *   · 'pago-encontrado': la expresión reconoce los dos modos.
+ *   · _renderDescuentoChipPagado: en modo € la nota es «-Y€».
+ *   Nada más cambia.
+ *
  * VERSION: 1.1.121  ·  Nombre del salón en el aviso de cita externa
  *
  *   En Hair-Times el aviso salió «a nombre de el salón»: el widget no
@@ -2214,7 +2228,7 @@
 (function () {
   'use strict';
 
-  const TAG = '[RecepcionProCMS-Widget v1.1.121]';
+  const TAG = '[RecepcionProCMS-Widget v1.1.122]';
 
   // ─── helpers ───
   function esc(s) {
@@ -4369,10 +4383,12 @@ button { font-family: inherit; cursor: pointer; }
             if (this._modalReserva) this._renderMetodoCobroLine();
             // Chip de descuento (v1.1.11 — comportamiento original)
             const desc = String(p.pago.descripcion || '');
-            const m = desc.match(/🏷️?\s*Descuento\s*-(\d+(?:[.,]\d+)?)\s*%\s*\(-\s*(\d+(?:[.,]\d+)?)\s*€\)/);
+            // v1.1.122 — dos modos: «-X% (-Y€)» y «-Y€» (modo €, v1.1.26).
+            const m = desc.match(/🏷️?\s*Descuento\s*-(\d+(?:[.,]\d+)?)\s*(?:%\s*\(-\s*(\d+(?:[.,]\d+)?)\s*€\)|€)/);
             if (m && this._modalReserva && this._pagoChipReservaId === this._modalReserva._id) {
-              const pct = parseFloat(m[1].replace(',', '.')) || 0;
-              const eurv = parseFloat(m[2].replace(',', '.')) || 0;
+              const esPct = m[2] !== undefined;
+              const pct = esPct ? (parseFloat(m[1].replace(',', '.')) || 0) : 0;
+              const eurv = parseFloat((esPct ? m[2] : m[1]).replace(',', '.')) || 0;
               const importeNeto = Number(p.pago.importeTotal || 0);
               this._renderDescuentoChipPagado(pct, eurv, importeNeto);
             }
@@ -7906,6 +7922,7 @@ button { font-family: inherit; cursor: pointer; }
       const _tokens = [];
       if (tienePromo && ahorroPromo > 0) _tokens.push(`-${ahorroPromo.toFixed(2)}€`);
       if (pct > 0) _tokens.push(`-${pct}% (-${eurv}€)`);
+      else if (eurv > 0) _tokens.push(`-${eurv}€`);   // v1.1.122 — modo €
       const noteText = _tokens.join(' · ');
       // v1.1.108 — el producto ya cobrado suma también aquí, en las dos
       // cifras, para que el descuento que se ve siga cuadrando.
